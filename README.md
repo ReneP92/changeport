@@ -4,6 +4,53 @@ The place where CDC is done correctly
 Changeport starts as a managed Kafka service on AWS with a dedicated cluster
 per customer; see [docs/PROJECT_PLAN.md](docs/PROJECT_PLAN.md).
 
+## Architecture
+
+```text
+                                Customer team
+                              (browser, HTTPS)
+                                      |
+                                      v
++-- Control plane: Go services ---------------------------------------------+
+|                                                                           |
+|  +-------------------+    +---------v---------+    +-------------------+  |
+|  | Provisioning      |    | API and React UI  |<---| Metrics, alerting |  |
+|  | cmd/provisioner   |    | topology, lag,    |    | VictoriaMetrics,  |  |
+|  |                   |    | diagnoses, usage  |    | Alertmanager      |  |
+|  +-------------------+    +-------------------+    +-------------------+  |
+|                           login: Clerk or Auth0                           |
++------------|-------------------------------------------------^------------+
+             | Kubernetes API:                                 |
+             | namespace, node pool,        broker and client  |
+             v Kafka from one template  metrics, tenant label  |
++-- Data plane: one EKS cluster per environment, 3 AZs --------|------------+
+|                                                                           |
+|  strimzi namespace: Strimzi cluster operator, watching all namespaces     |
+|                                                                           |
+|  +-- customer-acme --------------+     +-- customer-globex ------------+  |
+|  | Kafka 4.3, KRaft, RF 3        |     | Kafka 4.3, KRaft, RF 3        |  |
+|  | brokers across 3 AZs          |     | brokers across 3 AZs          |  |
+|  | dedicated nodes (Karpenter)   |     | dedicated nodes (Karpenter)   |  |
+|  +-------------------------------+     +-------------------------------+  |
+|                  ^                                     |                  |
++------------------|-------------------------------------|------------------+
+                   |                                     v
+        Customer applications                    S3 tiered storage
+      over TLS to their own cluster             (history for replay)
+```
+
+Every customer's Kafka cluster runs in its own namespace on dedicated nodes,
+inside one EKS cluster per environment. Customer applications connect
+straight to their own cluster; the control plane is never in the data path.
+Terraform builds the base infrastructure (VPC, EKS, S3, IAM), and the
+provisioning service creates everything per customer through the Kubernetes
+API from one template.
+
+Built so far: the provisioning service stub and the Strimzi layout, which run
+locally on kind (see [Local development](#local-development)). The rest is
+planned; shared clusters behind a topic-rewriting proxy follow in Phase 6,
+then Kafka Connect and CDC.
+
 ## Repository layout
 
 | Path | Contents |
