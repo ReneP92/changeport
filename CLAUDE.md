@@ -8,3 +8,4 @@ customers (Phase 6); long-term goal is an Artie-style CDC product.
 - Stack: Go backend, React frontend, EKS, Strimzi (KRaft), Terraform, VictoriaMetrics
 - Current phase: Phase 0 (design and user research)
 - Milestones and issues: GitHub milestones on ReneP92/changeport, one per roadmap phase
+- Local development: `make dev-up` (kind + Strimzi + demo customer), `make e2e`, `make lint test`; `make help` lists every target

@@ -1,0 +1,12 @@
+# Build output and pinned tool downloads
+/bin/
+
+# Downloaded and checksum-verified by hack/dev-up.sh
+/deploy/strimzi/upstream/
+
+# Terraform
+.terraform/
+*.tfstate
+*.tfstate.*
+*.tfplan
+crash.log
