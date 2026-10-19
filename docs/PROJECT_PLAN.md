@@ -37,28 +37,30 @@ One Kafka cluster on EKS serves the design partner, while a separate control pla
 ```mermaid
 flowchart TB
   apps["Customer applications<br/>producers and consumers over TLS"]
-  team["Customer team<br/>web UI: observability, alerts"]
 
-  subgraph DP["Data plane · EKS across 3 AZs"]
+  subgraph DP["Data plane: EKS, 3 AZs"]
+    future["Later: shared clusters and proxy (Phase 5)<br/>Connect, Debezium, CDC sinks (stages 2 and 3)"]
     kafka["Kafka cluster (Strimzi, KRaft)<br/>RF 3; dedicated to one customer"]
     s3["Tiered storage on S3<br/>history for replay without slowing live reads"]
-    future["Shared clusters and protocol proxy (Phase 5)<br/>Kafka Connect, Debezium, CDC sinks (stages 2 and 3)"]
   end
 
   subgraph CP["Control plane"]
-    api["API and React UI<br/>topology, lag, timeline, diagnoses"]
-    prov["Provisioning<br/>Terraform modules and Strimzi resources"]
     metrics["Metrics and alerting<br/>tenant-labeled store, Alertmanager"]
+    prov["Provisioning<br/>Terraform modules and Strimzi resources"]
+    api["API and React UI<br/>topology, lag, timeline, diagnoses"]
     auth["User auth<br/>Clerk or Auth0"]
   end
 
-  apps --> kafka --> s3
-  future -.-> kafka
-  team --> api
-  prov -->|deploys cluster, topics, ACLs| kafka
+  team["Customer team<br/>uses the web UI"]
+
+  apps --> kafka
+  future -.- kafka
+  kafka --> s3
   kafka -->|broker and client metrics| metrics
+  kafka <-->|deploys cluster, topics, ACLs| prov
   metrics --> api
   api --- auth
+  api -->|observability, alerts| team
 
   style future stroke-dasharray: 5 5
 ```
@@ -131,52 +133,51 @@ Migration tooling comes almost for free after managed Connect: MirrorMaker 2, th
 
 ## Roadmap
 
-Phases run in sequence: the design partner goes live after Phase 4, the paid self-serve beta after Phase 5, and the CDC product starts roughly 14 months in.
+Phases run in sequence: the design partner goes live after Phase 4 (Jun 2027), the paid self-serve beta after Phase 5 (Aug 2027), and the CDC product starts roughly 14 months in.
 
 ```mermaid
-flowchart TB
-  subgraph S1["Stage 1 · Managed Kafka"]
-    P0["Phase 0 · Design and user research (3 wks)<br/>8–10 newcomer interviews, design partner, cost model, wireframes"]
-    GA{{"Gate: design partner committed and cluster cost model done"}}
-    P1["Phase 1 · Single-tenant data plane (5–7 wks)<br/>EKS, Strimzi, KRaft, tiered storage, auth, KIP-714 telemetry receiver"]
-    P2["Phase 2 · Observability (8–10 wks)<br/>Topology map, time-based lag, change timeline, topic tail, alerting"]
-    P3["Phase 3 · Guidance layer (4–6 wks)<br/>Diagnosis rules, health scores, guardrails, onboarding, exactly-once snippets"]
-    P4["Phase 4 · Replay, hardening and design-partner launch (6–8 wks)<br/>Replay and offset tools, chaos tests, runbooks, docs"]
-    GB{{"Gate: design partner in production (about 8 months), multi-tenancy trigger met"}}
-    P5["Phase 5 · Multi-tenancy and self-serve beta (8–10 wks)<br/>Shared clusters, quotas, proxy, signup, free tier, Stripe, 3–5 beta users"]
-  end
-
-  GC{{"Gate: paid beta live (about 10 months), Connect trigger met"}}
-
-  subgraph S2["Stage 2 · Connect and migration"]
-    P6["Phase 6 · Managed Connect and Debezium (8–10 wks)<br/>Hosted connectors, with connector health in the same observability UI"]
-    P7["Phase 7 · Migration wizard (4–6 wks)<br/>MirrorMaker 2 replication, offset translation, cutover validation"]
-  end
-
-  subgraph S3["Stage 3 · CDC product"]
-    P8["Phase 8 · CDC product (3+ months)<br/>Own sink engine, idempotent merges, watermark backfills, slot monitoring"]
-  end
-
-  P0 --> GA --> P1 --> P2 --> P3 --> P4 --> GB --> P5 --> GC --> P6 --> P7 --> P8
+gantt
+  dateFormat YYYY-MM-DD
+  axisFormat %b %y
+  tickInterval 2month
+  todayMarker off
+  section Stage 1
+  Phase 0 · Design and research      :p0, 2026-10-19, 3w
+  Phase 1 · Single-tenant data plane :p1, after p0, 7w
+  Phase 2 · Observability            :p2, after p1, 10w
+  Phase 3 · Guidance layer           :p3, after p2, 6w
+  Phase 4 · Hardening and launch     :p4, after p3, 8w
+  Design partner live                :milestone, after p4, 0d
+  Phase 5 · Multi-tenancy and beta   :p5, after p4, 10w
+  Paid beta live                     :milestone, after p5, 0d
+  section Stage 2
+  Phase 6 · Managed Connect          :p6, after p5, 10w
+  Phase 7 · Migration wizard         :p7, after p6, 6w
+  section Stage 3
+  Phase 8 · CDC product              :p8, after p7, 13w
 ```
 
-Durations assume one or two engineers. The design-partner gate decides when multi-tenancy work begins, and the paid beta gate decides when managed Connect work begins.
+Dates assume a solo engineer starting Oct 19, 2026, using the upper end of each estimate; a second engineer compresses this somewhat. Three gates control the sequence:
+
+1. **After Phase 0:** design partner committed and cluster cost model done.
+2. **After Phase 4:** design partner in production and the multi-tenancy trigger met.
+3. **After Phase 5:** paid beta live and the managed Connect trigger met.
 
 ### Milestones
 
-Each phase is a [GitHub milestone](https://github.com/ReneP92/changeport/milestones?direction=asc&sort=due_date). Due dates assume a solo engineer starting Oct 19, 2026, using the upper end of each estimate. That puts the design partner live on Jun 11, 2027 and the paid beta on Aug 20, 2027.
+Each phase is a [GitHub milestone](https://github.com/ReneP92/changeport/milestones?direction=asc&sort=due_date).
 
-| Milestone | Stage | Weeks | Start | Due |
-| --- | --- | --- | --- | --- |
-| [Phase 0: Design and user research](https://github.com/ReneP92/changeport/milestone/1) | 1 | 3 | Oct 19, 2026 | Nov 6, 2026 |
-| [Phase 1: Single-tenant data plane](https://github.com/ReneP92/changeport/milestone/2) | 1 | 7 | Nov 9, 2026 | Dec 25, 2026 |
-| [Phase 2: Observability](https://github.com/ReneP92/changeport/milestone/3) | 1 | 10 | Dec 28, 2026 | Mar 5, 2027 |
-| [Phase 3: Guidance layer](https://github.com/ReneP92/changeport/milestone/4) | 1 | 6 | Mar 8, 2027 | Apr 16, 2027 |
-| [Phase 4: Replay, hardening and design-partner launch](https://github.com/ReneP92/changeport/milestone/5) | 1 | 8 | Apr 19, 2027 | Jun 11, 2027 |
-| [Phase 5: Multi-tenancy and self-serve beta](https://github.com/ReneP92/changeport/milestone/6) | 1 | 10 | Jun 14, 2027 | Aug 20, 2027 |
-| [Phase 6: Managed Connect and Debezium](https://github.com/ReneP92/changeport/milestone/7) | 2 | 10 | Aug 23, 2027 | Oct 29, 2027 |
-| [Phase 7: Migration wizard](https://github.com/ReneP92/changeport/milestone/8) | 2 | 6 | Nov 1, 2027 | Dec 10, 2027 |
-| [Phase 8: CDC product](https://github.com/ReneP92/changeport/milestone/9) | 3 | 13+ | Dec 13, 2027 | Mar 10, 2028 |
+| Milestone | Weeks | Due | Scope |
+| --- | --- | --- | --- |
+| [Phase 0: Design and user research](https://github.com/ReneP92/changeport/milestone/1) | 3 | Nov 6, 2026 | 8–10 newcomer interviews, design partner, cluster cost model, metrics labels, wireframes |
+| [Phase 1: Single-tenant data plane](https://github.com/ReneP92/changeport/milestone/2) | 5–7 | Dec 25, 2026 | EKS, Strimzi, KRaft, tiered storage, auth, KIP-714 telemetry receiver |
+| [Phase 2: Observability](https://github.com/ReneP92/changeport/milestone/3) | 8–10 | Mar 5, 2027 | Topology map, time-based lag, change timeline, topic tail, alerting |
+| [Phase 3: Guidance layer](https://github.com/ReneP92/changeport/milestone/4) | 4–6 | Apr 16, 2027 | Diagnosis rules, health scores, guardrails, onboarding, exactly-once snippets |
+| [Phase 4: Replay, hardening and design-partner launch](https://github.com/ReneP92/changeport/milestone/5) | 6–8 | Jun 11, 2027 | Replay and offset tools, chaos tests, runbooks, docs, design partner in production |
+| [Phase 5: Multi-tenancy and self-serve beta](https://github.com/ReneP92/changeport/milestone/6) | 8–10 | Aug 20, 2027 | Shared clusters, quotas, proxy, signup, free tier, Stripe, 3–5 beta users |
+| [Phase 6: Managed Connect and Debezium](https://github.com/ReneP92/changeport/milestone/7) | 8–10 | Oct 29, 2027 | Hosted connectors, connector health in the observability UI |
+| [Phase 7: Migration wizard](https://github.com/ReneP92/changeport/milestone/8) | 4–6 | Dec 10, 2027 | MirrorMaker 2 replication, offset translation, cutover validation |
+| [Phase 8: CDC product](https://github.com/ReneP92/changeport/milestone/9) | 13+ | Mar 10, 2028 | Own sink engine, idempotent merges, watermark backfills, slot monitoring |
 
 Only Phase 0 is broken into issues, plus the proxy decision parked in Phase 5. Later phases get issues once Phase 0 settles the design partner, cost model and metrics decisions.
 
