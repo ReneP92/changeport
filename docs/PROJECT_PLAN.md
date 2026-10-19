@@ -1,6 +1,6 @@
 # Changeport: Project Plan
 
-_As of Oct 18, 2026_
+_As of Oct 19, 2026_
 
 ## Overview
 
@@ -14,7 +14,7 @@ The roadmap runs in three stages:
 
 1. **Managed Kafka** for teams new to Kafka, differentiated by simplicity and real-time observability: first a dedicated cluster per customer, then multi-tenant and self-serve.
 2. **Managed Kafka Connect + Debezium**, which bridges to CDC and also powers migration tooling for experienced teams.
-3. **CDC product**: database-to-warehouse replication where Kafka becomes invisible to the customer.
+3. **CDC product**: database-to-warehouse replication where Kafka becomes invisible to the customer, starting with Postgres to Snowflake.
 
 ## Target users and positioning
 
@@ -94,6 +94,7 @@ We self-host Apache Kafka on EKS and buy everything that is not Kafka.
 | User auth | Clerk or Auth0, for the customer team's UI login | Not a differentiator |
 | Billing | Usage-based on data processed, rates set later. Design partner invoiced manually; Stripe usage-based billing from Phase 5 | Price follows the value customers get; usage is already measured for observability |
 | Frontend | Custom React app, not embedded Grafana | The visual experience is the product |
+| First CDC pair | Postgres source, Snowflake destination; other sources and warehouses follow once this pair runs in production | The most common pair for teams replicating an application database into a warehouse, and one every CDC competitor listed above supports, so customers can compare like for like. Debezium, which stage 2 already runs, has a mature Postgres connector built on logical replication; Snowflake's MERGE gives the idempotent merges behind exactly-once results |
 
 ## How the differentiators are built
 
@@ -188,7 +189,7 @@ Each phase is a [GitHub milestone](https://github.com/ReneP92/changeport/milesto
 | [Phase 6: Multi-tenancy and self-serve](https://github.com/ReneP92/changeport/milestone/7) | 8–10 | Dec 24, 2027 | Shared clusters, quotas, proxy, self-serve signup, free allowance, noisy-neighbor tests |
 | [Phase 7: Managed Connect and Debezium](https://github.com/ReneP92/changeport/milestone/8) | 8–10 | Mar 3, 2028 | Hosted connectors, connector health in the observability UI |
 | [Phase 8: Migration wizard](https://github.com/ReneP92/changeport/milestone/9) | 4–6 | Apr 14, 2028 | MirrorMaker 2 replication, offset translation, cutover validation |
-| [Phase 9: CDC product](https://github.com/ReneP92/changeport/milestone/10) | 13+ | Jul 14, 2028 | Own sink engine, idempotent merges, watermark backfills, slot monitoring |
+| [Phase 9: CDC product](https://github.com/ReneP92/changeport/milestone/10) | 13+ | Jul 14, 2028 | Postgres to Snowflake: own sink engine, idempotent merges, watermark backfills, slot monitoring |
 
 Only Phase 0 is broken into issues, plus the proxy decision parked in Phase 6. Later phases get issues once Phase 0 settles the design partner and metrics decisions.
 
@@ -230,7 +231,6 @@ Phase 0 is about finding the design partner and setting up the foundations. Each
 - [ ] [Set up AWS dev and prod accounts and pick the region](https://github.com/ReneP92/changeport/issues/10)
 - [ ] [Define the metrics labeling scheme](https://github.com/ReneP92/changeport/issues/4) (tenant, topic, client), with the tenant label from day one
 - [ ] [Wireframe onboarding, the topology map and time-based lag views](https://github.com/ReneP92/changeport/issues/5)
-- [ ] [Choose the first CDC source and destination](https://github.com/ReneP92/changeport/issues/6) (Postgres to Snowflake is the common starting pair)
 - [ ] [Set the trigger for starting managed Connect](https://github.com/ReneP92/changeport/issues/7)
 - [ ] [Secure a domain for Changeport](https://github.com/ReneP92/changeport/issues/8)
 
@@ -243,5 +243,6 @@ Decided:
 - [x] Multi-tenancy trigger: about 50 paying customers, target Oct 2027
 - [x] Infrastructure: one EKS cluster per environment, Terraform for base infrastructure, Strimzi resources created by the Go provisioning service
 - [x] Skip the newcomer interviews; learn from the design partner and early customers instead
+- [x] [First CDC source and destination](https://github.com/ReneP92/changeport/issues/6): Postgres to Snowflake
 
 Deferred to Phase 6: [decide whether to adopt the topic-rewriting proxy](https://github.com/ReneP92/changeport/issues/2).
