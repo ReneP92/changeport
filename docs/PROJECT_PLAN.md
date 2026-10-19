@@ -8,7 +8,7 @@ We will start with a managed Kafka service on AWS where every customer gets a de
 
 The Kafka service is a deliberate stepping stone. As a standalone business, managed Kafka is crowded (MSK, Confluent Cloud, Aiven, Redpanda), and a one- or two-person team cannot win on breadth. As the backbone of a CDC product, it is essential infrastructure. Every decision in this plan is made so the Kafka platform can later carry CDC pipelines without a rewrite.
 
-Starting with dedicated clusters puts real customers on the platform months earlier. Tenant isolation, quotas, the topic-rewriting proxy and self-serve signup are all deferred until about 50 customers pay, while the choices made now (standard Kafka auth, a tenant label on every metric, Terraform modules parameterized by tenant) keep that step an addition rather than a rewrite.
+Starting with dedicated clusters puts real customers on the platform months earlier. Tenant isolation, quotas, the topic-rewriting proxy and self-serve signup are all deferred until about 50 customers pay, while the choices made now (standard Kafka auth, a tenant label on every metric, per-customer resources generated from one template) keep that step an addition rather than a rewrite.
 
 The roadmap runs in three stages:
 
@@ -65,7 +65,7 @@ flowchart LR
   style future stroke-dasharray: 5 5
 ```
 
-Customer clients connect directly to their own cluster. Provisioning is run by us through Terraform and Strimzi resources, and broker and client metrics feed the UI, alerts and usage metering. The dashed box is added later: shared clusters with the proxy in Phase 6, then Connect and CDC in stages 2 and 3.
+Customer clients connect directly to their own cluster. All customer clusters run in one EKS cluster per environment, each in its own namespace on dedicated nodes. Terraform builds the base infrastructure, the Go provisioning service creates each customer's resources through the Kubernetes API, and broker and client metrics feed the UI, alerts and usage metering. The dashed box is added later: shared clusters with the proxy in Phase 6, then Connect and CDC in stages 2 and 3.
 
 ## Key technical decisions
 
@@ -77,7 +77,7 @@ We self-host Apache Kafka on EKS and buy everything that is not Kafka.
 | Tenancy | Dedicated cluster per paying customer until about 50 paying customers (target Oct 2027). Shared clusters with a virtual cluster per tenant from Phase 6; dedicated clusters stay as a premium tier | Gets paying customers live without building isolation, quotas or self-serve; shared clusters then make a free allowance and small customers economical |
 | Tenant isolation | Dedicated clusters: the cluster boundary, with per-application credentials and standard ACLs. From Phase 6: hidden topic prefix, prefix-scoped ACLs, per-tenant credentials, broker quotas (byte rate, request rate, partition and storage caps) | Nothing to isolate until two tenants share a cluster; quotas then prevent noisy neighbors and data leakage |
 | Topic name rewriting | Not needed on dedicated clusters. Decide on a Kafka-protocol proxy (Kroxylicious multi-tenancy filter is the leading candidate) at the start of Phase 6 | Hides prefixes on shared clusters so teams keep their topic names; dedicated-cluster customers never need it |
-| Multi-tenancy readiness | Tenant label on every metric and alert from day one; Terraform modules and Strimzi resources parameterized by tenant | Phase 6 adds tenants instead of relabeling metrics and rewriting provisioning |
+| Multi-tenancy readiness | Tenant label on every metric and alert from day one; every customer's Kubernetes resources generated from one template by the provisioning service | Phase 6 adds tenants instead of relabeling metrics and rewriting provisioning |
 | Durability | 3 AZs, replication factor 3, min.insync.replicas 2, rack-aware placement | Survives a full AZ loss |
 | Storage | gp3 EBS for hot data, tiered storage to S3 for history | Keeps disks small and enables replay |
 | Cross-AZ cost | Follower fetching so consumers read from a replica in their own AZ | Inter-AZ transfer is often the largest AWS cost line |
@@ -85,7 +85,12 @@ We self-host Apache Kafka on EKS and buy everything that is not Kafka.
 | Backend language | Go for the API, provisioning, metering and diagnosis services; the KIP-714 telemetry receiver is the one JVM component, because broker plugins must be Java | Strongest Kubernetes and operator ecosystem (client-go, controller-runtime), mature pure-Go Kafka clients, simple static binaries |
 | Metrics store | VictoriaMetrics open-source edition, single-node to start | Free, and the docs recommend single-node below one million samples per second; the free cluster version adds multi-tenancy if needed. Enterprise-only features (downsampling, multiple retentions, multitenant vmalert, advanced per-tenant stats) are not needed before Phase 6 |
 | Alerting | Alertmanager with per-tenant routing to Slack, PagerDuty and webhooks | Proven, cheap to run |
-| Infrastructure as code | Terraform | Reproducible environments |
+| Cluster layout | One EKS cluster per environment; each customer's Kafka cluster in its own namespace on dedicated nodes (a Karpenter NodePool with taints per customer) | One control plane fee and one upgrade path instead of 50; dedicated nodes keep brokers isolated |
+| Provisioning | Terraform for base infrastructure (VPC, EKS, S3, IAM); the Go provisioning service creates each customer's namespace, NodePool, Strimzi Kafka resource, users and topics through the Kubernetes API | Per-customer changes are fast, automatable and reviewable as code; no Terraform run per customer |
+| Kafka version | Newest Kafka 4.x supported by Strimzi | KRaft only, tiered storage and KIP-714 client telemetry |
+| AWS accounts | One region, separate dev and prod accounts from the start | Keeps experiments away from customer clusters |
+| Repository | One repository for Go services, React app, Terraform and Kubernetes manifests | One place to change a feature end to end |
+| Local development | kind with Strimzi on a laptop | Most work needs no AWS |
 | User auth | Clerk or Auth0, for the customer team's UI login | Not a differentiator |
 | Billing | Usage-based on data processed, rates set later. Design partner invoiced manually; Stripe usage-based billing from Phase 5 | Price follows the value customers get; usage is already measured for observability |
 | Frontend | Custom React app, not embedded Grafana | The visual experience is the product |
@@ -144,7 +149,7 @@ gantt
   tickInterval 2month
   todayMarker off
   section Stage 1
-  Phase 0 · Design and research      :p0, 2026-10-19, 3w
+  Phase 0 · Foundations              :p0, 2026-10-19, 3w
   Phase 1 · Data plane               :p1, after p0, 7w
   Phase 2 · Observability            :p2, after p1, 10w
   Phase 3 · Guidance layer           :p3, after p2, 6w
@@ -174,7 +179,7 @@ Each phase is a [GitHub milestone](https://github.com/ReneP92/changeport/milesto
 
 | Milestone | Weeks | Due | Scope |
 | --- | --- | --- | --- |
-| [Phase 0: Design and user research](https://github.com/ReneP92/changeport/milestone/1) | 3 | Nov 6, 2026 | 8–10 newcomer interviews, design partner, their data volume, metrics labels, wireframes |
+| [Phase 0: Design partner and foundations](https://github.com/ReneP92/changeport/milestone/1) | 3 | Nov 6, 2026 | Design partner, their data volume, AWS accounts, metrics labels, wireframes |
 | [Phase 1: Single-tenant data plane](https://github.com/ReneP92/changeport/milestone/2) | 5–7 | Dec 25, 2026 | EKS, Strimzi, KRaft, tiered storage, auth, KIP-714 telemetry receiver |
 | [Phase 2: Observability](https://github.com/ReneP92/changeport/milestone/3) | 8–10 | Mar 5, 2027 | Topology map, time-based lag, change timeline, topic tail, alerting |
 | [Phase 3: Guidance layer](https://github.com/ReneP92/changeport/milestone/4) | 4–6 | Apr 16, 2027 | Diagnosis rules, health scores, guardrails, onboarding, exactly-once snippets |
@@ -206,8 +211,8 @@ The biggest risk is getting stuck in stage 1: managed Kafka can absorb all avail
 | Operating many dedicated clusters | Upgrades and incidents across up to 50 clusters consume founder time | Fully automated provisioning and upgrades in Phase 5, one fleet view across clusters, identical cluster configs |
 | Dedicated clusters for small customers | A 3-broker cluster costs more than a small customer's usage brings in | Set usage rates or a minimum charge from real cluster costs before customer 2; move small customers to shared clusters in Phase 6 |
 | Usage-based bills surprise newcomers | Undercuts the "no surprise bills" positioning | Live usage and projected bill in the UI, budget alerts, plain-language usage explanations |
-| Single-tenant work doesn't carry over | Phase 6 turns into a rewrite | Tenant label on all metrics from day one, tenant-parameterized Terraform and Strimzi resources, standard Kafka auth only |
-| Design-partner bias | Product shaped around one team's needs | Keep interviewing newcomer teams through Phases 1–4; weigh requests against the newcomer positioning |
+| Single-tenant work doesn't carry over | Phase 6 turns into a rewrite | Tenant label on all metrics from day one, per-customer resources from one template, standard Kafka auth only |
+| Design-partner bias | Product shaped around one team's needs | Collect feedback from every customer onboarded in Phase 5; weigh requests against the newcomer positioning |
 | Solo on-call | Outages at night, burnout | Modest SLA, a tolerant design partner, chaos testing before launch, thorough runbooks |
 | Noisy neighbors (from Phase 6) | One tenant degrades a shared cluster | Quotas and hard partition limits built before the first shared tenant; noisy-neighbor tests in Phase 6 |
 | Cross-AZ transfer costs | Margins erode | Follower fetching, tiered storage, usage-based pricing that covers transfer |
@@ -218,11 +223,11 @@ The biggest risk is getting stuck in stage 1: managed Kafka can absorb all avail
 
 ## Open questions and next steps
 
-Phase 0 starts with user research and finding the design partner. Each item is tracked as an issue in the [Phase 0 milestone](https://github.com/ReneP92/changeport/milestone/1).
+Phase 0 is about finding the design partner and setting up the foundations. Each item is tracked as an issue in the [Phase 0 milestone](https://github.com/ReneP92/changeport/milestone/1).
 
-- [ ] [Interview 8–10 teams adopting Kafka for the first time](https://github.com/ReneP92/changeport/issues/1); capture their top confusions and fears
 - [ ] [Find a design-partner customer](https://github.com/ReneP92/changeport/issues/9)
 - [ ] [Estimate the design partner's data volume](https://github.com/ReneP92/changeport/issues/3) (data in and out per day, peak throughput, retention)
+- [ ] [Set up AWS dev and prod accounts and pick the region](https://github.com/ReneP92/changeport/issues/10)
 - [ ] [Define the metrics labeling scheme](https://github.com/ReneP92/changeport/issues/4) (tenant, topic, client), with the tenant label from day one
 - [ ] [Wireframe onboarding, the topology map and time-based lag views](https://github.com/ReneP92/changeport/issues/5)
 - [ ] [Choose the first CDC source and destination](https://github.com/ReneP92/changeport/issues/6) (Postgres to Snowflake is the common starting pair)
@@ -236,5 +241,7 @@ Decided:
 - [x] Metrics store: VictoriaMetrics open-source edition, single-node
 - [x] Pricing model: usage-based on data processed, rates set later
 - [x] Multi-tenancy trigger: about 50 paying customers, target Oct 2027
+- [x] Infrastructure: one EKS cluster per environment, Terraform for base infrastructure, Strimzi resources created by the Go provisioning service
+- [x] Skip the newcomer interviews; learn from the design partner and early customers instead
 
 Deferred to Phase 6: [decide whether to adopt the topic-rewriting proxy](https://github.com/ReneP92/changeport/issues/2).
