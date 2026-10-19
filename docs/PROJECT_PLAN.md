@@ -1,4 +1,4 @@
-# Managed Kafka → CDC Platform: Project Plan
+# Changeport: Project Plan
 
 _As of Oct 18, 2026_
 
@@ -157,6 +157,23 @@ flowchart TB
 
 Durations assume one or two engineers; the paid beta gate also decides when managed Connect work begins.
 
+### Milestones
+
+Each phase is a [GitHub milestone](https://github.com/ReneP92/changeport/milestones?direction=asc&sort=due_date). Due dates assume a solo engineer starting Oct 19, 2026, using the upper end of each estimate. That puts the paid beta on Jul 2, 2027.
+
+| Milestone | Stage | Weeks | Start | Due |
+| --- | --- | --- | --- | --- |
+| [Phase 0: Design and user research](https://github.com/ReneP92/changeport/milestone/1) | 1 | 3 | Oct 19, 2026 | Nov 6, 2026 |
+| [Phase 1: Data plane](https://github.com/ReneP92/changeport/milestone/2) | 1 | 8 | Nov 9, 2026 | Jan 1, 2027 |
+| [Phase 2: Control plane and observability](https://github.com/ReneP92/changeport/milestone/3) | 1 | 12 | Jan 4, 2027 | Mar 26, 2027 |
+| [Phase 3: Guidance layer](https://github.com/ReneP92/changeport/milestone/4) | 1 | 6 | Mar 29, 2027 | May 7, 2027 |
+| [Phase 4: Replay, hardening and paid beta](https://github.com/ReneP92/changeport/milestone/5) | 1 | 8 | May 10, 2027 | Jul 2, 2027 |
+| [Phase 5: Managed Connect and Debezium](https://github.com/ReneP92/changeport/milestone/6) | 2 | 10 | Jul 5, 2027 | Sep 10, 2027 |
+| [Phase 6: Migration wizard](https://github.com/ReneP92/changeport/milestone/7) | 2 | 6 | Sep 13, 2027 | Oct 22, 2027 |
+| [Phase 7: CDC product](https://github.com/ReneP92/changeport/milestone/8) | 3 | 13+ | Oct 25, 2027 | Jan 21, 2028 |
+
+Only Phase 0 is broken into issues. Later phases get issues once Phase 0 settles the proxy, cost model and metrics decisions.
+
 ## Team, pricing and operating model
 
 One or two engineers reach a paid beta in about 8–9 months; a second engineer compresses the timeline somewhat but does not halve it, because operations and support grow as soon as users arrive.
@@ -183,13 +200,14 @@ The biggest risk is getting stuck in stage 1: managed Kafka can absorb all avail
 
 ## Open questions and next steps
 
-Phase 0 starts with user research and the proxy decision.
+Phase 0 starts with user research and the proxy decision. Each item is tracked as an issue in the [Phase 0 milestone](https://github.com/ReneP92/changeport/milestone/1).
 
-- [ ] Interview 8–10 teams adopting Kafka for the first time; capture their top confusions and fears
-- [ ] Decide whether to adopt the topic-rewriting proxy from day one
-- [ ] Build a per-tenant cost model (brokers, EBS, S3, cross-AZ transfer) to set free-tier limits and plan prices
-- [ ] Define the metrics labeling scheme (tenant, topic, client)
-- [ ] Wireframe onboarding, the topology map and time-based lag views
-- [ ] Choose the first CDC source and destination (Postgres to Snowflake is the common starting pair)
-- [ ] Set the trigger for starting managed Connect
-- [ ] Decide on a name and a domain
+- [ ] [Interview 8–10 teams adopting Kafka for the first time](https://github.com/ReneP92/changeport/issues/1); capture their top confusions and fears
+- [ ] [Decide whether to adopt the topic-rewriting proxy from day one](https://github.com/ReneP92/changeport/issues/2)
+- [ ] [Build a per-tenant cost model](https://github.com/ReneP92/changeport/issues/3) (brokers, EBS, S3, cross-AZ transfer) to set free-tier limits and plan prices
+- [ ] [Define the metrics labeling scheme](https://github.com/ReneP92/changeport/issues/4) (tenant, topic, client)
+- [ ] [Wireframe onboarding, the topology map and time-based lag views](https://github.com/ReneP92/changeport/issues/5)
+- [ ] [Choose the first CDC source and destination](https://github.com/ReneP92/changeport/issues/6) (Postgres to Snowflake is the common starting pair)
+- [ ] [Set the trigger for starting managed Connect](https://github.com/ReneP92/changeport/issues/7)
+- [x] Decide on a name: Changeport
+- [ ] [Secure a domain for Changeport](https://github.com/ReneP92/changeport/issues/8)
