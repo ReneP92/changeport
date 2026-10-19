@@ -45,8 +45,8 @@ flowchart TB
   end
 
   subgraph CP["Control plane"]
-    metrics["Metrics and alerting<br/>tenant-labeled store, Alertmanager"]
-    prov["Provisioning<br/>Terraform modules and Strimzi resources"]
+    metrics["Metrics and alerting<br/>collects broker and client metrics;<br/>tenant-labeled store, Alertmanager"]
+    prov["Provisioning<br/>deploys cluster, topics and ACLs;<br/>Terraform modules, Strimzi resources"]
     api["API and React UI<br/>topology, lag, timeline, diagnoses"]
     auth["User auth<br/>Clerk or Auth0"]
   end
@@ -56,8 +56,8 @@ flowchart TB
   apps --> kafka
   future -.- kafka
   kafka --> s3
-  kafka -->|broker and client metrics| metrics
-  kafka <-->|deploys cluster, topics, ACLs| prov
+  kafka --> metrics
+  kafka --- prov
   metrics --> api
   api --- auth
   api -->|observability, alerts| team
