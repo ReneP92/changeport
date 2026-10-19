@@ -35,32 +35,32 @@ Competitors to watch: managed Kafka providers (MSK, Confluent Cloud, Aiven, Redp
 Each customer gets its own Kafka cluster on EKS, while a separate control plane provisions the clusters and collects their metrics.
 
 ```mermaid
-flowchart TB
-  apps["Customer applications<br/>producers and consumers over TLS"]
+flowchart LR
+  apps["Customer applications<br/>producers and consumers<br/>over TLS"]
 
   subgraph DP["Data plane: EKS, 3 AZs"]
-    future["Later: shared clusters and proxy (Phase 6)<br/>Connect, Debezium, CDC sinks (stages 2 and 3)"]
-    kafka["Kafka cluster per customer (Strimzi, KRaft)<br/>RF 3; dedicated, one per paying customer"]
-    s3["Tiered storage on S3<br/>history for replay without slowing live reads"]
+    kafka["Kafka cluster per customer<br/>Strimzi, KRaft, RF 3"]
+    s3["Tiered storage on S3<br/>history for replay"]
+    future["Later: shared clusters,<br/>proxy, Connect, CDC sinks"]
   end
 
-  subgraph CP["Control plane (Go services)"]
-    metrics["Metrics and alerting<br/>collects broker and client metrics;<br/>VictoriaMetrics, Alertmanager"]
-    prov["Provisioning<br/>deploys clusters, topics and ACLs;<br/>Terraform modules, Strimzi resources"]
-    api["API and React UI<br/>topology, lag, timeline, diagnoses, usage"]
+  subgraph CP["Control plane: Go services"]
+    prov["Provisioning<br/>Terraform, Strimzi"]
+    metrics["Metrics and alerting<br/>VictoriaMetrics,<br/>Alertmanager"]
+    api["API and React UI<br/>topology, lag, diagnoses,<br/>usage"]
     auth["User auth<br/>Clerk or Auth0"]
   end
 
-  team["Customer team<br/>uses the web UI"]
+  team["Customer team"]
 
   apps --> kafka
-  future -.- kafka
   kafka --> s3
+  kafka -.- future
   kafka --> metrics
-  kafka --- prov
+  prov --> kafka
   metrics --> api
   api --- auth
-  api -->|observability, alerts| team
+  api --> team
 
   style future stroke-dasharray: 5 5
 ```
