@@ -1,0 +1,47 @@
+# Strimzi cluster operator, installed into the strimzi namespace and watching
+# all namespaces. hack/dev-up.sh downloads the pinned upstream install file
+# into upstream/ and checks its SHA-256 before applying this kustomization.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - namespace.yaml
+  - upstream/strimzi-cluster-operator.yaml
+  - watch-all-namespaces.yaml
+transformers:
+  # Moves the upstream objects out of their "myproject" namespace, including
+  # the ServiceAccount subjects of the upstream role bindings.
+  - |-
+    apiVersion: builtin
+    kind: NamespaceTransformer
+    metadata:
+      name: strimzi-namespace
+      namespace: strimzi
+    setRoleBindingSubjects: allServiceAccounts
+patches:
+  - target:
+      kind: Deployment
+      name: strimzi-cluster-operator
+    patch: |-
+      apiVersion: apps/v1
+      kind: Deployment
+      metadata:
+        name: strimzi-cluster-operator
+      spec:
+        template:
+          spec:
+            containers:
+              - name: strimzi-cluster-operator
+                env:
+                  - name: STRIMZI_NAMESPACE
+                    value: "*"
+                    valueFrom: null
+  # Superseded by the ClusterRoleBindings in watch-all-namespaces.yaml.
+  - target:
+      kind: RoleBinding
+      name: strimzi-cluster-operator|strimzi-cluster-operator-watched|strimzi-cluster-operator-entity-operator-delegation
+    patch: |-
+      $patch: delete
+      apiVersion: rbac.authorization.k8s.io/v1
+      kind: RoleBinding
+      metadata:
+        name: ignored

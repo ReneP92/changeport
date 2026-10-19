@@ -1,0 +1,77 @@
+{{- /*
+The one template every customer's Kafka cluster is generated from, rendered
+by internal/provisioning from a validated Spec and a Profile.
+*/ -}}
+{{- define "labels" }}
+    app.kubernetes.io/managed-by: {{ .ManagedBy }}
+    changeport.io/tenant: {{ .Tenant }}
+{{- end -}}
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: {{ .Namespace }}
+  labels:
+{{- template "labels" . }}
+---
+apiVersion: kafka.strimzi.io/v1
+kind: KafkaNodePool
+metadata:
+  name: {{ .NodePoolName }}
+  namespace: {{ .Namespace }}
+  labels:
+    strimzi.io/cluster: {{ .ClusterName }}
+{{- template "labels" . }}
+spec:
+  replicas: {{ .Profile.Replicas }}
+  roles:
+    - controller
+    - broker
+  resources:
+    requests:
+      cpu: "{{ .Profile.CPURequest }}"
+      memory: "{{ .Profile.Memory }}"
+    limits:
+      memory: "{{ .Profile.Memory }}"
+  storage:
+    type: jbod
+    volumes:
+      - id: 0
+        type: persistent-claim
+        size: "{{ .Profile.Storage.Size }}"
+        class: "{{ .Profile.Storage.Class }}"
+        deleteClaim: false
+        kraftMetadata: shared
+---
+apiVersion: kafka.strimzi.io/v1
+kind: Kafka
+metadata:
+  name: {{ .ClusterName }}
+  namespace: {{ .Namespace }}
+  labels:
+{{- template "labels" . }}
+spec:
+  kafka:
+    version: {{ .KafkaVersion }}
+    metadataVersion: {{ .MetadataVersion }}
+{{- if .Profile.RackTopologyKey }}
+    rack:
+      topologyKey: {{ .Profile.RackTopologyKey }}
+{{- end }}
+    listeners:
+      - name: plain
+        port: 9092
+        type: internal
+        tls: false
+      - name: tls
+        port: 9093
+        type: internal
+        tls: true
+    config:
+      default.replication.factor: {{ .Profile.ReplicationFactor }}
+      min.insync.replicas: {{ .Profile.MinInsyncReplicas }}
+      offsets.topic.replication.factor: {{ .Profile.ReplicationFactor }}
+      transaction.state.log.replication.factor: {{ .Profile.ReplicationFactor }}
+      transaction.state.log.min.isr: {{ .Profile.MinInsyncReplicas }}
+  entityOperator:
+    topicOperator: {}
+    userOperator: {}

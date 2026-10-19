@@ -1,0 +1,42 @@
+# Lets the cluster operator manage Kafka clusters in every namespace, since
+# each customer cluster lives in its own namespace. These bindings replace the
+# per-namespace RoleBindings from the upstream install file, following
+# https://strimzi.io/docs/operators/1.3.0/deploying.html#deploying-cluster-operator-to-watch-all-namespaces-str
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: strimzi-cluster-operator-namespaced
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: strimzi-cluster-operator-namespaced
+subjects:
+  - kind: ServiceAccount
+    name: strimzi-cluster-operator
+    namespace: strimzi
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: strimzi-cluster-operator-watched
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: strimzi-cluster-operator-watched
+subjects:
+  - kind: ServiceAccount
+    name: strimzi-cluster-operator
+    namespace: strimzi
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: strimzi-cluster-operator-entity-operator-delegation
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: strimzi-entity-operator
+subjects:
+  - kind: ServiceAccount
+    name: strimzi-cluster-operator
+    namespace: strimzi
