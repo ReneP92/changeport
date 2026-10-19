@@ -22,7 +22,7 @@ per customer; see [docs/PROJECT_PLAN.md](docs/PROJECT_PLAN.md).
 +------------|-------------------------------------------------^------------+
              | Kubernetes API:                                 |
              | namespace, node pool,        broker and client  |
-             v Kafka from one template  metrics, tenant label  |
+             v Kafka (one template)     metrics, tenant label  |
 +-- Data plane: one EKS cluster per environment, 3 AZs --------|------------+
 |                                                                           |
 |  strimzi namespace: Strimzi cluster operator, watching all namespaces     |
