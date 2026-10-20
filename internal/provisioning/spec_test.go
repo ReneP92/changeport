@@ -53,8 +53,66 @@ func TestProductionProfileFollowsDurabilityDecisions(t *testing.T) {
 	if p.ReplicationFactor != 3 || p.MinInsyncReplicas != 2 {
 		t.Errorf("replication factor %d, min.insync.replicas %d; the plan requires 3 and 2", p.ReplicationFactor, p.MinInsyncReplicas)
 	}
-	if p.RackTopologyKey == "" {
-		t.Error("production clusters must spread replicas across zones")
+	if p.Zones != 3 {
+		t.Errorf("production clusters spread across %d zones; the plan requires 3", p.Zones)
+	}
+	for name, platform := range Platforms {
+		if name != KindPlatform.Name && platform.Zones < p.Zones {
+			t.Errorf("platform %q has %d zones and cannot run the production profile", name, platform.Zones)
+		}
+	}
+}
+
+func TestBuiltInPlatformsAreValid(t *testing.T) {
+	for name, platform := range Platforms {
+		if platform.Name != name {
+			t.Errorf("platform registered as %q is named %q", name, platform.Name)
+		}
+		if err := platform.validate(); err != nil {
+			t.Errorf("platform %q: %v", name, err)
+		}
+	}
+}
+
+func TestPlatformValidate(t *testing.T) {
+	tests := []struct {
+		name   string
+		mutate func(*Platform)
+	}{
+		{"no name", func(p *Platform) { p.Name = "" }},
+		{"no storage class", func(p *Platform) { p.StorageClass = "" }},
+		{"no zones", func(p *Platform) { p.Zones = 0 }},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			p := KindPlatform
+			tt.mutate(&p)
+			if err := p.validate(); err == nil {
+				t.Error("validate() = nil, want an error")
+			}
+		})
+	}
+}
+
+func TestSpecValidateRejectsProfileWithMoreZonesThanPlatform(t *testing.T) {
+	spec := Spec{CustomerID: "acme", Profile: ProductionProfile, Platform: KindPlatform}
+	err := spec.Validate()
+	if err == nil || !strings.Contains(err.Error(), `platform "kind" has 1`) {
+		t.Errorf("Validate() = %v, want a zone mismatch error", err)
+	}
+	spec.Platform = EKSProdPlatform
+	if err := spec.Validate(); err != nil {
+		t.Errorf("Validate() on eks-prod = %v, want nil", err)
+	}
+}
+
+func TestPlatformByName(t *testing.T) {
+	p, err := PlatformByName("eks-dev")
+	if err != nil || p.Name != "eks-dev" {
+		t.Fatalf("PlatformByName(eks-dev) = %v, %v", p.Name, err)
+	}
+	if _, err := PlatformByName("gke"); !errors.Is(err, ErrUnknownPlatform) {
+		t.Fatalf("PlatformByName(gke) error = %v, want ErrUnknownPlatform", err)
 	}
 }
 
@@ -72,8 +130,9 @@ func TestProfileValidate(t *testing.T) {
 		{"zero min ISR", func(p *Profile) { p.MinInsyncReplicas = 0 }},
 		{"no memory", func(p *Profile) { p.Memory = "" }},
 		{"no CPU request", func(p *Profile) { p.CPURequest = "" }},
-		{"storage without size", func(p *Profile) { p.Storage = Storage{Class: "gp3"} }},
-		{"storage without class", func(p *Profile) { p.Storage = Storage{Size: "10Gi"} }},
+		{"no storage size", func(p *Profile) { p.StorageSize = "" }},
+		{"no zones", func(p *Profile) { p.Zones = 0 }},
+		{"zones above replicas", func(p *Profile) { p.Zones = 2 }},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -97,7 +156,7 @@ func TestProfileByName(t *testing.T) {
 }
 
 func TestSpecNames(t *testing.T) {
-	spec := Spec{CustomerID: "acme", Profile: DevProfile}
+	spec := Spec{CustomerID: "acme", Profile: DevProfile, Platform: KindPlatform}
 	if got, want := spec.Namespace(), "customer-acme"; got != want {
 		t.Errorf("Namespace() = %q, want %q", got, want)
 	}
