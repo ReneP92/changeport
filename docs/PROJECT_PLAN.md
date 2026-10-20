@@ -1,6 +1,6 @@
 # Changeport: Project Plan
 
-_As of Oct 19, 2026_
+_As of Oct 20, 2026_
 
 ## Overview
 
@@ -73,24 +73,25 @@ We self-host Apache Kafka on EKS and buy everything that is not Kafka.
 
 | Decision | Choice | Why |
 | --- | --- | --- |
-| Kafka hosting | Self-managed on EKS with the Strimzi operator, KRaft mode | MSK's per-broker pricing makes small tenants unprofitable and limits tuning and isolation; Strimzi handles upgrades, certificates and Cruise Control rebalancing |
+| Kafka hosting | Self-managed on EKS with the Strimzi operator, KRaft mode | MSK's per-broker pricing makes small tenants unprofitable and limits tuning and isolation; MSK also cannot load broker plugins such as the KIP-714 telemetry receiver and cannot run on a laptop. Strimzi handles upgrades, certificates and Cruise Control rebalancing |
 | Tenancy | Dedicated cluster per paying customer until about 50 paying customers (target Oct 2027). Shared clusters with a virtual cluster per tenant from Phase 6; dedicated clusters stay as a premium tier | Gets paying customers live without building isolation, quotas or self-serve; shared clusters then make a free allowance and small customers economical |
 | Tenant isolation | Dedicated clusters: the cluster boundary, with per-application credentials and standard ACLs. From Phase 6: hidden topic prefix, prefix-scoped ACLs, per-tenant credentials, broker quotas (byte rate, request rate, partition and storage caps) | Nothing to isolate until two tenants share a cluster; quotas then prevent noisy neighbors and data leakage |
 | Topic name rewriting | Not needed on dedicated clusters. Decide on a Kafka-protocol proxy (Kroxylicious multi-tenancy filter is the leading candidate) at the start of Phase 6 | Hides prefixes on shared clusters so teams keep their topic names; dedicated-cluster customers never need it |
 | Multi-tenancy readiness | Tenant label on every metric and alert from day one; every customer's Kubernetes resources generated from one template by the provisioning service | Phase 6 adds tenants instead of relabeling metrics and rewriting provisioning |
 | Durability | 3 AZs, replication factor 3, min.insync.replicas 2, rack-aware placement | Survives a full AZ loss |
-| Storage | gp3 EBS for hot data, tiered storage to S3 for history | Keeps disks small and enables replay |
+| Storage | gp3 EBS for hot data (about 24 hours locally), tiered storage to S3 for history through the Aiven S3 remote storage manager in our own broker image; a small in-cluster agent turns tiering on for every new topic | Keeps disks small and enables replay. Kafka has no broker-wide default for tiering, so customer-created topics would otherwise fill the disks |
 | Cross-AZ cost | Follower fetching so consumers read from a replica in their own AZ | Inter-AZ transfer is often the largest AWS cost line |
-| Client auth | SASL/SCRAM and mTLS over TLS; public endpoints first, PrivateLink later | Standard protocols keep migration open; PrivateLink is fiddly with Kafka's per-broker addresses |
+| Client auth | SASL/SCRAM-SHA-512 over TLS on public endpoints first; mTLS when a customer asks for it, PrivateLink later | Standard protocols keep migration open; a username and password is simplest for newcomers; each extra public listener costs a load balancer per broker; PrivateLink is fiddly with Kafka's per-broker addresses |
 | Backend language | Go for the API, provisioning, metering and diagnosis services; the KIP-714 telemetry receiver is the one JVM component, because broker plugins must be Java | Strongest Kubernetes and operator ecosystem (client-go, controller-runtime), mature pure-Go Kafka clients, simple static binaries |
 | Metrics store | VictoriaMetrics open-source edition, single-node to start | Free, and the docs recommend single-node below one million samples per second; the free cluster version adds multi-tenancy if needed. Enterprise-only features (downsampling, multiple retentions, multitenant vmalert, advanced per-tenant stats) are not needed before Phase 6 |
 | Alerting | Alertmanager with per-tenant routing to Slack, PagerDuty and webhooks | Proven, cheap to run |
-| Cluster layout | One EKS cluster per environment; each customer's Kafka cluster in its own namespace on dedicated nodes (a Karpenter NodePool with taints per customer) | One control plane fee and one upgrade path instead of 50; dedicated nodes keep brokers isolated |
-| Provisioning | Terraform for base infrastructure (VPC, EKS, S3, IAM); the Go provisioning service creates each customer's namespace, NodePool, Strimzi Kafka resource, users and topics through the Kubernetes API | Per-customer changes are fast, automatable and reviewable as code; no Terraform run per customer |
+| Cluster layout | One EKS cluster per environment in EKS Auto Mode, on Kubernetes 1.37; each customer's Kafka cluster in its own namespace on dedicated nodes (a NodePool with taints per customer). Strimzi Drain Cleaner keeps node replacements to one broker at a time | One control plane fee and one upgrade path instead of 50; dedicated nodes keep brokers isolated; Auto Mode runs node provisioning, OS patching, EBS and load balancers for about 12% on top of instance cost, which matters more than cost for a one-person team. Auto Mode replaces every node after at most 21 days, which disruption budgets do not stop, hence Drain Cleaner |
+| Provisioning | Terraform for base infrastructure (VPC, EKS, S3, IAM, DNS, ECR); kustomize overlays of `deploy/` for the shared platform components (Strimzi, cert-manager, external-dns, Drain Cleaner, VictoriaMetrics), the same on kind and EKS; the Go provisioning service creates each customer's namespace, NodePool, Strimzi Kafka resource, users and topics through the Kubernetes API | Per-customer changes are fast, automatable and reviewable as code; no Terraform run per customer; no GitOps controller to operate |
 | Kafka version | Newest Kafka 4.x supported by Strimzi | KRaft only, tiered storage and KIP-714 client telemetry |
-| AWS accounts | One region, separate dev and prod accounts from the start | Keeps experiments away from customer clusters |
+| AWS accounts | us-east-1; an AWS Organization with an otherwise empty management account (billing, single sign-on, guardrails) plus separate dev and prod accounts from the start. The design partner's cluster runs in prod from day one | Keeps experiments away from customer clusters and customer data out of dev; keeps workloads out of the account that controls everything |
 | Repository | One repository for Go services, React app, Terraform and Kubernetes manifests | One place to change a feature end to end |
 | Local development | kind with Strimzi on a laptop | Most work needs no AWS |
+| Customer endpoints | A stable name per customer, such as `bootstrap.<id>.kafka.<domain>`, with Let's Encrypt certificates from cert-manager and DNS records from external-dns; one load balancer per broker to start. Customer IDs are opaque, such as `c-7f3k2q` | Clients never change their bootstrap address or import a CA; the fixed names let a shared gateway replace the per-broker load balancers later without clients noticing; certificate logs and DNS are public, so readable IDs would reveal who the customers are |
 | User auth | Clerk or Auth0, for the customer team's UI login | Not a differentiator |
 | Billing | Usage-based on data processed, rates set later. Design partner invoiced manually; Stripe usage-based billing from Phase 5 | Price follows the value customers get; usage is already measured for observability |
 | Frontend | Custom React app, not embedded Grafana | The visual experience is the product |
@@ -181,8 +182,8 @@ Each phase is a [GitHub milestone](https://github.com/ReneP92/changeport/milesto
 | Milestone | Weeks | Due | Scope |
 | --- | --- | --- | --- |
 | [Phase 0: Design partner and foundations](https://github.com/ReneP92/changeport/milestone/1) | 3 | Nov 6, 2026 | Design partner, their data volume, AWS accounts, metrics labels, wireframes |
-| [Phase 1: Single-tenant data plane](https://github.com/ReneP92/changeport/milestone/2) | 5–7 | Dec 25, 2026 | EKS, Strimzi, KRaft, tiered storage, auth, KIP-714 telemetry receiver |
-| [Phase 2: Observability](https://github.com/ReneP92/changeport/milestone/3) | 8–10 | Mar 5, 2027 | Topology map, time-based lag, change timeline, topic tail, alerting |
+| [Phase 1: Single-tenant data plane](https://github.com/ReneP92/changeport/milestone/2) | 5–7 | Dec 25, 2026 | EKS Auto Mode, Strimzi, KRaft, dedicated nodes, public TLS endpoints with SCRAM, tiered storage, broker metrics with the tenant label, the design partner's cluster in prod |
+| [Phase 2: Observability](https://github.com/ReneP92/changeport/milestone/3) | 8–10 | Mar 5, 2027 | KIP-714 telemetry receiver, topology map, time-based lag, change timeline, topic tail, alerting |
 | [Phase 3: Guidance layer](https://github.com/ReneP92/changeport/milestone/4) | 4–6 | Apr 16, 2027 | Diagnosis rules, health scores, guardrails, onboarding, exactly-once snippets |
 | [Phase 4: Replay, hardening and design-partner launch](https://github.com/ReneP92/changeport/milestone/5) | 6–8 | Jun 11, 2027 | Replay and offset tools, chaos tests, runbooks, docs, design partner in production |
 | [Phase 5: Grow to 50 customers](https://github.com/ReneP92/changeport/milestone/6) | 18 | Oct 15, 2027 | Automated dedicated-cluster provisioning, usage metering, Stripe usage-based billing, fleet monitoring and upgrades, onboarding |
@@ -191,7 +192,7 @@ Each phase is a [GitHub milestone](https://github.com/ReneP92/changeport/milesto
 | [Phase 8: Migration wizard](https://github.com/ReneP92/changeport/milestone/9) | 4–6 | Apr 14, 2028 | MirrorMaker 2 replication, offset translation, cutover validation |
 | [Phase 9: CDC product](https://github.com/ReneP92/changeport/milestone/10) | 13+ | Jul 14, 2028 | Postgres to Snowflake: own sink engine, idempotent merges, watermark backfills, slot monitoring |
 
-Only Phase 0 is broken into issues, plus the proxy decision parked in Phase 6. Later phases get issues once Phase 0 settles the design partner and metrics decisions.
+Phase 0 and Phase 1 are broken into issues, plus the KIP-714 telemetry receiver moved to Phase 2 and the proxy decision parked in Phase 6. Later phases get issues as each one starts.
 
 ## Team, pricing and operating model
 
@@ -226,13 +227,11 @@ The biggest risk is getting stuck in stage 1: managed Kafka can absorb all avail
 
 Phase 0 is about finding the design partner and setting up the foundations. Each item is tracked as an issue in the [Phase 0 milestone](https://github.com/ReneP92/changeport/milestone/1).
 
-- [ ] [Find a design-partner customer](https://github.com/ReneP92/changeport/issues/9)
-- [ ] [Estimate the design partner's data volume](https://github.com/ReneP92/changeport/issues/3) (data in and out per day, peak throughput, retention)
-- [ ] [Set up AWS dev and prod accounts and pick the region](https://github.com/ReneP92/changeport/issues/10)
+- [ ] [Set up the AWS organization, dev and prod accounts and the Terraform state backend](https://github.com/ReneP92/changeport/issues/10) (region decided: us-east-1)
 - [ ] [Define the metrics labeling scheme](https://github.com/ReneP92/changeport/issues/4) (tenant, topic, client), with the tenant label from day one
 - [ ] [Wireframe onboarding, the topology map and time-based lag views](https://github.com/ReneP92/changeport/issues/5)
 - [ ] [Set the trigger for starting managed Connect](https://github.com/ReneP92/changeport/issues/7)
-- [ ] [Secure a domain for Changeport](https://github.com/ReneP92/changeport/issues/8)
+- [ ] [Secure a domain for Changeport](https://github.com/ReneP92/changeport/issues/8), with DNS zones for the customer endpoints
 
 Decided:
 
@@ -244,5 +243,16 @@ Decided:
 - [x] Infrastructure: one EKS cluster per environment, Terraform for base infrastructure, Strimzi resources created by the Go provisioning service
 - [x] Skip the newcomer interviews; learn from the design partner and early customers instead
 - [x] [First CDC source and destination](https://github.com/ReneP92/changeport/issues/6): Postgres to Snowflake
+- [x] [Design partner](https://github.com/ReneP92/changeport/issues/9): committed; their identity stays out of the repository
+- [x] [Design partner's data volume](https://github.com/ReneP92/changeport/issues/3): small, with peak throughput under 1 MB/s, under 50 GB in per day and retention of 7 days or less, so a 3-broker cluster on 2-vCPU nodes with 100 GiB per broker and tiered storage fits with room to grow
+- [x] Kafka hosting: Strimzi on EKS rather than MSK, which cannot load the KIP-714 receiver or run locally
+- [x] EKS Auto Mode on Kubernetes 1.37, with Strimzi Drain Cleaner for node replacements
+- [x] AWS: us-east-1, an Organization with a separate management account, dev and prod accounts; the design partner runs in prod from day one
+- [x] Client auth: SASL/SCRAM over TLS first, mTLS when a customer asks
+- [x] Customer endpoints: stable names under our own domain with Let's Encrypt certificates, opaque customer IDs
+- [x] Platform components through kustomize overlays, no GitOps controller
+- [x] [KIP-714 telemetry receiver](https://github.com/ReneP92/changeport/issues/34) moves from Phase 1 to Phase 2, to keep Phase 1 to the deployable cluster
 
 Deferred to Phase 6: [decide whether to adopt the topic-rewriting proxy](https://github.com/ReneP92/changeport/issues/2).
+
+Phase 1 is tracked as 18 issues in the [Phase 1 milestone](https://github.com/ReneP92/changeport/milestone/2). The critical path runs through the AWS accounts (#10), the domain (#8), the VPC (#15), EKS (#16), the dev environment (#28) and its end-to-end test (#29), then prod (#31) and the design partner's cluster (#33). The work on kind (#19 to #27) needs no AWS and runs alongside. The estimate is about 41 to 45 working days against about 32 in the milestone, so the AWS and domain work starts during Phase 0, and the design partner's cluster may move into early January.
