@@ -51,6 +51,25 @@ locally on kind (see [Local development](#local-development)). The rest is
 planned; shared clusters behind a topic-rewriting proxy follow in Phase 6,
 then Kafka Connect and CDC.
 
+## Roadmap
+
+Each phase is a GitHub milestone; see the plan for the scope of each and the
+[milestones overview](https://github.com/ReneP92/changeport/milestones?direction=asc&sort=due_date)
+for progress.
+
+| Milestone | Due |
+| --- | --- |
+| [Phase 0: Design partner and foundations](https://github.com/ReneP92/changeport/milestone/1) | Nov 6, 2026 |
+| [Phase 1: Single-tenant data plane](https://github.com/ReneP92/changeport/milestone/2) | Dec 25, 2026 |
+| [Phase 2: Observability](https://github.com/ReneP92/changeport/milestone/3) | Mar 5, 2027 |
+| [Phase 3: Guidance layer](https://github.com/ReneP92/changeport/milestone/4) | Apr 16, 2027 |
+| [Phase 4: Replay, hardening and design-partner launch](https://github.com/ReneP92/changeport/milestone/5) | Jun 11, 2027 |
+| [Phase 5: Grow to 50 customers](https://github.com/ReneP92/changeport/milestone/6) | Oct 15, 2027 |
+| [Phase 6: Multi-tenancy and self-serve](https://github.com/ReneP92/changeport/milestone/7) | Dec 24, 2027 |
+| [Phase 7: Managed Connect and Debezium](https://github.com/ReneP92/changeport/milestone/8) | Mar 3, 2028 |
+| [Phase 8: Migration wizard](https://github.com/ReneP92/changeport/milestone/9) | Apr 14, 2028 |
+| [Phase 9: CDC product](https://github.com/ReneP92/changeport/milestone/10) | Jul 14, 2028 |
+
 ## Repository layout
 
 | Path | Contents |
