@@ -200,6 +200,31 @@ spec:
             service.beta.kubernetes.io/aws-load-balancer-scheme: "internet-facing"
     authorization:
       type: simple
+    # Broker metrics on port 9404, which VictoriaMetrics scrapes with the
+    # tenant label (docs/metrics-labels.md). Only what observability and
+    # usage metering need, to keep the number of series per broker low. The
+    # patterns match names before Prometheus appends _total to counters; JVM
+    # and process metrics are always exported and trimmed when scraped.
+    metricsConfig:
+      type: strimziMetricsReporter
+      values:
+        allowList:
+          # Health: replication, controller, offline storage.
+          - "kafka_server_replicamanager_(underreplicatedpartitions|underminisrpartitioncount|atminisrpartitioncount|offlinereplicacount|leadercount|partitioncount|isrshrinkspersec|isrexpandspersec|failedisrupdatespersec)"
+          - "kafka_controller_kafkacontroller_(activecontrollercount|activebrokercount|fencedbrokercount|offlinepartitionscount|globalpartitioncount|globaltopiccount|preferredreplicaimbalancecount)"
+          - "kafka_log_logmanager_offlinelogdirectorycount"
+          - "kafka_server_kafkaserver_brokerstate"
+          # Usage per topic: traffic, storage on the brokers and in S3.
+          - "kafka_server_brokertopicmetrics_(bytesin|bytesout|messagesin|bytesrejected|totalproducerequests|totalfetchrequests|failedproducerequests|failedfetchrequests|remotecopybytes|remotecopyerrors|remotefetchbytes|remotefetcherrors)persec"
+          - "kafka_server_brokertopicmetrics_(remotecopylagbytes|remotecopylagsegments|remotelogsizebytes)"
+          - "kafka_log_log_size"
+          # Load: requests, latency, connections, thread saturation.
+          - "kafka_network_requestmetrics_requestspersec"
+          - "kafka_network_requestmetrics_totaltimems.*"
+          - "kafka_network_socketserver_networkprocessoravgidlepercent"
+          - "kafka_server_kafkarequesthandlerpool_requesthandleravgidlepercent"
+          - "kafka_server_socket_server_metrics_connection_count"
+          - "kafka_coordinator_group_groupmetadatamanager_numgroups.*"
     # Topic history goes to S3 through the Aiven plugin in the Kafka image
     # (images/kafka). Topics opt in with remote.storage.enable=true.
     tieredStorage:

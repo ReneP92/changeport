@@ -32,6 +32,7 @@ KIND_PRELOAD_IMAGES=(
   quay.io/strimzi/operator:1.3.0
   quay.io/strimzi/drain-cleaner:1.8.0
   chrislusf/seaweedfs:4.48
+  victoriametrics/victoria-metrics:v1.154.1
   quay.io/jetstack/cert-manager-cainjector:v1.21.2
   quay.io/jetstack/cert-manager-controller:v1.21.2
   quay.io/jetstack/cert-manager-webhook:v1.21.2
@@ -145,10 +146,14 @@ ensure_kind_cluster() {
     log "Pulling $image"
     docker pull --quiet "$image" >/dev/null
   done
-  log "Loading images into the kind nodes"
-  kind load docker-image --name "$CLUSTER_NAME" "${KIND_PRELOAD_IMAGES[@]}" >/dev/null
+  # Only the workers run these pods; the control plane is tainted, and every
+  # node keeps its own copy of each image.
+  local workers
+  workers=$(kind get nodes --name "$CLUSTER_NAME" | grep -v control-plane | paste -sd , -)
+  log "Loading images into the kind workers"
+  kind load docker-image --name "$CLUSTER_NAME" --nodes "$workers" "${KIND_PRELOAD_IMAGES[@]}" >/dev/null 2>&1
   if docker image inspect "$KAFKA_IMAGE" >/dev/null 2>&1; then
-    kind load docker-image --name "$CLUSTER_NAME" "$KAFKA_IMAGE" >/dev/null
+    kind load docker-image --name "$CLUSTER_NAME" --nodes "$workers" "$KAFKA_IMAGE" >/dev/null 2>&1
   fi
 }
 

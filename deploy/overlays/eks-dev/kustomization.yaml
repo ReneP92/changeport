@@ -6,3 +6,13 @@ resources:
   - ../../base/strimzi
   - ../../base/cert-manager
   - ../../base/eks-storage
+  - ../../base/victoria-metrics
+patches:
+  # The environment of every metric.
+  - target:
+      kind: Deployment
+      name: victoria-metrics
+    patch: |-
+      - op: replace
+        path: /spec/template/spec/containers/0/env/0/value
+        value: dev

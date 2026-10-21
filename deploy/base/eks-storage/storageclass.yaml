@@ -1,10 +1,14 @@
 # Encrypted gp3 volumes from the EKS Auto Mode block storage driver, named in
 # internal/provisioning (EKSDevPlatform, EKSProdPlatform). Volumes bind once a
-# broker is scheduled, so each volume lands in its broker's zone.
+# broker is scheduled, so each volume lands in its broker's zone. It is the
+# default class, since Auto Mode creates none, so that claims without a class,
+# such as the metrics store's, bind too.
 apiVersion: storage.k8s.io/v1
 kind: StorageClass
 metadata:
   name: gp3
+  annotations:
+    storageclass.kubernetes.io/is-default-class: "true"
 provisioner: ebs.csi.eks.amazonaws.com
 parameters:
   type: gp3

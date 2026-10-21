@@ -73,6 +73,10 @@ kafka-client: CUSTOMER ?= demo
 kafka-client: ## Open a shell with Kafka tools connected to CUSTOMER's public listener (default demo)
 	hack/kafka-client.sh $(CUSTOMER)
 
+.PHONY: metrics-test
+metrics-test: ## Check that every customer's brokers are scraped into VictoriaMetrics with their tenant
+	hack/metrics-test.sh
+
 .PHONY: tiered-storage-test
 tiered-storage-test: CUSTOMER ?= demo
 tiered-storage-test: ## Offload a topic of CUSTOMER (default demo) to the object store and read it back from offset 0

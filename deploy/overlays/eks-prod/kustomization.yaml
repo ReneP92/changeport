@@ -6,7 +6,16 @@ resources:
   - ../../base/strimzi
   - ../../base/cert-manager
   - ../../base/eks-storage
+  - ../../base/victoria-metrics
 patches:
+  # The environment of every metric.
+  - target:
+      kind: Deployment
+      name: victoria-metrics
+    patch: |-
+      - op: replace
+        path: /spec/template/spec/containers/0/env/0/value
+        value: prod
   # Keep a customer's volumes when their claims are deleted, so a mistaken
   # deprovision loses no data. A StorageClass is immutable: changing this on
   # a running cluster means deleting and recreating the class.
