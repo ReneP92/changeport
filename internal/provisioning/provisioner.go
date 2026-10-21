@@ -120,15 +120,28 @@ func (p *Provisioner) WaitDeleted(ctx context.Context, customerID string) error 
 
 // kafkaReady reports whether Strimzi has reconciled the current generation of
 // a Kafka resource and marked it Ready, plus a short status for logging.
+// Strimzi only updates observedGeneration once a reconciliation finishes, so
+// while it works on the latest spec the status names its current conditions,
+// such as NotReady=True (Creating).
 func kafkaReady(kafka *unstructured.Unstructured) (bool, string) {
-	observed, found, err := unstructured.NestedInt64(kafka.Object, "status", "observedGeneration")
-	if err != nil || !found || observed < kafka.GetGeneration() {
-		return false, "operator has not reconciled the latest spec"
-	}
 	conditions, _, err := unstructured.NestedSlice(kafka.Object, "status", "conditions")
 	if err != nil {
 		return false, "unreadable status conditions"
 	}
+	ready, message := readyCondition(conditions)
+	observed, found, err := unstructured.NestedInt64(kafka.Object, "status", "observedGeneration")
+	if err != nil || !found || observed < kafka.GetGeneration() {
+		if len(conditions) == 0 {
+			return false, "operator has not reconciled the latest spec"
+		}
+		return false, "operator has not reconciled the latest spec; last status " + message
+	}
+	return ready, message
+}
+
+// readyCondition reports whether conditions hold Ready=True, and otherwise
+// summarizes the last condition for logging.
+func readyCondition(conditions []any) (bool, string) {
 	message := "no Ready condition"
 	for _, c := range conditions {
 		condition, ok := c.(map[string]any)
