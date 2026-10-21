@@ -229,9 +229,12 @@ go run ./cmd/provisioner render -customer acme -profile production -platform eks
 make lint test
 ```
 
-CI runs the same Go lint and tests, plus `make tf-fmt tf-validate`,
-`make shellcheck`, `make platform-check`, which applies the kind overlay to a
-kind cluster and server-side dry-runs the EKS overlays against it, and builds
-the Kafka image for amd64 and arm64 and runs `make kafka-image-test`, which
-starts a broker from it with tiered storage configured. Run
+CI runs the same Go lint and tests, plus `make tf-fmt tf-validate` and
+`make shellcheck`, and on every pull request the whole end-to-end suite on a
+fresh kind cluster: `make dev-up e2e platform-check`, where `platform-check`
+also server-side dry-runs the EKS overlays. When that job fails, it uploads
+the output of `hack/diagnostics.sh` (pods, events, resources and logs) as the
+`e2e-diagnostics` artifact. CI also builds the Kafka and agent images for
+amd64 and arm64 and runs `make kafka-image-test`, which starts a broker from
+the Kafka image with tiered storage configured. Run
 `make help` for every target.
