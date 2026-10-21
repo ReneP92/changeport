@@ -33,6 +33,8 @@ func TestCommandErrors(t *testing.T) {
 		{"unknown profile", []string{"provision", "-customer", "acme", "-profile", "huge"}, `unknown profile "huge"`},
 		{"unknown platform", []string{"render", "-customer", "acme", "-platform", "gke"}, `unknown platform "gke"`},
 		{"deprovision invalid customer", []string{"deprovision", "-customer", "a_b"}, `customer ID "a_b"`},
+		{"credentials invalid customer", []string{"credentials", "-customer", "A"}, `customer ID "A"`},
+		{"credentials unknown platform", []string{"credentials", "-customer", "acme", "-platform", "gke"}, `unknown platform "gke"`},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

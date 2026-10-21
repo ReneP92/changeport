@@ -26,6 +26,7 @@ const usage = `Usage: provisioner <command> [flags]
 Commands:
   provision    create or update a customer's Kafka cluster
   deprovision  delete a customer's Kafka cluster and namespace
+  credentials  print a client.properties for connecting as the customer's admin user
   render       print the resources for a customer without applying them
 
 Run "provisioner <command> -h" for the flags of a command.
@@ -56,6 +57,8 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 		return runProvision(ctx, args, logger, stderr)
 	case "deprovision":
 		return runDeprovision(ctx, args, logger, stderr)
+	case "credentials":
+		return runCredentials(ctx, args, logger, stdout, stderr)
 	case "render":
 		return runRender(args, stdout, stderr)
 	case "-h", "-help", "--help", "help":
@@ -78,7 +81,7 @@ func (c *commonFlags) register(fs *flag.FlagSet) {
 	fs.StringVar(&c.customer, "customer", "", "customer ID, for example acme (required)")
 	fs.StringVar(&c.kubeContext, "context", "", "kubeconfig context to use (default: the current context)")
 	fs.BoolVar(&c.wait, "wait", false, "wait until the change has completed")
-	fs.DurationVar(&c.timeout, "timeout", 10*time.Minute, "how long -wait waits")
+	fs.DurationVar(&c.timeout, "timeout", 10*time.Minute, "how long the command and -wait may take")
 }
 
 // clusterFlags select the profile and platform of a customer's cluster.
@@ -125,14 +128,15 @@ func runProvision(ctx context.Context, args []string, logger *slog.Logger, stder
 	if err != nil {
 		return err
 	}
+	// Provision itself waits for the listener certificate.
+	ctx, cancel := context.WithTimeout(ctx, common.timeout)
+	defer cancel()
 	if err := provisioner.Provision(ctx, spec); err != nil {
 		return err
 	}
 	if !common.wait {
 		return nil
 	}
-	ctx, cancel := context.WithTimeout(ctx, common.timeout)
-	defer cancel()
 	return provisioner.WaitReady(ctx, spec)
 }
 
@@ -160,6 +164,35 @@ func runDeprovision(ctx context.Context, args []string, logger *slog.Logger, std
 	ctx, cancel := context.WithTimeout(ctx, common.timeout)
 	defer cancel()
 	return provisioner.WaitDeleted(ctx, common.customer)
+}
+
+func runCredentials(ctx context.Context, args []string, logger *slog.Logger, stdout, stderr io.Writer) error {
+	fs := flag.NewFlagSet("credentials", flag.ContinueOnError)
+	fs.SetOutput(stderr)
+	customer := fs.String("customer", "", "customer ID, for example acme (required)")
+	kubeContext := fs.String("context", "", "kubeconfig context to use (default: the current context)")
+	var cluster clusterFlags
+	cluster.register(fs)
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	spec, err := cluster.spec(*customer)
+	if err != nil {
+		return err
+	}
+	if err := spec.Validate(); err != nil {
+		return err
+	}
+	provisioner, err := newProvisioner(*kubeContext, logger)
+	if err != nil {
+		return err
+	}
+	properties, err := provisioner.ClientProperties(ctx, spec)
+	if err != nil {
+		return err
+	}
+	_, err = io.WriteString(stdout, properties)
+	return err
 }
 
 func runRender(args []string, stdout, stderr io.Writer) error {

@@ -52,10 +52,11 @@ Terraform builds the base infrastructure (VPC, EKS, S3, IAM), and the
 provisioning service creates everything per customer through the Kubernetes
 API from one template.
 
-Built so far: the provisioning service stub and the Strimzi layout, which run
-locally on kind (see [Local development](#local-development)). The rest is
-planned; shared clusters behind a topic-rewriting proxy follow in Phase 6,
-then Kafka Connect and CDC.
+Built so far: the provisioning service stub, the platform components and
+customer clusters with public TLS listeners and SCRAM users, running locally
+on kind (see [Local development](#local-development)), and the Terraform
+layout for EKS, not applied yet. The rest is planned; shared clusters behind
+a topic-rewriting proxy follow in Phase 6, then Kafka Connect and CDC.
 
 ## Roadmap
 
@@ -110,13 +111,34 @@ This builds the Kafka broker image (`images/kafka`, Strimzi's image plus the
 Aiven tiered storage plugin; the first build takes about 10 minutes), creates
 the `changeport` kind cluster on Kubernetes 1.37 (a control
 plane and three workers, one per zone, like the three availability zones on
-EKS), installs the platform components from `deploy/overlays/kind` (Strimzi
-1.3.0 watching all namespaces, and cert-manager with a local CA), provisions
-the `demo` customer (namespace `customer-demo`, a single-node KRaft cluster on
-Kafka 4.3.1) with the provisioning service, and runs a smoke test that
-produces a message and consumes it back. It is safe to run again. If the
-cluster was created from an older `deploy/kind/cluster.yaml`, it says so;
+EKS) with [cloud-provider-kind](https://github.com/kubernetes-sigs/cloud-provider-kind)
+for load balancers, installs the platform components from
+`deploy/overlays/kind` (Strimzi 1.3.0 watching all namespaces, and
+cert-manager with a local CA), provisions the `demo` customer (namespace
+`customer-demo`, a single-node KRaft cluster on Kafka 4.3.1) with the
+provisioning service, and runs the smoke test. It is safe to run again. If
+the cluster was created from an older `deploy/kind/cluster.yaml`, it says so;
 recreate it with `make dev-down dev-up`.
+
+Customers connect the way they will on EKS: to public names such as
+`bootstrap.demo.kafka.changeport.test:9094`, over TLS with SCRAM, as their
+`admin` user. On kind the names resolve to cloud-provider-kind's load
+balancers on the `kind` Docker network, and the certificates come from a
+local CA. The smoke test connects from a client container outside the
+cluster: it creates a topic, produces a message and consumes it back, checks
+that no credentials, a wrong password, plaintext and an address the
+certificate does not name are refused, and checks the internal mTLS listener
+the platform's agent uses.
+
+To work with a customer's cluster yourself, open a shell with the Kafka tools
+and the customer's `client.properties`:
+
+```bash
+make kafka-client CUSTOMER=demo
+```
+
+`go run ./cmd/provisioner credentials -context kind-changeport -customer demo`
+prints the same `client.properties`.
 
 Provision more customers from the same template, or run the end-to-end check,
 which provisions a second customer, smoke tests both clusters and removes the

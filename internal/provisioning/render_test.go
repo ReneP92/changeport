@@ -8,6 +8,8 @@ import (
 	"path/filepath"
 	"slices"
 	"testing"
+
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 )
 
 var update = flag.Bool("update", false, "rewrite the golden files in testdata")
@@ -89,7 +91,8 @@ func TestRenderProducesLabeledObjectsInApplyOrder(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	wantKinds := []string{"Namespace", "KafkaNodePool", "Kafka"}
+	// The certificate comes before the Kafka cluster that uses it.
+	wantKinds := []string{"Namespace", "Certificate", "KafkaNodePool", "Kafka", "KafkaUser", "KafkaUser"}
 	if len(objects) != len(wantKinds) {
 		t.Fatalf("got %d objects, want %d", len(objects), len(wantKinds))
 	}
@@ -111,8 +114,58 @@ func TestRenderProducesLabeledObjectsInApplyOrder(t *testing.T) {
 	if got := objects[0].GetName(); got != spec.Namespace() {
 		t.Errorf("namespace is named %q, want %q", got, spec.Namespace())
 	}
-	if got := objects[1].GetLabels()["strimzi.io/cluster"]; got != objects[2].GetName() {
-		t.Errorf("node pool belongs to cluster %q, want %q", got, objects[2].GetName())
+	for _, i := range []int{2, 4, 5} {
+		if got := objects[i].GetLabels()["strimzi.io/cluster"]; got != objects[3].GetName() {
+			t.Errorf("%s belongs to cluster %q, want %q", objects[i].GetKind(), got, objects[3].GetName())
+		}
+	}
+}
+
+// TestRenderPublicListener checks the names, certificate and load balancer
+// settings that customers depend on, beyond the golden files.
+func TestRenderPublicListener(t *testing.T) {
+	spec := Spec{CustomerID: "acme", Profile: ProductionProfile, Platform: EKSProdPlatform}
+	objects, err := Render(spec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	certificate, kafka := objects[1], objects[3]
+	dnsNames, _, _ := unstructured.NestedStringSlice(certificate.Object, "spec", "dnsNames")
+	if len(dnsNames) != 1 || dnsNames[0] != "*.acme.kafka.changeport.invalid" {
+		t.Errorf("certificate covers %q, want the customer's wildcard name", dnsNames)
+	}
+	if encoding, _, _ := unstructured.NestedString(certificate.Object, "spec", "privateKey", "encoding"); encoding != "PKCS8" {
+		t.Errorf("certificate key encoding is %q; Kafka only loads PKCS8 keys", encoding)
+	}
+	listeners, _, _ := unstructured.NestedSlice(kafka.Object, "spec", "kafka", "listeners")
+	var external map[string]any
+	for _, l := range listeners {
+		listener := l.(map[string]any)
+		if listener["name"] == "external" {
+			external = listener
+		}
+		if listener["tls"] != true {
+			t.Errorf("listener %v does not use TLS", listener["name"])
+		}
+	}
+	if external == nil {
+		t.Fatal("no external listener")
+	}
+	for _, field := range []struct {
+		path []string
+		want string
+	}{
+		{[]string{"authentication", "type"}, "scram-sha-512"},
+		{[]string{"configuration", "class"}, "eks.amazonaws.com/nlb"},
+		{[]string{"configuration", "brokerCertChainAndKey", "secretName"}, ExternalListenerSecret},
+		{[]string{"configuration", "advertisedHostTemplate"}, "b{nodeId}.acme.kafka.changeport.invalid"},
+		{[]string{"configuration", "bootstrap", "annotations", "external-dns.alpha.kubernetes.io/hostname"}, "bootstrap.acme.kafka.changeport.invalid"},
+		{[]string{"configuration", "perBrokerAnnotationsTemplate", "external-dns.alpha.kubernetes.io/hostname"}, "b{nodeId}.acme.kafka.changeport.invalid"},
+		{[]string{"configuration", "perBrokerAnnotationsTemplate", "service.beta.kubernetes.io/aws-load-balancer-scheme"}, "internet-facing"},
+	} {
+		if got, _, _ := unstructured.NestedString(external, field.path...); got != field.want {
+			t.Errorf("external listener %v = %q, want %q", field.path, got, field.want)
+		}
 	}
 }
 
@@ -121,7 +174,7 @@ func TestRenderRejectsInvalidSpecs(t *testing.T) {
 		{CustomerID: "Bad_ID", Profile: DevProfile, Platform: KindPlatform},
 		{CustomerID: "acme", Profile: Profile{}, Platform: KindPlatform},
 		{CustomerID: "acme", Profile: DevProfile, Platform: Platform{}},
-		{CustomerID: "acme", Profile: ProductionProfile, Platform: Platform{Name: "one-zone", StorageClass: "standard", Zones: 1}},
+		{CustomerID: "acme", Profile: ProductionProfile, Platform: oneZonePlatform},
 	} {
 		if _, err := Render(spec); err == nil {
 			t.Errorf("Render(%+v) = nil error, want an error", spec)

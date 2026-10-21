@@ -14,6 +14,28 @@ metadata:
   labels:
 {{- template "labels" . }}
 ---
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: external-listener
+  namespace: {{ .Namespace }}
+  labels:
+{{- template "labels" . }}
+spec:
+  # One wildcard name covers the bootstrap name and every broker's name.
+  dnsNames:
+    - "*.{{ .Domain }}"
+  secretName: {{ .ExternalListenerSecret }}
+  privateKey:
+    algorithm: ECDSA
+    size: 256
+    # Kafka only loads PEM private keys in PKCS#8.
+    encoding: PKCS8
+  issuerRef:
+    group: cert-manager.io
+    kind: ClusterIssuer
+    name: {{ .Platform.CertificateIssuer }}
+---
 apiVersion: kafka.strimzi.io/v1
 kind: KafkaNodePool
 metadata:
@@ -62,15 +84,42 @@ spec:
       topologyKey: {{ .ZoneTopologyKey }}
 {{- end }}
     listeners:
-      - name: plain
-        port: 9092
-        type: internal
-        tls: false
+      # Platform clients inside the cluster, such as the Kafka agent.
       - name: tls
         port: 9093
         type: internal
         tls: true
+        authentication:
+          type: tls
+      # Customers, over the internet.
+      - name: external
+        port: {{ .ExternalPort }}
+        type: loadbalancer
+        tls: true
+        authentication:
+          type: scram-sha-512
+        configuration:
+{{- with .Platform.LoadBalancer.Class }}
+          class: {{ . }}
+{{- end }}
+          brokerCertChainAndKey:
+            secretName: {{ .ExternalListenerSecret }}
+            certificate: tls.crt
+            key: tls.key
+          bootstrap:
+            annotations:
+{{- range $key, $value := .BootstrapAnnotations }}
+              {{ $key }}: {{ printf "%q" $value }}
+{{- end }}
+          advertisedHostTemplate: {{ .BrokerHostTemplate }}
+          perBrokerAnnotationsTemplate:
+{{- range $key, $value := .BrokerAnnotations }}
+            {{ $key }}: {{ printf "%q" $value }}
+{{- end }}
+    authorization:
+      type: simple
     config:
+      auto.create.topics.enable: false
       default.replication.factor: {{ .Profile.ReplicationFactor }}
       min.insync.replicas: {{ .Profile.MinInsyncReplicas }}
       offsets.topic.replication.factor: {{ .Profile.ReplicationFactor }}
@@ -79,3 +128,63 @@ spec:
   entityOperator:
     topicOperator: {}
     userOperator: {}
+---
+# The customer's user. It manages topics, consumer groups and transactions,
+# but cannot change the cluster's configuration, which the platform owns.
+apiVersion: kafka.strimzi.io/v1
+kind: KafkaUser
+metadata:
+  name: {{ .AdminUser }}
+  namespace: {{ .Namespace }}
+  labels:
+    strimzi.io/cluster: {{ .ClusterName }}
+{{- template "labels" . }}
+spec:
+  authentication:
+    type: scram-sha-512
+  authorization:
+    type: simple
+    acls:
+      - resource:
+          type: topic
+          name: "*"
+          patternType: literal
+        operations: [All]
+      - resource:
+          type: group
+          name: "*"
+          patternType: literal
+        operations: [All]
+      - resource:
+          type: transactionalId
+          name: "*"
+          patternType: literal
+        operations: [All]
+      - resource:
+          type: cluster
+        operations: [Describe, DescribeConfigs, IdempotentWrite]
+---
+# The Kafka agent's user on the internal listener: it reads the cluster and
+# keeps topic settings such as tiered storage in place.
+apiVersion: kafka.strimzi.io/v1
+kind: KafkaUser
+metadata:
+  name: {{ .AgentUser }}
+  namespace: {{ .Namespace }}
+  labels:
+    strimzi.io/cluster: {{ .ClusterName }}
+{{- template "labels" . }}
+spec:
+  authentication:
+    type: tls
+  authorization:
+    type: simple
+    acls:
+      - resource:
+          type: topic
+          name: "*"
+          patternType: literal
+        operations: [Describe, DescribeConfigs, AlterConfigs]
+      - resource:
+          type: cluster
+        operations: [Describe, DescribeConfigs]
