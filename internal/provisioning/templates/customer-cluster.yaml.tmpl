@@ -54,6 +54,9 @@ spec:
   kafka:
     version: {{ .KafkaVersion }}
     metadataVersion: {{ .MetadataVersion }}
+{{- with .Platform.KafkaImage }}
+    image: {{ . }}
+{{- end }}
 {{- if gt .Profile.Zones 1 }}
     rack:
       topologyKey: {{ .ZoneTopologyKey }}

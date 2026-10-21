@@ -174,6 +174,10 @@ type Platform struct {
 	StorageClass string
 	// Zones is the number of availability zones the platform's nodes span.
 	Zones int
+	// KafkaImage is the broker image: the Changeport Kafka image from
+	// images/kafka, which adds the tiered storage plugin to Strimzi's image.
+	// Empty means Strimzi's own image for KafkaVersion.
+	KafkaImage string
 }
 
 func (p Platform) validate() error {
@@ -189,11 +193,13 @@ func (p Platform) validate() error {
 }
 
 // KindPlatform is the local kind cluster from deploy/kind: three workers in
-// three zones, with kind's default "standard" storage class.
+// three zones, with kind's default "standard" storage class. make dev-up
+// builds the Kafka image and loads it into the kind nodes.
 var KindPlatform = Platform{
 	Name:         "kind",
 	StorageClass: "standard",
 	Zones:        3,
+	KafkaImage:   "changeport/kafka:local",
 }
 
 // EKSDevPlatform is the EKS cluster of the dev AWS account, with gp3 volumes

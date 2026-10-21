@@ -12,7 +12,11 @@ cd "$ROOT"
 KIND_NODE_IMAGE=kindest/node:v1.37.0@sha256:a1ed56cfb0e7b93589bdf97c8cd566405a265939e3620fc4f5de89adff580ae5
 KUBECTL_VERSION=v1.37.1
 
-# Every image the platform components and customer clusters run on kind,
+# The Changeport Kafka image from images/kafka, as named by
+# internal/provisioning.KindPlatform. dev-up builds it and loads it into kind.
+KAFKA_IMAGE=changeport/kafka:local
+
+# Every other image the platform components and customer clusters run on kind,
 # matching the versions in deploy/upstream-files.txt and
 # internal/provisioning.KafkaVersion. They are pulled once into the host's
 # Docker, which keeps them across cluster rebuilds, and loaded into every kind
@@ -20,7 +24,6 @@ KUBECTL_VERSION=v1.37.1
 # timeouts. make e2e fails if a pod runs an image missing here.
 KIND_PRELOAD_IMAGES=(
   quay.io/strimzi/operator:1.3.0
-  quay.io/strimzi/kafka:1.3.0-kafka-4.3.1
   quay.io/jetstack/cert-manager-cainjector:v1.21.2
   quay.io/jetstack/cert-manager-controller:v1.21.2
   quay.io/jetstack/cert-manager-webhook:v1.21.2
@@ -97,11 +100,17 @@ fetch_upstream_files() {
   done <"$ROOT/deploy/upstream-files.txt"
 }
 
-cluster_exists() { kind get clusters 2>/dev/null | grep -qx "$CLUSTER_NAME"; }
+build_kafka_image() {
+  log "Building $KAFKA_IMAGE"
+  docker buildx build --load --quiet -t "$KAFKA_IMAGE" images/kafka >/dev/null
+}
+
+cluster_exists() { kind get clusters 2>/dev/null | grep -x "$CLUSTER_NAME" >/dev/null; }
 
 # Creates the kind cluster from deploy/kind/cluster.yaml, or checks that the
 # existing one still matches it: three zone-labelled workers on the pinned
-# Kubernetes version. Then preloads KIND_PRELOAD_IMAGES into its nodes.
+# Kubernetes version. Then preloads KIND_PRELOAD_IMAGES into its nodes, and
+# KAFKA_IMAGE once build_kafka_image has built it.
 ensure_kind_cluster() {
   if cluster_exists; then
     check_kind_cluster
@@ -117,6 +126,9 @@ ensure_kind_cluster() {
   done
   log "Loading images into the kind nodes"
   kind load docker-image --name "$CLUSTER_NAME" "${KIND_PRELOAD_IMAGES[@]}" >/dev/null
+  if docker image inspect "$KAFKA_IMAGE" >/dev/null 2>&1; then
+    kind load docker-image --name "$CLUSTER_NAME" "$KAFKA_IMAGE" >/dev/null
+  fi
 }
 
 check_kind_cluster() {
