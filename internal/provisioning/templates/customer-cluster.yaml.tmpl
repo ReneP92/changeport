@@ -102,6 +102,20 @@ spec:
   limits:
     cpu: "{{ $.DedicatedNodeCPULimit }}"
 {{- end }}
+{{- with .Platform.TieredStorage.StaticCredentials }}
+---
+# The keys of the local object store, for the brokers' tiered storage.
+apiVersion: v1
+kind: Secret
+metadata:
+  name: tiered-storage-credentials
+  namespace: {{ $.Namespace }}
+  labels:
+{{- template "labels" $ }}
+stringData:
+  AWS_ACCESS_KEY_ID: {{ quote .AccessKeyID }}
+  AWS_SECRET_ACCESS_KEY: {{ quote .SecretAccessKey }}
+{{- end }}
 ---
 apiVersion: cert-manager.io/v1
 kind: Certificate
@@ -155,6 +169,11 @@ spec:
         kraftMetadata: shared
   template:
     pod:
+      volumes:
+        # The tiered storage plugin's cache of chunks fetched back from S3.
+        - name: tiered-storage-cache
+          emptyDir:
+            sizeLimit: 3Gi
       affinity:
 {{- if .Platform.DedicatedNodes }}
         nodeAffinity: {{ template "tenant-node-affinity" . }}
@@ -174,6 +193,19 @@ spec:
 {{- end }}
 {{- if .Platform.DedicatedNodes }}
       tolerations: {{ template "tenant-tolerations" . }}
+{{- end }}
+    kafkaContainer:
+      volumeMounts:
+        - name: tiered-storage-cache
+          mountPath: /mnt/tiered-storage-cache
+{{- if .Platform.TieredStorage.StaticCredentials }}
+      env:
+        - name: AWS_ACCESS_KEY_ID
+          valueFrom:
+            secretKeyRef: {name: tiered-storage-credentials, key: AWS_ACCESS_KEY_ID}
+        - name: AWS_SECRET_ACCESS_KEY
+          valueFrom:
+            secretKeyRef: {name: tiered-storage-credentials, key: AWS_SECRET_ACCESS_KEY}
 {{- end }}
 ---
 apiVersion: kafka.strimzi.io/v1
@@ -232,8 +264,32 @@ spec:
 {{- end }}
     authorization:
       type: simple
+    # Topic history goes to S3 through the Aiven plugin in the Kafka image
+    # (images/kafka). Topics opt in with remote.storage.enable=true.
+    tieredStorage:
+      type: custom
+      remoteStorageManager:
+        className: io.aiven.kafka.tieredstorage.RemoteStorageManager
+        classPath: /opt/kafka/plugins/tiered-storage/*
+        config:
+          storage.backend.class: io.aiven.kafka.tieredstorage.storage.s3.S3Storage
+          storage.s3.bucket.name: {{ quote .Platform.TieredStorage.Bucket }}
+          storage.s3.region: {{ quote .Platform.TieredStorage.Region }}
+{{- with .Platform.TieredStorage.Endpoint }}
+          storage.s3.endpoint.url: {{ quote . }}
+          storage.s3.path.style.access.enabled: "true"
+{{- end }}
+          key.prefix: {{ quote .TieredStoragePrefix }}
+          chunk.size: "4194304"
+          fetch.chunk.cache.class: io.aiven.kafka.tieredstorage.fetch.cache.DiskChunkCache
+          fetch.chunk.cache.path: /mnt/tiered-storage-cache
+          # 2 GiB, inside the cache volume's 3 GiB.
+          fetch.chunk.cache.size: "2147483648"
     config:
       auto.create.topics.enable: false
+      # Tiered topics keep a day on the brokers' disks; the rest is in S3.
+      log.local.retention.ms: 86400000
+      rlmm.config.remote.log.metadata.topic.replication.factor: {{ .Profile.ReplicationFactor }}
 {{- if gt .Profile.Zones 1 }}
       # Follower fetching: consumers that set client.rack read from a replica
       # in their own zone, avoiding cross-zone transfer.

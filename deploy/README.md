@@ -11,6 +11,8 @@ Kubernetes manifests that are not generated per customer.
     Kafka pod, for example when a node is replaced, into a rolling restart by
     the Strimzi operator.
   - `eks-storage/`: the encrypted gp3 StorageClass for EKS Auto Mode.
+  - `object-store/`: SeaweedFS, standing in for S3 on kind, where brokers
+    offload topic history.
 - `overlays/`: one per environment (`kind`, `eks-dev`, `eks-prod`), choosing
   the components and the environment's settings. Resources that need an
   operator's CRDs or webhooks, such as cert-manager issuers and Drain Cleaner,

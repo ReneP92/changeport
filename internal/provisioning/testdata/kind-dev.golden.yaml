@@ -6,6 +6,19 @@ metadata:
     app.kubernetes.io/managed-by: changeport-provisioner
     changeport.io/tenant: "acme"
 ---
+# The keys of the local object store, for the brokers' tiered storage.
+apiVersion: v1
+kind: Secret
+metadata:
+  name: tiered-storage-credentials
+  namespace: customer-acme
+  labels:
+    app.kubernetes.io/managed-by: changeport-provisioner
+    changeport.io/tenant: "acme"
+stringData:
+  AWS_ACCESS_KEY_ID: "changeport"
+  AWS_SECRET_ACCESS_KEY: "changeport-local-only"
+---
 apiVersion: cert-manager.io/v1
 kind: Certificate
 metadata:
@@ -60,12 +73,28 @@ spec:
         kraftMetadata: shared
   template:
     pod:
+      volumes:
+        # The tiered storage plugin's cache of chunks fetched back from S3.
+        - name: tiered-storage-cache
+          emptyDir:
+            sizeLimit: 3Gi
       affinity:
         # One broker per node.
         podAntiAffinity:
           requiredDuringSchedulingIgnoredDuringExecution:
             - topologyKey: kubernetes.io/hostname
               labelSelector: {matchLabels: {strimzi.io/cluster: "acme", strimzi.io/pool-name: dual-role}}
+    kafkaContainer:
+      volumeMounts:
+        - name: tiered-storage-cache
+          mountPath: /mnt/tiered-storage-cache
+      env:
+        - name: AWS_ACCESS_KEY_ID
+          valueFrom:
+            secretKeyRef: {name: tiered-storage-credentials, key: AWS_ACCESS_KEY_ID}
+        - name: AWS_SECRET_ACCESS_KEY
+          valueFrom:
+            secretKeyRef: {name: tiered-storage-credentials, key: AWS_SECRET_ACCESS_KEY}
 ---
 apiVersion: kafka.strimzi.io/v1
 kind: Kafka
@@ -109,8 +138,30 @@ spec:
             external-dns.alpha.kubernetes.io/hostname: "b{nodeId}.acme.kafka.changeport.test"
     authorization:
       type: simple
+    # Topic history goes to S3 through the Aiven plugin in the Kafka image
+    # (images/kafka). Topics opt in with remote.storage.enable=true.
+    tieredStorage:
+      type: custom
+      remoteStorageManager:
+        className: io.aiven.kafka.tieredstorage.RemoteStorageManager
+        classPath: /opt/kafka/plugins/tiered-storage/*
+        config:
+          storage.backend.class: io.aiven.kafka.tieredstorage.storage.s3.S3Storage
+          storage.s3.bucket.name: "changeport-tiered-storage"
+          storage.s3.region: "us-east-1"
+          storage.s3.endpoint.url: "http://seaweedfs.object-store.svc:8333"
+          storage.s3.path.style.access.enabled: "true"
+          key.prefix: "customer-acme/"
+          chunk.size: "4194304"
+          fetch.chunk.cache.class: io.aiven.kafka.tieredstorage.fetch.cache.DiskChunkCache
+          fetch.chunk.cache.path: /mnt/tiered-storage-cache
+          # 2 GiB, inside the cache volume's 3 GiB.
+          fetch.chunk.cache.size: "2147483648"
     config:
       auto.create.topics.enable: false
+      # Tiered topics keep a day on the brokers' disks; the rest is in S3.
+      log.local.retention.ms: 86400000
+      rlmm.config.remote.log.metadata.topic.replication.factor: 1
       default.replication.factor: 1
       min.insync.replicas: 1
       offsets.topic.replication.factor: 1

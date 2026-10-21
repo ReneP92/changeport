@@ -2,8 +2,10 @@
 # Proves the per-customer approach end to end on kind: the provisioning service
 # creates a second customer's namespace and Kafka cluster from the same template
 # as the demo cluster, both clusters pass the smoke test side by side, and the
-# second one is deprovisioned again. Then the failover test freezes a zone and
-# drains a broker of a three-zone customer under load. Set KEEP=1 to keep the
+# second one is deprovisioned again. Then the tiered storage test offloads a
+# topic of the demo customer to the object store and reads it back, and the
+# failover test freezes a zone and drains a broker of a three-zone customer
+# under load. Set KEEP=1 to keep the
 # customers. Run make dev-up first.
 # shellcheck source=lib.sh
 source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
@@ -40,5 +42,6 @@ if [[ ${KEEP:-0} != 1 ]]; then
   provisioner deprovision -customer "$customer" -wait -timeout 5m
 fi
 
+"$ROOT/hack/tiered-storage-test.sh" "$DEMO_CUSTOMER"
 "$ROOT/hack/failover-test.sh"
 log "End-to-end test passed"

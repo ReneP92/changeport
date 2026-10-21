@@ -67,6 +67,15 @@ func (s Spec) Namespace() string { return namespacePrefix + s.CustomerID }
 // ClusterName is the name of the Strimzi Kafka resource.
 func (s Spec) ClusterName() string { return s.CustomerID }
 
+// BrokerServiceAccount is the service account Strimzi runs the brokers under.
+func (s Spec) BrokerServiceAccount() string { return s.ClusterName() + "-kafka" }
+
+// TieredStoragePrefix is the customer's key prefix in the tiered storage
+// bucket. It is the namespace, which EKS Pod Identity passes to IAM as the
+// kubernetes-namespace session tag, so one IAM policy can limit every
+// customer's brokers to their own prefix.
+func (s Spec) TieredStoragePrefix() string { return s.Namespace() + "/" }
+
 // DedicatedNodePool names the customer's dedicated EKS Auto Mode NodePool and
 // NodeClass, both cluster-scoped.
 func (s Spec) DedicatedNodePool() string { return namespacePrefix + s.CustomerID }
@@ -242,10 +251,56 @@ type Platform struct {
 	CertificateIssuer string
 	// LoadBalancer configures the Services of the public listener.
 	LoadBalancer LoadBalancer
+	// TieredStorage is where brokers offload topic history.
+	TieredStorage TieredStorage
 	// DedicatedNodes, when set, gives every customer an EKS Auto Mode
 	// NodePool of their own: nodes tainted and labelled with the tenant, which
 	// only that customer's pods tolerate and select.
 	DedicatedNodes *DedicatedNodes
+}
+
+// TieredStorage configures Kafka tiered storage on S3: one bucket per
+// environment, with a key prefix per customer.
+type TieredStorage struct {
+	Bucket string
+	Region string
+	// Endpoint, when set, is an S3-compatible store to use instead of AWS
+	// S3, addressed with path-style URLs.
+	Endpoint string
+	// StaticCredentials are the keys of a local store; brokers on EKS get
+	// short-lived credentials from EKS Pod Identity instead.
+	StaticCredentials *StaticCredentials
+	// PodIdentity, when set, makes the provisioner associate each customer's
+	// broker service account with the broker IAM role.
+	PodIdentity *PodIdentity
+}
+
+// StaticCredentials are an access key pair.
+type StaticCredentials struct {
+	AccessKeyID     string
+	SecretAccessKey string
+}
+
+// PodIdentity names the EKS cluster and the IAM role that broker pods assume
+// through EKS Pod Identity. Terraform creates both (terraform/modules/eks,
+// terraform/modules/iam).
+type PodIdentity struct {
+	ClusterName string
+	RoleName    string
+}
+
+func (t TieredStorage) validate() error {
+	switch {
+	case t.Bucket == "" || t.Region == "":
+		return errors.New("tiered storage needs a bucket and a region")
+	case (t.StaticCredentials == nil) == (t.PodIdentity == nil):
+		return errors.New("tiered storage needs either static credentials or EKS Pod Identity")
+	case t.StaticCredentials != nil && (t.StaticCredentials.AccessKeyID == "" || t.StaticCredentials.SecretAccessKey == ""):
+		return errors.New("tiered storage static credentials need a key ID and a secret")
+	case t.PodIdentity != nil && (t.PodIdentity.ClusterName == "" || t.PodIdentity.RoleName == ""):
+		return errors.New("tiered storage Pod Identity needs a cluster name and a role name")
+	}
+	return nil
 }
 
 // DedicatedNodes configures the per-customer EKS Auto Mode NodeClass and
@@ -306,6 +361,9 @@ func (p Platform) validate() error {
 	if err := p.DedicatedNodes.validate(); err != nil {
 		return fmt.Errorf("platform %q: %w", p.Name, err)
 	}
+	if err := p.TieredStorage.validate(); err != nil {
+		return fmt.Errorf("platform %q: %w", p.Name, err)
+	}
 	return nil
 }
 
@@ -325,6 +383,17 @@ var KindPlatform = Platform{
 	// to the node it runs on, rather than through any node, so that a frozen
 	// node only affects its own broker.
 	LoadBalancer: LoadBalancer{ExternalTrafficPolicy: "Local"},
+	// SeaweedFS from deploy/base/object-store stands in for S3. Its keys only
+	// guard a throwaway store inside the local cluster.
+	TieredStorage: TieredStorage{
+		Bucket:   "changeport-tiered-storage",
+		Region:   "us-east-1",
+		Endpoint: "http://seaweedfs.object-store.svc:8333",
+		StaticCredentials: &StaticCredentials{
+			AccessKeyID:     "changeport",
+			SecretAccessKey: "changeport-local-only",
+		},
+	},
 }
 
 // eksLoadBalancer is an internet-facing EKS Auto Mode Network Load Balancer
@@ -352,6 +421,20 @@ func eksDedicatedNodes(environment string) *DedicatedNodes {
 	}
 }
 
+// eksTieredStorage offloads to the environment's bucket in us-east-1, with
+// credentials from EKS Pod Identity. Terraform creates the bucket and the
+// broker role (terraform/modules/s3, terraform/modules/iam).
+func eksTieredStorage(environment string) TieredStorage {
+	return TieredStorage{
+		Bucket: "changeport-" + environment + "-tiered-storage",
+		Region: "us-east-1",
+		PodIdentity: &PodIdentity{
+			ClusterName: "changeport-" + environment,
+			RoleName:    "changeport-" + environment + "-kafka-broker",
+		},
+	}
+}
+
 // EKSDevPlatform is the EKS cluster of the dev AWS account, with gp3 volumes
 // and nodes across three availability zones. Its Kafka domain is a reserved
 // .invalid placeholder until the domain is registered (#8).
@@ -362,6 +445,7 @@ var EKSDevPlatform = Platform{
 	KafkaDomain:       "kafka.dev.changeport.invalid",
 	CertificateIssuer: "letsencrypt-staging",
 	LoadBalancer:      eksLoadBalancer,
+	TieredStorage:     eksTieredStorage("dev"),
 	DedicatedNodes:    eksDedicatedNodes("dev"),
 }
 
@@ -375,6 +459,7 @@ var EKSProdPlatform = Platform{
 	KafkaDomain:       "kafka.changeport.invalid",
 	CertificateIssuer: "letsencrypt",
 	LoadBalancer:      eksLoadBalancer,
+	TieredStorage:     eksTieredStorage("prod"),
 	DedicatedNodes:    eksDedicatedNodes("prod"),
 }
 

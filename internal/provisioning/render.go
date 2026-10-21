@@ -56,6 +56,8 @@ type templateValues struct {
 	// for replacing a node before the old one goes.
 	DedicatedNodePool     string
 	DedicatedNodeCPULimit int
+
+	TieredStoragePrefix string
 }
 
 // RenderYAML renders the customer cluster template for spec.
@@ -87,6 +89,8 @@ func RenderYAML(spec Spec) ([]byte, error) {
 
 		DedicatedNodePool:     spec.DedicatedNodePool(),
 		DedicatedNodeCPULimit: (spec.Profile.Replicas + 1) * spec.Profile.NodeCPUs,
+
+		TieredStoragePrefix: spec.TieredStoragePrefix(),
 	})
 	if err != nil {
 		return nil, fmt.Errorf("render customer cluster template: %w", err)

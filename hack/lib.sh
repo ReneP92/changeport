@@ -31,6 +31,7 @@ CLOUD_PROVIDER_KIND_CONTAINER=changeport-cloud-provider-kind
 KIND_PRELOAD_IMAGES=(
   quay.io/strimzi/operator:1.3.0
   quay.io/strimzi/drain-cleaner:1.8.0
+  chrislusf/seaweedfs:4.48
   quay.io/jetstack/cert-manager-cainjector:v1.21.2
   quay.io/jetstack/cert-manager-controller:v1.21.2
   quay.io/jetstack/cert-manager-webhook:v1.21.2
@@ -105,6 +106,19 @@ fetch_upstream_files() {
     [[ -z "$sha" || "$sha" == \#* ]] && continue
     download_verified "$url" "$sha" "$ROOT/$path"
   done <"$ROOT/deploy/upstream-files.txt"
+}
+
+# Fails when Docker's disk is nearly full, and warns when it is getting there:
+# kind, its images and the local object store all live on it, and a full disk
+# shows up as obscure failures deep inside a test.
+check_docker_disk() {
+  local free_kb
+  free_kb=$(docker run --rm --entrypoint df "$KAFKA_IMAGE" -Pk / | awk 'NR == 2 { print $4 }')
+  if [[ $free_kb -lt $((2 * 1024 * 1024)) ]]; then
+    die "Docker's disk has only $((free_kb / 1024)) MiB free; free space (docker system df) or enlarge the disk in Docker Desktop"
+  elif [[ $free_kb -lt $((5 * 1024 * 1024)) ]]; then
+    log "Warning: Docker's disk has only $((free_kb / 1024)) MiB free"
+  fi
 }
 
 build_kafka_image() {

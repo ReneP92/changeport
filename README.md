@@ -115,11 +115,12 @@ three workers, one per zone like the three availability zones on EKS, with
 [cloud-provider-kind](https://github.com/kubernetes-sigs/cloud-provider-kind)
 for load balancers. It then installs the platform components from
 `deploy/overlays/kind` (Strimzi 1.3.0 watching all namespaces, cert-manager
-with a local CA, and Strimzi Drain Cleaner), provisions the `demo` customer
-(namespace `customer-demo`, a single-node KRaft cluster on Kafka 4.3.1) with
-the provisioning service, and runs the smoke test. It is safe to run again.
-If the cluster was created from an older `deploy/kind/cluster.yaml`, it says
-so; recreate it with `make dev-down dev-up`.
+with a local CA, Strimzi Drain Cleaner, and SeaweedFS as the S3 store for
+tiered storage), provisions the `demo` customer (namespace `customer-demo`, a
+single-node KRaft cluster on Kafka 4.3.1) with the provisioning service, and
+runs the smoke test. It is safe to run again. If the cluster was created from
+an older `deploy/kind/cluster.yaml`, it says so; recreate it with `make
+dev-down dev-up`.
 
 Customers connect the way they will on EKS: to public names such as
 `bootstrap.demo.kafka.changeport.test:9094`, over TLS with SCRAM, as their
@@ -143,7 +144,7 @@ prints the same `client.properties`.
 
 Provision more customers from the same template, or run the end-to-end check,
 which provisions a second customer, smoke tests both clusters and removes the
-second one again, then runs the failover test:
+second one again, then runs the tiered storage and failover tests:
 
 ```bash
 make provision CUSTOMER=acme
@@ -151,6 +152,14 @@ make provision CUSTOMER=acme
 
 ```bash
 make e2e
+```
+
+The tiered storage test offloads a topic with small segments to the local
+object store (SeaweedFS, standing in for S3), checks that the brokers delete
+their local copies, and reads every message back from offset 0:
+
+```bash
+make tiered-storage-test
 ```
 
 The failover test provisions a three-zone customer with the `dev-ha` profile
