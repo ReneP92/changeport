@@ -1,4 +1,10 @@
-# changeport
+<h1>
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/brand/changeport-logo-dark.svg">
+    <img alt="ChangePort" src="docs/brand/changeport-logo.svg" height="40">
+  </picture>
+</h1>
+
 The place where CDC is done correctly
 
 Changeport starts as a managed Kafka service on AWS with a dedicated cluster
