@@ -97,7 +97,8 @@ template by the provisioning service. Locally this runs on
 [kind](https://kind.sigs.k8s.io/) with the
 [Strimzi](https://strimzi.io/) operator, mirroring the EKS layout.
 
-Prerequisites: Docker (give it at least 6 GB of memory), Go 1.26 and make.
+Prerequisites: Docker (give it at least 8 GB of memory; the failover test
+peaks at about 5 GB), Go 1.26 and make.
 The scripts download a pinned, checksum-verified kubectl into `bin/` and the
 upstream install files pinned in `deploy/upstream-files.txt` (Strimzi,
 cert-manager) into `deploy/base/*/upstream/`, and build kind from
@@ -108,17 +109,17 @@ make dev-up
 ```
 
 This builds the Kafka broker image (`images/kafka`, Strimzi's image plus the
-Aiven tiered storage plugin; the first build takes about 10 minutes), creates
-the `changeport` kind cluster on Kubernetes 1.37 (a control
-plane and three workers, one per zone, like the three availability zones on
-EKS) with [cloud-provider-kind](https://github.com/kubernetes-sigs/cloud-provider-kind)
-for load balancers, installs the platform components from
-`deploy/overlays/kind` (Strimzi 1.3.0 watching all namespaces, and
-cert-manager with a local CA), provisions the `demo` customer (namespace
-`customer-demo`, a single-node KRaft cluster on Kafka 4.3.1) with the
-provisioning service, and runs the smoke test. It is safe to run again. If
-the cluster was created from an older `deploy/kind/cluster.yaml`, it says so;
-recreate it with `make dev-down dev-up`.
+Aiven tiered storage plugin; the first build takes about 10 minutes) and
+creates the `changeport` kind cluster on Kubernetes 1.37: a control plane and
+three workers, one per zone like the three availability zones on EKS, with
+[cloud-provider-kind](https://github.com/kubernetes-sigs/cloud-provider-kind)
+for load balancers. It then installs the platform components from
+`deploy/overlays/kind` (Strimzi 1.3.0 watching all namespaces, cert-manager
+with a local CA, and Strimzi Drain Cleaner), provisions the `demo` customer
+(namespace `customer-demo`, a single-node KRaft cluster on Kafka 4.3.1) with
+the provisioning service, and runs the smoke test. It is safe to run again.
+If the cluster was created from an older `deploy/kind/cluster.yaml`, it says
+so; recreate it with `make dev-down dev-up`.
 
 Customers connect the way they will on EKS: to public names such as
 `bootstrap.demo.kafka.changeport.test:9094`, over TLS with SCRAM, as their
@@ -142,7 +143,7 @@ prints the same `client.properties`.
 
 Provision more customers from the same template, or run the end-to-end check,
 which provisions a second customer, smoke tests both clusters and removes the
-second one again:
+second one again, then runs the failover test:
 
 ```bash
 make provision CUSTOMER=acme
@@ -150,6 +151,18 @@ make provision CUSTOMER=acme
 
 ```bash
 make e2e
+```
+
+The failover test provisions a three-zone customer with the `dev-ha` profile
+(three small brokers, replication factor 3, as durable as production) and
+runs an idempotent producer and a consumer throughout two disruptions: one
+zone's worker freezes for a minute, and a broker is evicted, which Strimzi
+Drain Cleaner turns into a rolling restart by the Strimzi operator. Every
+message must arrive exactly once, and the cluster must recover with all
+partitions in sync:
+
+```bash
+make failover-test
 ```
 
 Other targets:
@@ -174,8 +187,9 @@ bin/kubectl-v1.37.1 --context kind-changeport get kafka -A
 ```
 
 To see what the template produces for a customer without a cluster, pick a
-size profile (`dev` or `production`) and a platform (`kind`, `eks-dev` or
-`eks-prod`):
+size profile (`dev`, `dev-ha` or `production`) and a platform (`kind`,
+`eks-dev` or `eks-prod`). On EKS, each customer also gets a NodePool and
+NodeClass of their own, so their brokers run on dedicated nodes:
 
 ```bash
 go run ./cmd/provisioner render -customer acme -profile production -platform eks-prod

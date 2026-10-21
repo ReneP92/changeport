@@ -71,6 +71,19 @@ func (k *KubeCluster) Delete(ctx context.Context, gvk schema.GroupVersionKind, n
 	return err
 }
 
+// List implements Cluster.
+func (k *KubeCluster) List(ctx context.Context, gvk schema.GroupVersionKind, namespace, labelSelector string) ([]unstructured.Unstructured, error) {
+	resource, err := k.resource(gvk, namespace)
+	if err != nil {
+		return nil, err
+	}
+	list, err := resource.List(ctx, metav1.ListOptions{LabelSelector: labelSelector})
+	if err != nil {
+		return nil, err
+	}
+	return list.Items, nil
+}
+
 func (k *KubeCluster) resource(gvk schema.GroupVersionKind, namespace string) (dynamic.ResourceInterface, error) {
 	mapping, err := k.mapper.RESTMapping(gvk.GroupKind(), gvk.Version)
 	if meta.IsNoMatchError(err) {

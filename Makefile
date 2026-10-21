@@ -73,6 +73,10 @@ kafka-client: CUSTOMER ?= demo
 kafka-client: ## Open a shell with Kafka tools connected to CUSTOMER's public listener (default demo)
 	hack/kafka-client.sh $(CUSTOMER)
 
+.PHONY: failover-test
+failover-test: ## Freeze a zone and drain a broker of a three-zone customer under load; no message may be lost
+	hack/failover-test.sh
+
 .PHONY: provision
 provision: ## Provision CUSTOMER's Kafka cluster on kind (default acme, PROFILE=dev)
 	go run ./cmd/provisioner provision -context $(KUBE_CONTEXT) -customer $(CUSTOMER) -profile $(PROFILE) -wait

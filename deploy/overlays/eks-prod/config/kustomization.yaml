@@ -1,0 +1,6 @@
+# Resources that need the operators' CRDs and webhooks, applied by
+# hack/platform-apply.sh after the operators are ready.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - ../../../base/drain-cleaner

@@ -30,6 +30,7 @@ CLOUD_PROVIDER_KIND_CONTAINER=changeport-cloud-provider-kind
 # timeouts. make e2e fails if a pod runs an image missing here.
 KIND_PRELOAD_IMAGES=(
   quay.io/strimzi/operator:1.3.0
+  quay.io/strimzi/drain-cleaner:1.8.0
   quay.io/jetstack/cert-manager-cainjector:v1.21.2
   quay.io/jetstack/cert-manager-controller:v1.21.2
   quay.io/jetstack/cert-manager-webhook:v1.21.2

@@ -67,6 +67,10 @@ func (s Spec) Namespace() string { return namespacePrefix + s.CustomerID }
 // ClusterName is the name of the Strimzi Kafka resource.
 func (s Spec) ClusterName() string { return s.CustomerID }
 
+// DedicatedNodePool names the customer's dedicated EKS Auto Mode NodePool and
+// NodeClass, both cluster-scoped.
+func (s Spec) DedicatedNodePool() string { return namespacePrefix + s.CustomerID }
+
 // Domain is the DNS zone of the customer's public names, under the platform's
 // Kafka domain, such as acme.kafka.changeport.test.
 func (s Spec) Domain() string { return s.CustomerID + "." + s.Platform.KafkaDomain }
@@ -125,6 +129,9 @@ type Profile struct {
 	// Zones is the number of availability zones the brokers spread across.
 	// Above 1, the template enables rack-aware replica placement.
 	Zones int
+	// NodeCPUs is the vCPU count of each dedicated node, on platforms with
+	// dedicated nodes: one broker per node.
+	NodeCPUs int
 }
 
 func (p Profile) validate() error {
@@ -143,6 +150,9 @@ func (p Profile) validate() error {
 		return fmt.Errorf("profile %q: storage size is required", p.Name)
 	case p.Zones < 1 || p.Zones > p.Replicas:
 		return fmt.Errorf("profile %q: zones must be between 1 and the replica count %d", p.Name, p.Replicas)
+	case p.NodeCPUs < 2:
+		// EKS Auto Mode only runs instances with more than one vCPU.
+		return fmt.Errorf("profile %q: dedicated nodes need at least 2 vCPUs", p.Name)
 	}
 	return nil
 }
@@ -158,24 +168,44 @@ var DevProfile = Profile{
 	Memory:            "1Gi",
 	StorageSize:       "5Gi",
 	Zones:             1,
+	NodeCPUs:          2,
+}
+
+// DevHAProfile is a three-broker cluster across three zones, as durable as
+// production but small enough for kind, to test failover locally.
+var DevHAProfile = Profile{
+	Name:              "dev-ha",
+	Replicas:          3,
+	ReplicationFactor: 3,
+	MinInsyncReplicas: 2,
+	CPURequest:        "250m",
+	Memory:            "1Gi",
+	StorageSize:       "5Gi",
+	Zones:             3,
+	NodeCPUs:          2,
 }
 
 // ProductionProfile follows the durability decisions in docs/PROJECT_PLAN.md:
-// three zones, replication factor 3, min.insync.replicas 2.
+// three zones, replication factor 3, min.insync.replicas 2. It is sized for
+// the design partner's volume (peak under 1 MB/s, under 50 GB a day) on
+// dedicated 2-vCPU, 8 GiB nodes (m7g.large), leaving room on each node for
+// the entity operator and the Kafka agent next to the broker.
 var ProductionProfile = Profile{
 	Name:              "production",
 	Replicas:          3,
 	ReplicationFactor: 3,
 	MinInsyncReplicas: 2,
-	CPURequest:        "1",
-	Memory:            "4Gi",
+	CPURequest:        "1500m",
+	Memory:            "5Gi",
 	StorageSize:       "100Gi",
 	Zones:             3,
+	NodeCPUs:          2,
 }
 
 // Profiles lists the known profiles by name.
 var Profiles = map[string]Profile{
 	DevProfile.Name:        DevProfile,
+	DevHAProfile.Name:      DevHAProfile,
 	ProductionProfile.Name: ProductionProfile,
 }
 
@@ -212,6 +242,40 @@ type Platform struct {
 	CertificateIssuer string
 	// LoadBalancer configures the Services of the public listener.
 	LoadBalancer LoadBalancer
+	// DedicatedNodes, when set, gives every customer an EKS Auto Mode
+	// NodePool of their own: nodes tainted and labelled with the tenant, which
+	// only that customer's pods tolerate and select.
+	DedicatedNodes *DedicatedNodes
+}
+
+// DedicatedNodes configures the per-customer EKS Auto Mode NodeClass and
+// NodePool. The node role and the tags must match what Terraform creates in
+// the environment (terraform/modules/eks, terraform/modules/vpc).
+type DedicatedNodes struct {
+	// NodeRole is the IAM role of the nodes, with an EC2 access entry.
+	NodeRole string
+	// SubnetTags select the private subnets nodes run in, one per zone.
+	SubnetTags map[string]string
+	// SecurityGroupTags select the nodes' security groups.
+	SecurityGroupTags map[string]string
+	// InstanceFamilies are the EC2 instance families nodes may use.
+	InstanceFamilies []string
+}
+
+func (d *DedicatedNodes) validate() error {
+	switch {
+	case d == nil:
+		return nil
+	case d.NodeRole == "":
+		return errors.New("dedicated nodes need a node role")
+	case len(d.SubnetTags) == 0:
+		return errors.New("dedicated nodes need subnet tags")
+	case len(d.SecurityGroupTags) == 0:
+		return errors.New("dedicated nodes need security group tags")
+	case len(d.InstanceFamilies) == 0:
+		return errors.New("dedicated nodes need instance families")
+	}
+	return nil
 }
 
 // LoadBalancer configures the LoadBalancer Services of a platform's public
@@ -221,6 +285,8 @@ type LoadBalancer struct {
 	Class string
 	// Annotations configure the load balancers, such as their scheme.
 	Annotations map[string]string
+	// ExternalTrafficPolicy, when set, is the Services' externalTrafficPolicy.
+	ExternalTrafficPolicy string
 }
 
 func (p Platform) validate() error {
@@ -237,6 +303,9 @@ func (p Platform) validate() error {
 	if errs := validation.IsDNS1123Subdomain(p.KafkaDomain); len(errs) > 0 {
 		return fmt.Errorf("platform %q: Kafka domain %q: %s", p.Name, p.KafkaDomain, strings.Join(errs, "; "))
 	}
+	if err := p.DedicatedNodes.validate(); err != nil {
+		return fmt.Errorf("platform %q: %w", p.Name, err)
+	}
 	return nil
 }
 
@@ -252,6 +321,10 @@ var KindPlatform = Platform{
 	KafkaImage:        "changeport/kafka:local",
 	KafkaDomain:       "kafka.changeport.test",
 	CertificateIssuer: "local-ca",
+	// Like EKS load balancers with IP targets, send each broker's traffic only
+	// to the node it runs on, rather than through any node, so that a frozen
+	// node only affects its own broker.
+	LoadBalancer: LoadBalancer{ExternalTrafficPolicy: "Local"},
 }
 
 // eksLoadBalancer is an internet-facing EKS Auto Mode Network Load Balancer
@@ -267,6 +340,18 @@ var eksLoadBalancer = LoadBalancer{
 	},
 }
 
+// eksDedicatedNodes runs customers on on-demand Graviton nodes in the
+// environment's private subnets. Terraform tags those subnets and the
+// cluster security group with changeport.io/customer-nodes=true.
+func eksDedicatedNodes(environment string) *DedicatedNodes {
+	return &DedicatedNodes{
+		NodeRole:          "changeport-" + environment + "-customer-node",
+		SubnetTags:        map[string]string{"changeport.io/customer-nodes": "true"},
+		SecurityGroupTags: map[string]string{"changeport.io/customer-nodes": "true"},
+		InstanceFamilies:  []string{"m7g", "m8g"},
+	}
+}
+
 // EKSDevPlatform is the EKS cluster of the dev AWS account, with gp3 volumes
 // and nodes across three availability zones. Its Kafka domain is a reserved
 // .invalid placeholder until the domain is registered (#8).
@@ -277,6 +362,7 @@ var EKSDevPlatform = Platform{
 	KafkaDomain:       "kafka.dev.changeport.invalid",
 	CertificateIssuer: "letsencrypt-staging",
 	LoadBalancer:      eksLoadBalancer,
+	DedicatedNodes:    eksDedicatedNodes("dev"),
 }
 
 // EKSProdPlatform is the EKS cluster of the prod AWS account, where customers
@@ -289,6 +375,7 @@ var EKSProdPlatform = Platform{
 	KafkaDomain:       "kafka.changeport.invalid",
 	CertificateIssuer: "letsencrypt",
 	LoadBalancer:      eksLoadBalancer,
+	DedicatedNodes:    eksDedicatedNodes("prod"),
 }
 
 // Platforms lists the known platforms by name.

@@ -4,7 +4,82 @@ metadata:
   name: customer-acme
   labels:
     app.kubernetes.io/managed-by: changeport-provisioner
-    changeport.io/tenant: acme
+    changeport.io/tenant: "acme"
+---
+# The customer's own nodes: EKS Auto Mode launches them for this NodePool
+# only, labelled and tainted with the tenant so that no other pods run there.
+apiVersion: eks.amazonaws.com/v1
+kind: NodeClass
+metadata:
+  name: customer-acme
+  labels:
+    app.kubernetes.io/managed-by: changeport-provisioner
+    changeport.io/tenant: "acme"
+spec:
+  role: changeport-prod-customer-node
+  subnetSelectorTerms:
+    - tags:
+        changeport.io/customer-nodes: "true"
+  securityGroupSelectorTerms:
+    - tags:
+        changeport.io/customer-nodes: "true"
+  # Shows each customer's nodes in cost allocation.
+  tags:
+    changeport.io/tenant: "acme"
+---
+apiVersion: karpenter.sh/v1
+kind: NodePool
+metadata:
+  name: customer-acme
+  labels:
+    app.kubernetes.io/managed-by: changeport-provisioner
+    changeport.io/tenant: "acme"
+spec:
+  template:
+    metadata:
+      labels:
+        changeport.io/tenant: "acme"
+    spec:
+      nodeClassRef:
+        group: eks.amazonaws.com
+        kind: NodeClass
+        name: customer-acme
+      taints:
+        - key: changeport.io/tenant
+          value: "acme"
+          effect: NoSchedule
+      requirements:
+        - key: kubernetes.io/arch
+          operator: In
+          values: [arm64]
+        - key: karpenter.sh/capacity-type
+          operator: In
+          values: [on-demand]
+        - key: eks.amazonaws.com/instance-family
+          operator: In
+          values: [m7g, m8g]
+        - key: eks.amazonaws.com/instance-cpu
+          operator: In
+          values: ["2"]
+      # The longest node lifetime EKS Auto Mode allows. Expiry ignores the
+      # disruption budgets; Strimzi Drain Cleaner turns the eviction of a
+      # broker into a rolling restart by the Strimzi operator instead.
+      expireAfter: 504h
+      terminationGracePeriod: 24h
+  disruption:
+    consolidationPolicy: WhenEmpty
+    consolidateAfter: 5m
+    budgets:
+      # One node at a time.
+      - nodes: "1"
+      # Drifted nodes, mostly after new Auto Mode AMIs (about weekly), are
+      # replaced only between 06:00 and 10:00 UTC, at night in us-east-1.
+      - nodes: "0"
+        reasons: [Drifted]
+        schedule: "0 10 * * *"
+        duration: 20h
+  limits:
+    cpu: "4"
 ---
 apiVersion: cert-manager.io/v1
 kind: Certificate
@@ -13,7 +88,7 @@ metadata:
   namespace: customer-acme
   labels:
     app.kubernetes.io/managed-by: changeport-provisioner
-    changeport.io/tenant: acme
+    changeport.io/tenant: "acme"
 spec:
   # One wildcard name covers the bootstrap name and every broker's name.
   dnsNames:
@@ -35,9 +110,9 @@ metadata:
   name: dual-role
   namespace: customer-acme
   labels:
-    strimzi.io/cluster: acme
+    strimzi.io/cluster: "acme"
     app.kubernetes.io/managed-by: changeport-provisioner
-    changeport.io/tenant: acme
+    changeport.io/tenant: "acme"
 spec:
   replicas: 1
   roles:
@@ -58,15 +133,25 @@ spec:
         class: "gp3"
         deleteClaim: false
         kraftMetadata: shared
+  template:
+    pod:
+      affinity:
+        nodeAffinity: {requiredDuringSchedulingIgnoredDuringExecution: {nodeSelectorTerms: [{matchExpressions: [{key: changeport.io/tenant, operator: In, values: ["acme"]}]}]}}
+        # One broker per node.
+        podAntiAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            - topologyKey: kubernetes.io/hostname
+              labelSelector: {matchLabels: {strimzi.io/cluster: "acme", strimzi.io/pool-name: dual-role}}
+      tolerations: [{key: changeport.io/tenant, operator: Equal, value: "acme", effect: NoSchedule}]
 ---
 apiVersion: kafka.strimzi.io/v1
 kind: Kafka
 metadata:
-  name: acme
+  name: "acme"
   namespace: customer-acme
   labels:
     app.kubernetes.io/managed-by: changeport-provisioner
-    changeport.io/tenant: acme
+    changeport.io/tenant: "acme"
 spec:
   kafka:
     version: 4.3.1
@@ -114,6 +199,11 @@ spec:
       transaction.state.log.replication.factor: 1
       transaction.state.log.min.isr: 1
   entityOperator:
+    template:
+      pod:
+        affinity:
+          nodeAffinity: {requiredDuringSchedulingIgnoredDuringExecution: {nodeSelectorTerms: [{matchExpressions: [{key: changeport.io/tenant, operator: In, values: ["acme"]}]}]}}
+        tolerations: [{key: changeport.io/tenant, operator: Equal, value: "acme", effect: NoSchedule}]
     topicOperator: {}
     userOperator: {}
 ---
@@ -125,9 +215,9 @@ metadata:
   name: admin
   namespace: customer-acme
   labels:
-    strimzi.io/cluster: acme
+    strimzi.io/cluster: "acme"
     app.kubernetes.io/managed-by: changeport-provisioner
-    changeport.io/tenant: acme
+    changeport.io/tenant: "acme"
 spec:
   authentication:
     type: scram-sha-512
@@ -161,9 +251,9 @@ metadata:
   name: changeport-agent
   namespace: customer-acme
   labels:
-    strimzi.io/cluster: acme
+    strimzi.io/cluster: "acme"
     app.kubernetes.io/managed-by: changeport-provisioner
-    changeport.io/tenant: acme
+    changeport.io/tenant: "acme"
 spec:
   authentication:
     type: tls

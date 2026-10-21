@@ -2,8 +2,6 @@
 # hack/platform-apply.sh after the operators are ready.
 apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
-labels:
-  - pairs:
-      changeport.io/platform: config
 resources:
   - local-ca.yaml
+  - ../../../base/drain-cleaner

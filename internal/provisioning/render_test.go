@@ -129,7 +129,7 @@ func TestRenderPublicListener(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	certificate, kafka := objects[1], objects[3]
+	certificate, kafka := objectOfKind(t, objects, "Certificate"), objectOfKind(t, objects, "Kafka")
 	dnsNames, _, _ := unstructured.NestedStringSlice(certificate.Object, "spec", "dnsNames")
 	if len(dnsNames) != 1 || dnsNames[0] != "*.acme.kafka.changeport.invalid" {
 		t.Errorf("certificate covers %q, want the customer's wildcard name", dnsNames)
@@ -179,5 +179,114 @@ func TestRenderRejectsInvalidSpecs(t *testing.T) {
 		if _, err := Render(spec); err == nil {
 			t.Errorf("Render(%+v) = nil error, want an error", spec)
 		}
+	}
+}
+
+// TestRenderKeepsCustomerIDsStrings renders customer IDs that YAML would
+// otherwise read as booleans, nulls or numbers.
+func TestRenderKeepsCustomerIDsStrings(t *testing.T) {
+	for _, id := range []string{"true", "false", "yes", "no", "on", "off", "y", "n", "null", "nan", "inf", "e3"} {
+		for _, platform := range Platforms {
+			objects, err := Render(Spec{CustomerID: id, Profile: DevProfile, Platform: platform})
+			if err != nil {
+				t.Fatalf("Render(%s on %s): %v", id, platform.Name, err)
+			}
+			for _, obj := range objects {
+				if got := obj.GetLabels()[TenantLabel]; got != id {
+					t.Errorf("%s on %s: %s has tenant label %q", id, platform.Name, obj.GetKind(), got)
+				}
+				name, _, err := unstructured.NestedFieldNoCopy(obj.Object, "metadata", "name")
+				if s, ok := name.(string); err != nil || !ok || s == "" {
+					t.Errorf("%s on %s: %s has name %#v", id, platform.Name, obj.GetKind(), name)
+				}
+			}
+		}
+	}
+}
+
+// objectOfKind returns the one rendered object of kind.
+func objectOfKind(t *testing.T, objects []*unstructured.Unstructured, kind string) *unstructured.Unstructured {
+	t.Helper()
+	var found *unstructured.Unstructured
+	for _, obj := range objects {
+		if obj.GetKind() == kind {
+			if found != nil {
+				t.Fatalf("more than one %s", kind)
+			}
+			found = obj
+		}
+	}
+	if found == nil {
+		t.Fatalf("no %s", kind)
+	}
+	return found
+}
+
+// TestRenderDedicatedNodes checks that on EKS each customer's pods run on
+// nodes of their own, and that kind renders none of it.
+func TestRenderDedicatedNodes(t *testing.T) {
+	spec := Spec{CustomerID: "acme", Profile: ProductionProfile, Platform: EKSProdPlatform}
+	objects, err := Render(spec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	nodeClass, nodePool := objectOfKind(t, objects, "NodeClass"), objectOfKind(t, objects, "NodePool")
+	if role, _, _ := unstructured.NestedString(nodeClass.Object, "spec", "role"); role != "changeport-prod-customer-node" {
+		t.Errorf("NodeClass role = %q", role)
+	}
+	if tag, _, _ := unstructured.NestedString(nodeClass.Object, "spec", "tags", TenantLabel); tag != "acme" {
+		t.Errorf("NodeClass tags its nodes with tenant %q, want acme", tag)
+	}
+	if label, _, _ := unstructured.NestedString(nodePool.Object, "spec", "template", "metadata", "labels", TenantLabel); label != "acme" {
+		t.Errorf("NodePool labels its nodes with tenant %q, want acme", label)
+	}
+	taints, _, _ := unstructured.NestedSlice(nodePool.Object, "spec", "template", "spec", "taints")
+	if len(taints) != 1 || taints[0].(map[string]any)["value"] != "acme" || taints[0].(map[string]any)["effect"] != "NoSchedule" {
+		t.Errorf("NodePool taints = %v, want the tenant's NoSchedule taint", taints)
+	}
+	if expire, _, _ := unstructured.NestedString(nodePool.Object, "spec", "template", "spec", "expireAfter"); expire != "504h" {
+		t.Errorf("NodePool expireAfter = %q, want the 21-day maximum", expire)
+	}
+	if limit, _, _ := unstructured.NestedString(nodePool.Object, "spec", "limits", "cpu"); limit != "8" {
+		t.Errorf("NodePool CPU limit = %q, want 8: three 2-vCPU brokers plus one replacement node", limit)
+	}
+
+	for _, path := range [][]string{
+		{"spec", "template", "pod"},                   // KafkaNodePool
+		{"spec", "entityOperator", "template", "pod"}, // Kafka
+	} {
+		obj := objectOfKind(t, objects, "KafkaNodePool")
+		if path[1] == "entityOperator" {
+			obj = objectOfKind(t, objects, "Kafka")
+		}
+		pod, _, _ := unstructured.NestedMap(obj.Object, path...)
+		tolerations, _, _ := unstructured.NestedSlice(pod, "tolerations")
+		if len(tolerations) != 1 || tolerations[0].(map[string]any)["value"] != "acme" {
+			t.Errorf("%s %v tolerations = %v, want the tenant's taint", obj.GetKind(), path, tolerations)
+		}
+		terms, _, _ := unstructured.NestedSlice(pod, "affinity", "nodeAffinity", "requiredDuringSchedulingIgnoredDuringExecution", "nodeSelectorTerms")
+		if len(terms) != 1 {
+			t.Errorf("%s %v requires no tenant nodes: %v", obj.GetKind(), path, terms)
+		}
+	}
+
+	kindObjects, err := Render(Spec{CustomerID: "acme", Profile: DevHAProfile, Platform: KindPlatform})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, obj := range kindObjects {
+		if obj.GetKind() == "NodeClass" || obj.GetKind() == "NodePool" {
+			t.Errorf("kind renders a %s", obj.GetKind())
+		}
+	}
+	pod, _, _ := unstructured.NestedMap(objectOfKind(t, kindObjects, "KafkaNodePool").Object, "spec", "template", "pod")
+	if _, found, _ := unstructured.NestedSlice(pod, "tolerations"); found {
+		t.Error("kind brokers tolerate a tenant taint")
+	}
+	if _, found, _ := unstructured.NestedFieldNoCopy(pod, "affinity", "podAntiAffinity"); !found {
+		t.Error("kind brokers may share a node")
+	}
+	if spread, _, _ := unstructured.NestedSlice(pod, "topologySpreadConstraints"); len(spread) != 1 {
+		t.Errorf("kind dev-ha brokers spread = %v, want one zone constraint", spread)
 	}
 }
