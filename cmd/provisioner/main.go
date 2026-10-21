@@ -81,20 +81,43 @@ func (c *commonFlags) register(fs *flag.FlagSet) {
 	fs.DurationVar(&c.timeout, "timeout", 10*time.Minute, "how long -wait waits")
 }
 
+// clusterFlags select the profile and platform of a customer's cluster.
+type clusterFlags struct {
+	profile  string
+	platform string
+}
+
+func (c *clusterFlags) register(fs *flag.FlagSet) {
+	fs.StringVar(&c.profile, "profile", provisioning.DevProfile.Name, "cluster size profile: dev or production")
+	fs.StringVar(&c.platform, "platform", provisioning.KindPlatform.Name, "where the cluster runs: kind, eks-dev or eks-prod")
+}
+
+func (c *clusterFlags) spec(customer string) (provisioning.Spec, error) {
+	profile, err := provisioning.ProfileByName(c.profile)
+	if err != nil {
+		return provisioning.Spec{}, err
+	}
+	platform, err := provisioning.PlatformByName(c.platform)
+	if err != nil {
+		return provisioning.Spec{}, err
+	}
+	return provisioning.Spec{CustomerID: customer, Profile: profile, Platform: platform}, nil
+}
+
 func runProvision(ctx context.Context, args []string, logger *slog.Logger, stderr io.Writer) error {
 	fs := flag.NewFlagSet("provision", flag.ContinueOnError)
 	fs.SetOutput(stderr)
 	var common commonFlags
 	common.register(fs)
-	profileName := fs.String("profile", provisioning.DevProfile.Name, "cluster size profile: dev or production")
+	var cluster clusterFlags
+	cluster.register(fs)
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
-	profile, err := provisioning.ProfileByName(*profileName)
+	spec, err := cluster.spec(common.customer)
 	if err != nil {
 		return err
 	}
-	spec := provisioning.Spec{CustomerID: common.customer, Profile: profile}
 	if err := spec.Validate(); err != nil {
 		return err
 	}
@@ -143,15 +166,16 @@ func runRender(args []string, stdout, stderr io.Writer) error {
 	fs := flag.NewFlagSet("render", flag.ContinueOnError)
 	fs.SetOutput(stderr)
 	customer := fs.String("customer", "", "customer ID, for example acme (required)")
-	profileName := fs.String("profile", provisioning.DevProfile.Name, "cluster size profile: dev or production")
+	var cluster clusterFlags
+	cluster.register(fs)
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
-	profile, err := provisioning.ProfileByName(*profileName)
+	spec, err := cluster.spec(*customer)
 	if err != nil {
 		return err
 	}
-	rendered, err := provisioning.RenderYAML(provisioning.Spec{CustomerID: *customer, Profile: profile})
+	rendered, err := provisioning.RenderYAML(spec)
 	if err != nil {
 		return err
 	}

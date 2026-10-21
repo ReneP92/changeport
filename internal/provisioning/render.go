@@ -29,7 +29,9 @@ type templateValues struct {
 	ManagedBy       string
 	KafkaVersion    string
 	MetadataVersion string
+	ZoneTopologyKey string
 	Profile         Profile
+	Platform        Platform
 }
 
 // RenderYAML renders the customer cluster template for spec.
@@ -46,7 +48,9 @@ func RenderYAML(spec Spec) ([]byte, error) {
 		ManagedBy:       ManagedBy,
 		KafkaVersion:    KafkaVersion,
 		MetadataVersion: MetadataVersion,
+		ZoneTopologyKey: zoneTopologyKey,
 		Profile:         spec.Profile,
+		Platform:        spec.Platform,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("render customer cluster template: %w", err)

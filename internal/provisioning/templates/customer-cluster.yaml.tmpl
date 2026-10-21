@@ -1,6 +1,7 @@
 {{- /*
 The one template every customer's Kafka cluster is generated from, rendered
-by internal/provisioning from a validated Spec and a Profile.
+by internal/provisioning from a validated Spec: its Profile sizes the cluster
+and its Platform says where it runs.
 */ -}}
 {{- define "labels" }}
     app.kubernetes.io/managed-by: {{ .ManagedBy }}
@@ -37,8 +38,8 @@ spec:
     volumes:
       - id: 0
         type: persistent-claim
-        size: "{{ .Profile.Storage.Size }}"
-        class: "{{ .Profile.Storage.Class }}"
+        size: "{{ .Profile.StorageSize }}"
+        class: "{{ .Platform.StorageClass }}"
         deleteClaim: false
         kraftMetadata: shared
 ---
@@ -53,9 +54,9 @@ spec:
   kafka:
     version: {{ .KafkaVersion }}
     metadataVersion: {{ .MetadataVersion }}
-{{- if .Profile.RackTopologyKey }}
+{{- if gt .Profile.Zones 1 }}
     rack:
-      topologyKey: {{ .Profile.RackTopologyKey }}
+      topologyKey: {{ .ZoneTopologyKey }}
 {{- end }}
     listeners:
       - name: plain

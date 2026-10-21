@@ -10,11 +10,11 @@ import (
 
 func TestRenderCommandPrintsCustomerResources(t *testing.T) {
 	var stdout, stderr bytes.Buffer
-	err := run(t.Context(), []string{"render", "-customer", "acme", "-profile", "production"}, &stdout, &stderr)
+	err := run(t.Context(), []string{"render", "-customer", "acme", "-profile", "production", "-platform", "eks-prod"}, &stdout, &stderr)
 	if err != nil {
 		t.Fatalf("run() = %v, stderr: %s", err, stderr.String())
 	}
-	for _, want := range []string{"name: customer-acme", "kind: Kafka\n", "class: \"gp3\""} {
+	for _, want := range []string{"name: customer-acme", "kind: Kafka\n", "class: \"gp3\"", "replicas: 3"} {
 		if !strings.Contains(stdout.String(), want) {
 			t.Errorf("output does not contain %q:\n%s", want, stdout.String())
 		}
@@ -31,6 +31,8 @@ func TestCommandErrors(t *testing.T) {
 		{"invalid customer", []string{"render", "-customer", "Acme"}, `customer ID "Acme"`},
 		{"missing customer", []string{"provision"}, `customer ID ""`},
 		{"unknown profile", []string{"provision", "-customer", "acme", "-profile", "huge"}, `unknown profile "huge"`},
+		{"unknown platform", []string{"render", "-customer", "acme", "-platform", "gke"}, `unknown platform "gke"`},
+		{"profile needs more zones", []string{"render", "-customer", "acme", "-profile", "production"}, `platform "kind" has 1`},
 		{"deprovision invalid customer", []string{"deprovision", "-customer", "a_b"}, `customer ID "a_b"`},
 	}
 	for _, tt := range tests {

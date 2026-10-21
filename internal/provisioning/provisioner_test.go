@@ -71,7 +71,7 @@ func testProvisioner(cluster Cluster) *Provisioner {
 	return p
 }
 
-var acme = Spec{CustomerID: "acme", Profile: DevProfile}
+var acme = Spec{CustomerID: "acme", Profile: DevProfile, Platform: KindPlatform}
 
 func TestProvisionAppliesTemplateInOrder(t *testing.T) {
 	cluster := newFakeCluster()
@@ -112,7 +112,7 @@ func TestProvisionReportsApplyErrors(t *testing.T) {
 
 func TestProvisionRejectsInvalidSpec(t *testing.T) {
 	cluster := newFakeCluster()
-	if err := testProvisioner(cluster).Provision(t.Context(), Spec{CustomerID: "BAD", Profile: DevProfile}); err == nil {
+	if err := testProvisioner(cluster).Provision(t.Context(), Spec{CustomerID: "BAD", Profile: DevProfile, Platform: KindPlatform}); err == nil {
 		t.Fatal("Provision() = nil, want a validation error")
 	}
 	if len(cluster.applied) != 0 {

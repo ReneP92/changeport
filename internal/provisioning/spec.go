@@ -24,6 +24,8 @@ const (
 
 	namespacePrefix = "customer-"
 	nodePoolName    = "dual-role"
+	// zoneTopologyKey is the well-known node label holding the availability zone.
+	zoneTopologyKey = "topology.kubernetes.io/zone"
 	// maxCustomerIDLength keeps derived Strimzi names such as
 	// "<id>-entity-operator" and "<id>-dual-role-<n>" well inside the
 	// 63-character Kubernetes name limit.
@@ -40,6 +42,8 @@ type Spec struct {
 	CustomerID string
 	// Profile sizes the cluster.
 	Profile Profile
+	// Platform is where the cluster runs.
+	Platform Platform
 }
 
 // Namespace is the customer's own namespace.
@@ -58,7 +62,16 @@ func (s Spec) Validate() error {
 	if err := ValidateCustomerID(s.CustomerID); err != nil {
 		return err
 	}
-	return s.Profile.validate()
+	if err := s.Profile.validate(); err != nil {
+		return err
+	}
+	if err := s.Platform.validate(); err != nil {
+		return err
+	}
+	if s.Profile.Zones > s.Platform.Zones {
+		return fmt.Errorf("profile %q spreads brokers across %d zones, but platform %q has %d", s.Profile.Name, s.Profile.Zones, s.Platform.Name, s.Platform.Zones)
+	}
+	return nil
 }
 
 // ValidateCustomerID reports whether id can be used to name a customer's resources.
@@ -72,14 +85,8 @@ func ValidateCustomerID(id string) error {
 	return nil
 }
 
-// Storage is the persistent volume claim of each node.
-type Storage struct {
-	Size  string
-	Class string
-}
-
 // Profile sizes a customer cluster. Profiles differ only in values; they all
-// render through the same template.
+// render through the same template, on any Platform with enough zones.
 type Profile struct {
 	Name              string
 	Replicas          int
@@ -87,9 +94,11 @@ type Profile struct {
 	MinInsyncReplicas int
 	CPURequest        string
 	Memory            string
-	Storage           Storage
-	// RackTopologyKey enables rack-aware replica placement across zones when set.
-	RackTopologyKey string
+	// StorageSize is the size of each node's persistent volume.
+	StorageSize string
+	// Zones is the number of availability zones the brokers spread across.
+	// Above 1, the template enables rack-aware replica placement.
+	Zones int
 }
 
 func (p Profile) validate() error {
@@ -104,14 +113,16 @@ func (p Profile) validate() error {
 		return fmt.Errorf("profile %q: min.insync.replicas must be between 1 and the replication factor %d", p.Name, p.ReplicationFactor)
 	case p.CPURequest == "" || p.Memory == "":
 		return fmt.Errorf("profile %q: CPU request and memory are required", p.Name)
-	case p.Storage.Size == "" || p.Storage.Class == "":
-		return fmt.Errorf("profile %q: storage needs a size and a storage class", p.Name)
+	case p.StorageSize == "":
+		return fmt.Errorf("profile %q: storage size is required", p.Name)
+	case p.Zones < 1 || p.Zones > p.Replicas:
+		return fmt.Errorf("profile %q: zones must be between 1 and the replica count %d", p.Name, p.Replicas)
 	}
 	return nil
 }
 
 // DevProfile is a single-node cluster small enough to run several side by
-// side on kind, using kind's default "standard" storage class.
+// side on kind.
 var DevProfile = Profile{
 	Name:              "dev",
 	Replicas:          1,
@@ -119,11 +130,12 @@ var DevProfile = Profile{
 	MinInsyncReplicas: 1,
 	CPURequest:        "250m",
 	Memory:            "1Gi",
-	Storage:           Storage{Size: "5Gi", Class: "standard"},
+	StorageSize:       "5Gi",
+	Zones:             1,
 }
 
 // ProductionProfile follows the durability decisions in docs/PROJECT_PLAN.md:
-// three zones, replication factor 3, min.insync.replicas 2, gp3 volumes.
+// three zones, replication factor 3, min.insync.replicas 2.
 var ProductionProfile = Profile{
 	Name:              "production",
 	Replicas:          3,
@@ -131,8 +143,8 @@ var ProductionProfile = Profile{
 	MinInsyncReplicas: 2,
 	CPURequest:        "1",
 	Memory:            "4Gi",
-	Storage:           Storage{Size: "100Gi", Class: "gp3"},
-	RackTopologyKey:   "topology.kubernetes.io/zone",
+	StorageSize:       "100Gi",
+	Zones:             3,
 }
 
 // Profiles lists the known profiles by name.
@@ -151,4 +163,70 @@ func ProfileByName(name string) (Profile, error) {
 		return Profile{}, fmt.Errorf("%w %q", ErrUnknownProfile, name)
 	}
 	return profile, nil
+}
+
+// Platform describes where customer clusters run: kind on a laptop, or one of
+// the EKS environments. Platforms differ only in values; they all render
+// through the same template.
+type Platform struct {
+	Name string
+	// StorageClass provisions each node's persistent volume.
+	StorageClass string
+	// Zones is the number of availability zones the platform's nodes span.
+	Zones int
+}
+
+func (p Platform) validate() error {
+	switch {
+	case p.Name == "":
+		return errors.New("platform has no name")
+	case p.StorageClass == "":
+		return fmt.Errorf("platform %q: storage class is required", p.Name)
+	case p.Zones < 1:
+		return fmt.Errorf("platform %q: zones must be at least 1", p.Name)
+	}
+	return nil
+}
+
+// KindPlatform is the local kind cluster from deploy/kind, with kind's default
+// "standard" storage class.
+var KindPlatform = Platform{
+	Name:         "kind",
+	StorageClass: "standard",
+	Zones:        1,
+}
+
+// EKSDevPlatform is the EKS cluster of the dev AWS account, with gp3 volumes
+// and nodes across three availability zones.
+var EKSDevPlatform = Platform{
+	Name:         "eks-dev",
+	StorageClass: "gp3",
+	Zones:        3,
+}
+
+// EKSProdPlatform is the EKS cluster of the prod AWS account, where customers
+// run.
+var EKSProdPlatform = Platform{
+	Name:         "eks-prod",
+	StorageClass: "gp3",
+	Zones:        3,
+}
+
+// Platforms lists the known platforms by name.
+var Platforms = map[string]Platform{
+	KindPlatform.Name:    KindPlatform,
+	EKSDevPlatform.Name:  EKSDevPlatform,
+	EKSProdPlatform.Name: EKSProdPlatform,
+}
+
+// ErrUnknownPlatform is returned by PlatformByName for an unknown platform name.
+var ErrUnknownPlatform = errors.New("unknown platform")
+
+// PlatformByName looks up one of Platforms.
+func PlatformByName(name string) (Platform, error) {
+	platform, ok := Platforms[name]
+	if !ok {
+		return Platform{}, fmt.Errorf("%w %q", ErrUnknownPlatform, name)
+	}
+	return platform, nil
 }

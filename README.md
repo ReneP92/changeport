@@ -137,10 +137,13 @@ around yourself, use the pinned kubectl:
 bin/kubectl-v1.36.5 --context kind-changeport get kafka -A
 ```
 
-To see what the template produces for a customer without a cluster:
+To see what the template produces for a customer without a cluster, pick a
+size profile (`dev` or `production`) and a platform (`kind`, `eks-dev` or
+`eks-prod`); kind has one zone, so the three-zone production profile only
+renders for EKS:
 
 ```bash
-go run ./cmd/provisioner render -customer acme -profile production
+go run ./cmd/provisioner render -customer acme -profile production -platform eks-prod
 ```
 
 ## Checks
