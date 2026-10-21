@@ -15,18 +15,41 @@ import (
 	"k8s.io/apimachinery/pkg/runtime/schema"
 )
 
-// fakeCluster is an in-memory Cluster. onGet, when set, runs before every Get
-// so tests can change objects while the provisioner polls.
+// fakeCluster is an in-memory Cluster. Like cert-manager, it issues every
+// Certificate as it is applied unless holdCertificates is set. onGet, when
+// set, runs before every Get so tests can change objects while the
+// provisioner polls.
 type fakeCluster struct {
-	mu       sync.Mutex
-	objects  map[string]*unstructured.Unstructured
-	applied  []string
-	applyErr error
-	onGet    func(f *fakeCluster)
+	mu               sync.Mutex
+	objects          map[string]*unstructured.Unstructured
+	applied          []string
+	applyErr         error
+	holdCertificates bool
+	onGet            func(f *fakeCluster)
 }
 
 func newFakeCluster() *fakeCluster {
 	return &fakeCluster{objects: map[string]*unstructured.Unstructured{}}
+}
+
+// setStatus gives a stored object conditions, observed for its current
+// generation (always 0 in the fake).
+func (f *fakeCluster) setStatus(gvk schema.GroupVersionKind, namespace, name string, conditions ...map[string]any) {
+	obj := f.objects[fakeKey(gvk, namespace, name)]
+	condList := make([]any, len(conditions))
+	for i, c := range conditions {
+		condList[i] = c
+	}
+	obj.Object["status"] = map[string]any{"observedGeneration": int64(0), "conditions": condList}
+}
+
+var readyTrue = map[string]any{"type": "Ready", "status": "True"}
+
+// setUsersReady marks the template's KafkaUsers ready.
+func (f *fakeCluster) setUsersReady(spec Spec) {
+	for _, user := range []string{AdminUser, AgentUser} {
+		f.setStatus(kafkaUserGVK, spec.Namespace(), user, readyTrue)
+	}
 }
 
 func fakeKey(gvk schema.GroupVersionKind, namespace, name string) string {
@@ -42,6 +65,11 @@ func (f *fakeCluster) Apply(_ context.Context, obj *unstructured.Unstructured) e
 	key := fakeKey(obj.GroupVersionKind(), obj.GetNamespace(), obj.GetName())
 	f.objects[key] = obj.DeepCopy()
 	f.applied = append(f.applied, key)
+	if obj.GroupVersionKind() == certificateGVK && !f.holdCertificates {
+		f.objects[key].Object["status"] = map[string]any{"conditions": []any{
+			map[string]any{"type": "Ready", "status": "True", "observedGeneration": int64(0)},
+		}}
+	}
 	return nil
 }
 
@@ -80,8 +108,11 @@ func TestProvisionAppliesTemplateInOrder(t *testing.T) {
 	}
 	want := []string{
 		"Namespace:/customer-acme",
+		"Certificate:customer-acme/external-listener",
 		"KafkaNodePool:customer-acme/dual-role",
 		"Kafka:customer-acme/acme",
+		"KafkaUser:customer-acme/admin",
+		"KafkaUser:customer-acme/changeport-agent",
 	}
 	if strings.Join(cluster.applied, ",") != strings.Join(want, ",") {
 		t.Errorf("applied %v, want %v", cluster.applied, want)
@@ -96,8 +127,22 @@ func TestProvisionIsIdempotent(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if len(cluster.objects) != 3 {
-		t.Errorf("cluster holds %d objects after provisioning twice, want 3", len(cluster.objects))
+	if len(cluster.objects) != 6 {
+		t.Errorf("cluster holds %d objects after provisioning twice, want 6", len(cluster.objects))
+	}
+}
+
+func TestProvisionWaitsForTheListenerCertificate(t *testing.T) {
+	cluster := newFakeCluster()
+	cluster.holdCertificates = true
+	ctx, cancel := context.WithTimeout(t.Context(), 20*time.Millisecond)
+	defer cancel()
+	err := testProvisioner(cluster).Provision(ctx, acme)
+	if !errors.Is(err, context.DeadlineExceeded) || !strings.Contains(err.Error(), "Certificate customer-acme/external-listener") {
+		t.Fatalf("Provision() error = %v, want a deadline error naming the certificate", err)
+	}
+	if got := cluster.applied[len(cluster.applied)-1]; got != "Certificate:customer-acme/external-listener" {
+		t.Errorf("last applied %s; nothing may be applied before the certificate is issued", got)
 	}
 }
 
@@ -120,19 +165,7 @@ func TestProvisionRejectsInvalidSpec(t *testing.T) {
 	}
 }
 
-func setKafkaStatus(f *fakeCluster, observedGeneration int64, conditions ...map[string]any) {
-	kafka := f.objects[fakeKey(kafkaGVK, acme.Namespace(), acme.ClusterName())]
-	condList := make([]any, len(conditions))
-	for i, c := range conditions {
-		condList[i] = c
-	}
-	kafka.Object["status"] = map[string]any{
-		"observedGeneration": observedGeneration,
-		"conditions":         condList,
-	}
-}
-
-func TestWaitReadyReturnsOnceKafkaIsReady(t *testing.T) {
+func TestWaitReadyReturnsOnceKafkaAndUsersAreReady(t *testing.T) {
 	cluster := newFakeCluster()
 	p := testProvisioner(cluster)
 	if err := p.Provision(t.Context(), acme); err != nil {
@@ -143,16 +176,19 @@ func TestWaitReadyReturnsOnceKafkaIsReady(t *testing.T) {
 		polls++
 		switch polls {
 		case 2:
-			setKafkaStatus(f, 1, map[string]any{"type": "NotReady", "status": "True", "reason": "Creating"})
+			f.setStatus(kafkaGVK, acme.Namespace(), acme.ClusterName(), map[string]any{"type": "NotReady", "status": "True", "reason": "Creating"})
 		case 4:
-			setKafkaStatus(f, 1, map[string]any{"type": "Ready", "status": "True"})
+			f.setStatus(kafkaGVK, acme.Namespace(), acme.ClusterName(), readyTrue)
+		case 6:
+			f.setUsersReady(acme)
 		}
 	}
 	if err := p.WaitReady(t.Context(), acme); err != nil {
 		t.Fatal(err)
 	}
-	if polls != 4 {
-		t.Errorf("polled %d times, want 4", polls)
+	// Kafka is ready on poll 4, the admin user from poll 6 and the agent on poll 7.
+	if polls != 7 {
+		t.Errorf("polled %d times, want 7", polls)
 	}
 }
 
@@ -162,7 +198,7 @@ func TestWaitReadyTimesOutWithLastStatus(t *testing.T) {
 	if err := p.Provision(t.Context(), acme); err != nil {
 		t.Fatal(err)
 	}
-	setKafkaStatus(cluster, 1, map[string]any{"type": "NotReady", "status": "True", "reason": "Creating"})
+	cluster.setStatus(kafkaGVK, acme.Namespace(), acme.ClusterName(), map[string]any{"type": "NotReady", "status": "True", "reason": "Creating"})
 	ctx, cancel := context.WithTimeout(t.Context(), 20*time.Millisecond)
 	defer cancel()
 	err := p.WaitReady(ctx, acme)
@@ -171,7 +207,7 @@ func TestWaitReadyTimesOutWithLastStatus(t *testing.T) {
 	}
 }
 
-func TestKafkaReady(t *testing.T) {
+func TestStrimziReady(t *testing.T) {
 	ready := map[string]any{"type": "Ready", "status": "True"}
 	tests := []struct {
 		name       string
@@ -201,26 +237,57 @@ func TestKafkaReady(t *testing.T) {
 			if tt.status != nil {
 				kafka.Object["status"] = tt.status
 			}
-			got, message := kafkaReady(kafka)
+			got, message := strimziReady(kafka)
 			if got != tt.want || message != tt.message {
-				t.Errorf("kafkaReady() = %v, %q; want %v, %q", got, message, tt.want, tt.message)
+				t.Errorf("strimziReady() = %v, %q; want %v, %q", got, message, tt.want, tt.message)
 			}
 		})
 	}
 }
 
-func TestKafkaWarnings(t *testing.T) {
+func TestCertificateReady(t *testing.T) {
+	tests := []struct {
+		name       string
+		generation int64
+		conditions []any
+		want       bool
+		message    string
+	}{
+		{"no status", 1, nil, false, "no Ready condition"},
+		{"issued", 2, []any{map[string]any{"type": "Ready", "status": "True", "observedGeneration": int64(2)}}, true, "Ready"},
+		{"issued for an older spec", 2, []any{map[string]any{"type": "Ready", "status": "True", "observedGeneration": int64(1)}}, false, "Ready=True ()"},
+		{"pending", 1, []any{
+			map[string]any{"type": "Issuing", "status": "True"},
+			map[string]any{"type": "Ready", "status": "False", "reason": "DoesNotExist", "observedGeneration": int64(1)},
+		}, false, "Ready=False (DoesNotExist)"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			certificate := &unstructured.Unstructured{Object: map[string]any{}}
+			certificate.SetGeneration(tt.generation)
+			if tt.conditions != nil {
+				certificate.Object["status"] = map[string]any{"conditions": tt.conditions}
+			}
+			got, message := certificateReady(certificate)
+			if got != tt.want || message != tt.message {
+				t.Errorf("certificateReady() = %v, %q; want %v, %q", got, message, tt.want, tt.message)
+			}
+		})
+	}
+}
+
+func TestStrimziWarnings(t *testing.T) {
 	kafka := &unstructured.Unstructured{Object: map[string]any{"status": map[string]any{"conditions": []any{
 		map[string]any{"type": "Warning", "status": "True", "reason": "KafkaStorage", "message": "data loss on restart"},
 		map[string]any{"type": "Warning", "status": "False", "reason": "Resolved", "message": "ignored"},
 		map[string]any{"type": "Ready", "status": "True"},
 	}}}}
-	got := kafkaWarnings(kafka)
+	got := strimziWarnings(kafka)
 	if len(got) != 1 || got[0] != "KafkaStorage: data loss on restart" {
-		t.Errorf("kafkaWarnings() = %q, want the one active warning", got)
+		t.Errorf("strimziWarnings() = %q, want the one active warning", got)
 	}
-	if got := kafkaWarnings(&unstructured.Unstructured{Object: map[string]any{}}); len(got) != 0 {
-		t.Errorf("kafkaWarnings() without status = %q, want none", got)
+	if got := strimziWarnings(&unstructured.Unstructured{Object: map[string]any{}}); len(got) != 0 {
+		t.Errorf("strimziWarnings() without status = %q, want none", got)
 	}
 }
 

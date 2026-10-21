@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"text/template"
 
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -32,6 +33,18 @@ type templateValues struct {
 	ZoneTopologyKey string
 	Profile         Profile
 	Platform        Platform
+
+	Domain             string
+	BrokerHostTemplate string
+	// BootstrapAnnotations and BrokerAnnotations are the load balancer
+	// Services' annotations: the platform's, plus the public name that
+	// external-dns publishes.
+	BootstrapAnnotations   map[string]string
+	BrokerAnnotations      map[string]string
+	ExternalPort           int
+	ExternalListenerSecret string
+	AdminUser              string
+	AgentUser              string
 }
 
 // RenderYAML renders the customer cluster template for spec.
@@ -51,11 +64,30 @@ func RenderYAML(spec Spec) ([]byte, error) {
 		ZoneTopologyKey: zoneTopologyKey,
 		Profile:         spec.Profile,
 		Platform:        spec.Platform,
+
+		Domain:                 spec.Domain(),
+		BrokerHostTemplate:     spec.BrokerHostTemplate(),
+		BootstrapAnnotations:   loadBalancerAnnotations(spec.Platform, spec.BootstrapHost()),
+		BrokerAnnotations:      loadBalancerAnnotations(spec.Platform, spec.BrokerHostTemplate()),
+		ExternalPort:           ExternalPort,
+		ExternalListenerSecret: ExternalListenerSecret,
+		AdminUser:              AdminUser,
+		AgentUser:              AgentUser,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("render customer cluster template: %w", err)
 	}
 	return buf.Bytes(), nil
+}
+
+// externalDNSHostname is the annotation external-dns publishes a Service's
+// address under.
+const externalDNSHostname = "external-dns.alpha.kubernetes.io/hostname"
+
+func loadBalancerAnnotations(platform Platform, hostname string) map[string]string {
+	annotations := map[string]string{externalDNSHostname: hostname}
+	maps.Copy(annotations, platform.LoadBalancer.Annotations)
+	return annotations
 }
 
 // Render renders the customer cluster template for spec into Kubernetes

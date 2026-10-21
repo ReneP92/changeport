@@ -68,6 +68,11 @@ smoke-test: ## Produce and consume a message on CUSTOMER's cluster (default demo
 
 provision deprovision e2e: CUSTOMER ?= acme
 
+.PHONY: kafka-client
+kafka-client: CUSTOMER ?= demo
+kafka-client: ## Open a shell with Kafka tools connected to CUSTOMER's public listener (default demo)
+	hack/kafka-client.sh $(CUSTOMER)
+
 .PHONY: provision
 provision: ## Provision CUSTOMER's Kafka cluster on kind (default acme, PROFILE=dev)
 	go run ./cmd/provisioner provision -context $(KUBE_CONTEXT) -customer $(CUSTOMER) -profile $(PROFILE) -wait

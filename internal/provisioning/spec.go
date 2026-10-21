@@ -9,6 +9,9 @@ import (
 	"errors"
 	"fmt"
 	"regexp"
+	"strings"
+
+	"k8s.io/apimachinery/pkg/util/validation"
 )
 
 const (
@@ -21,6 +24,18 @@ const (
 	TenantLabel = "changeport.io/tenant"
 	// ManagedBy is the value of app.kubernetes.io/managed-by and the server-side apply field manager.
 	ManagedBy = "changeport-provisioner"
+
+	// ExternalPort is the port of the public listener customers connect to.
+	ExternalPort = 9094
+	// AdminUser is the KafkaUser customers connect as; its Secret holds the
+	// SCRAM password.
+	AdminUser = "admin"
+	// AgentUser is the KafkaUser of the platform's Kafka agent on the internal
+	// mTLS listener.
+	AgentUser = "changeport-agent"
+	// ExternalListenerSecret holds the public listener's certificate, issued by
+	// cert-manager for the customer's names.
+	ExternalListenerSecret = "external-listener-tls"
 
 	namespacePrefix = "customer-"
 	nodePoolName    = "dual-role"
@@ -52,9 +67,20 @@ func (s Spec) Namespace() string { return namespacePrefix + s.CustomerID }
 // ClusterName is the name of the Strimzi Kafka resource.
 func (s Spec) ClusterName() string { return s.CustomerID }
 
-// BootstrapAddress is the in-cluster plaintext bootstrap address.
+// Domain is the DNS zone of the customer's public names, under the platform's
+// Kafka domain, such as acme.kafka.changeport.test.
+func (s Spec) Domain() string { return s.CustomerID + "." + s.Platform.KafkaDomain }
+
+// BootstrapHost is the public name clients bootstrap from.
+func (s Spec) BootstrapHost() string { return "bootstrap." + s.Domain() }
+
+// BrokerHostTemplate is the public name of each broker, with Strimzi's
+// {nodeId} placeholder.
+func (s Spec) BrokerHostTemplate() string { return "b{nodeId}." + s.Domain() }
+
+// BootstrapAddress is the public bootstrap address customers connect to.
 func (s Spec) BootstrapAddress() string {
-	return fmt.Sprintf("%s-kafka-bootstrap.%s.svc:9092", s.ClusterName(), s.Namespace())
+	return fmt.Sprintf("%s:%d", s.BootstrapHost(), ExternalPort)
 }
 
 // Validate reports whether the spec can be rendered safely.
@@ -178,6 +204,23 @@ type Platform struct {
 	// images/kafka, which adds the tiered storage plugin to Strimzi's image.
 	// Empty means Strimzi's own image for KafkaVersion.
 	KafkaImage string
+	// KafkaDomain is the DNS zone the customers' public names live under, as
+	// <customer>.<KafkaDomain>.
+	KafkaDomain string
+	// CertificateIssuer is the cert-manager ClusterIssuer of the public
+	// listener certificates, from the platform's overlay in deploy/.
+	CertificateIssuer string
+	// LoadBalancer configures the Services of the public listener.
+	LoadBalancer LoadBalancer
+}
+
+// LoadBalancer configures the LoadBalancer Services of a platform's public
+// listener: one for bootstrap and one per broker.
+type LoadBalancer struct {
+	// Class is the Services' loadBalancerClass; empty means the cluster default.
+	Class string
+	// Annotations configure the load balancers, such as their scheme.
+	Annotations map[string]string
 }
 
 func (p Platform) validate() error {
@@ -188,34 +231,64 @@ func (p Platform) validate() error {
 		return fmt.Errorf("platform %q: storage class is required", p.Name)
 	case p.Zones < 1:
 		return fmt.Errorf("platform %q: zones must be at least 1", p.Name)
+	case p.CertificateIssuer == "":
+		return fmt.Errorf("platform %q: certificate issuer is required", p.Name)
+	}
+	if errs := validation.IsDNS1123Subdomain(p.KafkaDomain); len(errs) > 0 {
+		return fmt.Errorf("platform %q: Kafka domain %q: %s", p.Name, p.KafkaDomain, strings.Join(errs, "; "))
 	}
 	return nil
 }
 
 // KindPlatform is the local kind cluster from deploy/kind: three workers in
 // three zones, with kind's default "standard" storage class. make dev-up
-// builds the Kafka image and loads it into the kind nodes.
+// builds the Kafka image and loads it into the kind nodes, and runs
+// cloud-provider-kind for the load balancers. Public names use the reserved
+// .test domain and a local CA; the dev scripts resolve them for clients.
 var KindPlatform = Platform{
-	Name:         "kind",
-	StorageClass: "standard",
-	Zones:        3,
-	KafkaImage:   "changeport/kafka:local",
+	Name:              "kind",
+	StorageClass:      "standard",
+	Zones:             3,
+	KafkaImage:        "changeport/kafka:local",
+	KafkaDomain:       "kafka.changeport.test",
+	CertificateIssuer: "local-ca",
+}
+
+// eksLoadBalancer is an internet-facing EKS Auto Mode Network Load Balancer
+// that sends traffic straight to the broker pods. Its idle timeout outlasts
+// the brokers' connections.max.idle.ms (10 minutes), so brokers rather than
+// the load balancer close idle connections.
+var eksLoadBalancer = LoadBalancer{
+	Class: "eks.amazonaws.com/nlb",
+	Annotations: map[string]string{
+		"service.beta.kubernetes.io/aws-load-balancer-scheme":                                                "internet-facing",
+		"service.beta.kubernetes.io/aws-load-balancer-nlb-target-type":                                       "ip",
+		fmt.Sprintf("service.beta.kubernetes.io/aws-load-balancer-listener-attributes.TCP-%d", ExternalPort): "tcp.idle_timeout.seconds=900",
+	},
 }
 
 // EKSDevPlatform is the EKS cluster of the dev AWS account, with gp3 volumes
-// and nodes across three availability zones.
+// and nodes across three availability zones. Its Kafka domain is a reserved
+// .invalid placeholder until the domain is registered (#8).
 var EKSDevPlatform = Platform{
-	Name:         "eks-dev",
-	StorageClass: "gp3",
-	Zones:        3,
+	Name:              "eks-dev",
+	StorageClass:      "gp3",
+	Zones:             3,
+	KafkaDomain:       "kafka.dev.changeport.invalid",
+	CertificateIssuer: "letsencrypt-staging",
+	LoadBalancer:      eksLoadBalancer,
 }
 
 // EKSProdPlatform is the EKS cluster of the prod AWS account, where customers
-// run.
+// run. Its Kafka domain is a reserved .invalid placeholder until the domain is
+// registered (#8).
 var EKSProdPlatform = Platform{
-	Name:         "eks-prod",
-	StorageClass: "gp3",
-	Zones:        3,
+	Name:              "eks-prod",
+	StorageClass:      "gp3",
+	Zones:             3,
+	KafkaDomain:       "kafka.changeport.invalid",
+	CertificateIssuer: "letsencrypt",
+	LoadBalancer:      eksLoadBalancer,
 }
 
 // Platforms lists the known platforms by name.

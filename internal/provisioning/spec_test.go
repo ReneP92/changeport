@@ -96,6 +96,9 @@ func TestPlatformValidate(t *testing.T) {
 		{"no name", func(p *Platform) { p.Name = "" }},
 		{"no storage class", func(p *Platform) { p.StorageClass = "" }},
 		{"no zones", func(p *Platform) { p.Zones = 0 }},
+		{"no certificate issuer", func(p *Platform) { p.CertificateIssuer = "" }},
+		{"no Kafka domain", func(p *Platform) { p.KafkaDomain = "" }},
+		{"invalid Kafka domain", func(p *Platform) { p.KafkaDomain = "Kafka_Example.com" }},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -108,8 +111,15 @@ func TestPlatformValidate(t *testing.T) {
 	}
 }
 
+// oneZonePlatform is kind with a single zone.
+var oneZonePlatform = func() Platform {
+	p := KindPlatform
+	p.Name, p.Zones = "one-zone", 1
+	return p
+}()
+
 func TestSpecValidateRejectsProfileWithMoreZonesThanPlatform(t *testing.T) {
-	spec := Spec{CustomerID: "acme", Profile: ProductionProfile, Platform: Platform{Name: "one-zone", StorageClass: "standard", Zones: 1}}
+	spec := Spec{CustomerID: "acme", Profile: ProductionProfile, Platform: oneZonePlatform}
 	err := spec.Validate()
 	if err == nil || !strings.Contains(err.Error(), `platform "one-zone" has 1`) {
 		t.Errorf("Validate() = %v, want a zone mismatch error", err)
@@ -179,7 +189,10 @@ func TestSpecNames(t *testing.T) {
 	if got, want := spec.ClusterName(), "acme"; got != want {
 		t.Errorf("ClusterName() = %q, want %q", got, want)
 	}
-	if got, want := spec.BootstrapAddress(), "acme-kafka-bootstrap.customer-acme.svc:9092"; got != want {
+	if got, want := spec.BootstrapAddress(), "bootstrap.acme.kafka.changeport.test:9094"; got != want {
 		t.Errorf("BootstrapAddress() = %q, want %q", got, want)
+	}
+	if got, want := spec.BrokerHostTemplate(), "b{nodeId}.acme.kafka.changeport.test"; got != want {
+		t.Errorf("BrokerHostTemplate() = %q, want %q", got, want)
 	}
 }

@@ -13,8 +13,11 @@ import (
 )
 
 var (
-	namespaceGVK = schema.GroupVersionKind{Version: "v1", Kind: "Namespace"}
-	kafkaGVK     = schema.GroupVersionKind{Group: "kafka.strimzi.io", Version: "v1", Kind: "Kafka"}
+	namespaceGVK   = schema.GroupVersionKind{Version: "v1", Kind: "Namespace"}
+	secretGVK      = schema.GroupVersionKind{Version: "v1", Kind: "Secret"}
+	kafkaGVK       = schema.GroupVersionKind{Group: "kafka.strimzi.io", Version: "v1", Kind: "Kafka"}
+	kafkaUserGVK   = schema.GroupVersionKind{Group: "kafka.strimzi.io", Version: "v1", Kind: "KafkaUser"}
+	certificateGVK = schema.GroupVersionKind{Group: "cert-manager.io", Version: "v1", Kind: "Certificate"}
 )
 
 // Cluster is the part of the Kubernetes API the provisioner uses.
@@ -39,7 +42,9 @@ func New(cluster Cluster, logger *slog.Logger) *Provisioner {
 	return &Provisioner{Cluster: cluster, Logger: logger, PollInterval: 5 * time.Second}
 }
 
-// Provision applies every resource of the customer's cluster. It is
+// Provision applies every resource of the customer's cluster in template
+// order. After a Certificate it waits until cert-manager has issued it, so
+// that the Kafka cluster never starts without its listener certificate. It is
 // idempotent: running it again converges the resources to the template.
 func (p *Provisioner) Provision(ctx context.Context, spec Spec) error {
 	objects, err := Render(spec)
@@ -51,39 +56,64 @@ func (p *Provisioner) Provision(ctx context.Context, spec Spec) error {
 			return fmt.Errorf("apply %s %s: %w", obj.GetKind(), objectKey(obj), err)
 		}
 		p.Logger.Info("applied", "kind", obj.GetKind(), "object", objectKey(obj), "tenant", spec.CustomerID)
+		if obj.GroupVersionKind() == certificateGVK {
+			if err := p.waitFor(ctx, obj, certificateReady, spec.CustomerID); err != nil {
+				return err
+			}
+		}
 	}
 	return nil
 }
 
-// WaitReady blocks until Strimzi reports the customer's Kafka cluster ready
-// for the latest spec, or ctx is done.
+// WaitReady blocks until Strimzi reports the customer's Kafka cluster and
+// users ready for the latest spec, or ctx is done.
 func (p *Provisioner) WaitReady(ctx context.Context, spec Spec) error {
-	lastMessage := "Kafka resource not observed yet"
+	objects, err := Render(spec)
+	if err != nil {
+		return err
+	}
+	for _, kind := range []schema.GroupVersionKind{kafkaGVK, kafkaUserGVK} {
+		for _, obj := range objects {
+			if obj.GroupVersionKind() == kind {
+				if err := p.waitFor(ctx, obj, strimziReady, spec.CustomerID); err != nil {
+					return err
+				}
+			}
+		}
+	}
+	p.Logger.Info("Kafka cluster ready", "tenant", spec.CustomerID, "bootstrap", spec.BootstrapAddress())
+	return nil
+}
+
+// waitFor polls obj until ready reports it ready for its latest spec, logging
+// each new status, or until ctx is done.
+func (p *Provisioner) waitFor(ctx context.Context, obj *unstructured.Unstructured, ready func(*unstructured.Unstructured) (bool, string), tenant string) error {
+	kind, key := obj.GetKind(), objectKey(obj)
+	lastMessage := "not observed yet"
 	err := wait.PollUntilContextCancel(ctx, p.PollInterval, true, func(ctx context.Context) (bool, error) {
-		kafka, err := p.Cluster.Get(ctx, kafkaGVK, spec.Namespace(), spec.ClusterName())
+		current, err := p.Cluster.Get(ctx, obj.GroupVersionKind(), obj.GetNamespace(), obj.GetName())
 		if apierrors.IsNotFound(err) {
 			return false, nil
 		}
 		if err != nil {
 			return false, err
 		}
-		ready, message := kafkaReady(kafka)
-		if ready {
-			for _, warning := range kafkaWarnings(kafka) {
-				p.Logger.Warn("Kafka cluster warning", "tenant", spec.CustomerID, "warning", warning)
+		done, message := ready(current)
+		if done {
+			for _, warning := range strimziWarnings(current) {
+				p.Logger.Warn("warning", "kind", kind, "object", key, "tenant", tenant, "warning", warning)
 			}
 			return true, nil
 		}
 		if message != lastMessage {
 			lastMessage = message
-			p.Logger.Info("waiting for Kafka cluster", "tenant", spec.CustomerID, "status", message)
+			p.Logger.Info("waiting", "kind", kind, "object", key, "tenant", tenant, "status", message)
 		}
 		return false, nil
 	})
 	if err != nil {
-		return fmt.Errorf("kafka cluster %s/%s not ready (%s): %w", spec.Namespace(), spec.ClusterName(), lastMessage, err)
+		return fmt.Errorf("%s %s not ready (%s): %w", kind, key, lastMessage, err)
 	}
-	p.Logger.Info("Kafka cluster ready", "tenant", spec.CustomerID, "bootstrap", spec.BootstrapAddress())
 	return nil
 }
 
@@ -118,19 +148,20 @@ func (p *Provisioner) WaitDeleted(ctx context.Context, customerID string) error 
 	return nil
 }
 
-// kafkaReady reports whether Strimzi has reconciled the current generation of
-// a Kafka resource and marked it Ready, plus a short status for logging.
+// strimziReady reports whether Strimzi has reconciled the current generation
+// of one of its resources, such as a Kafka or KafkaUser, and marked it Ready,
+// plus a short status for logging.
 // Strimzi only updates observedGeneration once a reconciliation finishes, so
 // while it works on the latest spec the status names its current conditions,
 // such as NotReady=True (Creating).
-func kafkaReady(kafka *unstructured.Unstructured) (bool, string) {
-	conditions, _, err := unstructured.NestedSlice(kafka.Object, "status", "conditions")
+func strimziReady(obj *unstructured.Unstructured) (bool, string) {
+	conditions, _, err := unstructured.NestedSlice(obj.Object, "status", "conditions")
 	if err != nil {
 		return false, "unreadable status conditions"
 	}
 	ready, message := readyCondition(conditions)
-	observed, found, err := unstructured.NestedInt64(kafka.Object, "status", "observedGeneration")
-	if err != nil || !found || observed < kafka.GetGeneration() {
+	observed, found, err := unstructured.NestedInt64(obj.Object, "status", "observedGeneration")
+	if err != nil || !found || observed < obj.GetGeneration() {
 		if len(conditions) == 0 {
 			return false, "operator has not reconciled the latest spec"
 		}
@@ -162,10 +193,33 @@ func readyCondition(conditions []any) (bool, string) {
 	return false, message
 }
 
-// kafkaWarnings returns the messages of Strimzi's Warning conditions, such as
-// deprecated configuration or unsafe storage.
-func kafkaWarnings(kafka *unstructured.Unstructured) []string {
-	conditions, _, _ := unstructured.NestedSlice(kafka.Object, "status", "conditions")
+// certificateReady reports whether cert-manager has issued a Certificate for
+// its current generation, plus a short status for logging. cert-manager keeps
+// the observed generation on the Ready condition itself.
+func certificateReady(certificate *unstructured.Unstructured) (bool, string) {
+	conditions, _, err := unstructured.NestedSlice(certificate.Object, "status", "conditions")
+	if err != nil {
+		return false, "unreadable status conditions"
+	}
+	for _, c := range conditions {
+		condition, ok := c.(map[string]any)
+		if !ok || condition["type"] != "Ready" {
+			continue
+		}
+		observed, _ := condition["observedGeneration"].(int64)
+		if condition["status"] == "True" && observed >= certificate.GetGeneration() {
+			return true, "Ready"
+		}
+		reason, _ := condition["reason"].(string)
+		return false, fmt.Sprintf("Ready=%v (%s)", condition["status"], reason)
+	}
+	return false, "no Ready condition"
+}
+
+// strimziWarnings returns the messages of Strimzi's Warning conditions, such
+// as deprecated configuration or unsafe storage.
+func strimziWarnings(obj *unstructured.Unstructured) []string {
+	conditions, _, _ := unstructured.NestedSlice(obj.Object, "status", "conditions")
 	var warnings []string
 	for _, c := range conditions {
 		condition, ok := c.(map[string]any)

@@ -16,6 +16,12 @@ KUBECTL_VERSION=v1.37.1
 # internal/provisioning.KindPlatform. dev-up builds it and loads it into kind.
 KAFKA_IMAGE=changeport/kafka:local
 
+# cloud-provider-kind gives LoadBalancer Services on kind an address: a
+# container per Service on the kind Docker network. It runs as a container on
+# the host's Docker, watching the kind clusters.
+CLOUD_PROVIDER_KIND_IMAGE=registry.k8s.io/cloud-provider-kind/cloud-controller-manager:v0.12.0@sha256:1b97632e5dfec8f83c7e970cf18cedb9e6b707e272011d712cabf6ab59d323c9
+CLOUD_PROVIDER_KIND_CONTAINER=changeport-cloud-provider-kind
+
 # Every other image the platform components and customer clusters run on kind,
 # matching the versions in deploy/upstream-files.txt and
 # internal/provisioning.KafkaVersion. They are pulled once into the host's
@@ -129,6 +135,40 @@ ensure_kind_cluster() {
   if docker image inspect "$KAFKA_IMAGE" >/dev/null 2>&1; then
     kind load docker-image --name "$CLUSTER_NAME" "$KAFKA_IMAGE" >/dev/null
   fi
+}
+
+# Starts cloud-provider-kind unless it is already running. The Gateway API
+# controller it also offers is not used.
+ensure_cloud_provider_kind() {
+  [[ $(docker inspect -f '{{.State.Running}}' "$CLOUD_PROVIDER_KIND_CONTAINER" 2>/dev/null) == true ]] && return
+  docker rm -f "$CLOUD_PROVIDER_KIND_CONTAINER" >/dev/null 2>&1 || true
+  log "Starting cloud-provider-kind"
+  docker run -d --name "$CLOUD_PROVIDER_KIND_CONTAINER" --restart unless-stopped --network kind \
+    -v /var/run/docker.sock:/var/run/docker.sock "$CLOUD_PROVIDER_KIND_IMAGE" --gateway-channel disabled >/dev/null
+}
+
+# Prints "<public name> <address>" for each load balancer of a customer's
+# public listener, from the external-dns hostname annotations that publish the
+# names on EKS.
+public_addresses() {
+  kubectl -n "customer-$1" get services -l "strimzi.io/cluster=$1" -o jsonpath='{range .items[?(@.spec.type=="LoadBalancer")]}{.metadata.annotations.external-dns\.alpha\.kubernetes\.io/hostname}{" "}{.status.loadBalancer.ingress[0].ip}{"\n"}{end}'
+}
+
+# Prepares a Kafka client container for a customer's public listener on kind,
+# as a client outside the cluster would connect: it writes the admin user's
+# client.properties into dir (mounted at /config) and sets KAFKA_CLIENT, the
+# docker run arguments that resolve the public names to the load balancers on
+# the kind network. Usage: prepare_kafka_client <customer> <dir>
+prepare_kafka_client() {
+  local customer=$1 dir=$2 name address hosts=0
+  provisioner credentials -customer "$customer" >"$dir/client.properties"
+  KAFKA_CLIENT=(--rm --network kind -e LOG_DIR=/tmp/kafka-logs -v "$dir:/config:ro")
+  while read -r name address; do
+    [[ -n "$name" && -n "$address" ]] || die "a load balancer of customer $customer has no public name or address yet"
+    KAFKA_CLIENT+=(--add-host "$name:$address")
+    hosts=$((hosts + 1))
+  done < <(public_addresses "$customer")
+  [[ $hosts -gt 0 ]] || die "customer $customer has no load balancers"
 }
 
 check_kind_cluster() {
