@@ -38,3 +38,20 @@ scrape_configs:
       # Request latency only for producing and fetching.
       - if: '{__name__=~"kafka_network_requestmetrics_totaltimems.*", request!~"Produce|Fetch|FetchConsumer|FetchFollower"}'
         action: drop
+  # The Kafka agent next to every customer's cluster.
+  - job_name: kafka-agent
+    kubernetes_sd_configs:
+      - role: pod
+    relabel_configs:
+      - source_labels: [__meta_kubernetes_pod_label_app_kubernetes_io_name, __meta_kubernetes_pod_container_port_name]
+        regex: changeport-agent;metrics
+        action: keep
+      - source_labels: [__meta_kubernetes_pod_label_changeport_io_tenant]
+        regex: .+
+        action: keep
+      - source_labels: [__meta_kubernetes_pod_label_changeport_io_tenant]
+        target_label: tenant
+      - source_labels: [__meta_kubernetes_pod_label_changeport_io_kafka_cluster]
+        target_label: cluster
+      - source_labels: [__meta_kubernetes_pod_name]
+        target_label: instance

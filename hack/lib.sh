@@ -15,6 +15,9 @@ KUBECTL_VERSION=v1.37.1
 # The Changeport Kafka image from images/kafka, as named by
 # internal/provisioning.KindPlatform. dev-up builds it and loads it into kind.
 KAFKA_IMAGE=changeport/kafka:local
+# The Kafka agent's image from images/agent, as named by
+# internal/provisioning.KindPlatform. dev-up builds it and loads it into kind.
+AGENT_IMAGE=changeport/agent:local
 
 # cloud-provider-kind gives LoadBalancer Services on kind an address: a
 # container per Service on the kind Docker network. It runs as a container on
@@ -127,12 +130,17 @@ build_kafka_image() {
   docker buildx build --load --quiet -t "$KAFKA_IMAGE" images/kafka >/dev/null
 }
 
+build_agent_image() {
+  log "Building $AGENT_IMAGE"
+  docker buildx build --load --quiet -t "$AGENT_IMAGE" -f images/agent/Dockerfile . >/dev/null
+}
+
 cluster_exists() { kind get clusters 2>/dev/null | grep -x "$CLUSTER_NAME" >/dev/null; }
 
 # Creates the kind cluster from deploy/kind/cluster.yaml, or checks that the
 # existing one still matches it: three zone-labelled workers on the pinned
-# Kubernetes version. Then preloads KIND_PRELOAD_IMAGES into its nodes, and
-# KAFKA_IMAGE once build_kafka_image has built it.
+# Kubernetes version. Then preloads KIND_PRELOAD_IMAGES into its workers, and
+# KAFKA_IMAGE and AGENT_IMAGE once they have been built.
 ensure_kind_cluster() {
   if cluster_exists; then
     check_kind_cluster
@@ -152,9 +160,12 @@ ensure_kind_cluster() {
   workers=$(kind get nodes --name "$CLUSTER_NAME" | grep -v control-plane | paste -sd , -)
   log "Loading images into the kind workers"
   kind load docker-image --name "$CLUSTER_NAME" --nodes "$workers" "${KIND_PRELOAD_IMAGES[@]}" >/dev/null 2>&1
-  if docker image inspect "$KAFKA_IMAGE" >/dev/null 2>&1; then
-    kind load docker-image --name "$CLUSTER_NAME" --nodes "$workers" "$KAFKA_IMAGE" >/dev/null 2>&1
-  fi
+  local image
+  for image in "$KAFKA_IMAGE" "$AGENT_IMAGE"; do
+    if docker image inspect "$image" >/dev/null 2>&1; then
+      kind load docker-image --name "$CLUSTER_NAME" --nodes "$workers" "$image" >/dev/null 2>&1
+    fi
+  done
 }
 
 # Starts cloud-provider-kind unless it is already running. The Gateway API
@@ -189,6 +200,16 @@ prepare_kafka_client() {
     hosts=$((hosts + 1))
   done < <(public_addresses "$customer")
   [[ $hosts -gt 0 ]] || die "customer $customer has no load balancers"
+}
+
+# Prints the value of a PromQL query against the metrics store that returns at
+# most one number, or nothing when it returns no series. It goes through the
+# Kubernetes API server's service proxy, so it needs no port-forward.
+metrics_query() {
+  local encoded
+  encoded=$(printf '%s' "$1" | od -An -tx1 -v | tr -d ' \n' | sed 's/../%&/g')
+  kubectl get --raw "/api/v1/namespaces/metrics/services/victoria-metrics:http/proxy/api/v1/query?query=$encoded" |
+    sed -nE 's/.*"value":\[[^,]*,"([^"]*)"\].*/\1/p'
 }
 
 check_kind_cluster() {

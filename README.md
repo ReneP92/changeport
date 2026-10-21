@@ -82,11 +82,12 @@ for progress.
 | Path | Contents |
 | --- | --- |
 | `cmd/provisioner` | Stub of the provisioning service: creates and removes customer Kafka clusters |
+| `cmd/agent` | The Kafka agent next to every customer's cluster: turns on tiered storage for every topic that can use it |
 | `internal/provisioning` | The per-customer template and the code that applies it through the Kubernetes API |
 | `web` | React frontend (placeholder) |
 | `terraform` | Base infrastructure per environment: VPC, EKS, S3, IAM (empty modules, nothing applied) |
 | `deploy` | Kubernetes manifests: the kind cluster, and the platform components (Strimzi, cert-manager) with one overlay per environment |
-| `images` | Container images we build: `images/kafka` is Strimzi's Kafka image plus the tiered storage plugin |
+| `images` | Container images we build: Strimzi's Kafka image plus the tiered storage plugin, and the Kafka agent |
 | `hack` | Local development scripts behind the Makefile |
 | `tools` | Go module pinning the tools (kind, golangci-lint); `make tools` builds them into `bin/` |
 
@@ -161,6 +162,15 @@ and that every series carries its tenant and the other labels in
 
 ```bash
 make metrics-test
+```
+
+Kafka has no broker-wide default for tiered storage, so the Kafka agent
+(`cmd/agent`) next to every customer's cluster turns it on for each new topic
+that can use it, leaving compacted topics and a customer's explicit
+`remote.storage.enable=false` alone. The agent test checks that:
+
+```bash
+make agent-test
 ```
 
 The tiered storage test offloads a topic with small segments to the local

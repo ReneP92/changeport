@@ -47,6 +47,10 @@ golden: ## Regenerate the provisioning template golden files
 kafka-image: ## Build the Kafka broker image (images/kafka) for this machine as changeport/kafka:local
 	@bash -c 'source hack/lib.sh && build_kafka_image'
 
+.PHONY: agent-image
+agent-image: ## Build the Kafka agent image (images/agent) for this machine as changeport/agent:local
+	@bash -c 'source hack/lib.sh && build_agent_image'
+
 .PHONY: kafka-image-test
 kafka-image-test: ## Start a broker from the Kafka image with tiered storage configured (IMAGE=changeport/kafka:local)
 	hack/kafka-image-test.sh $(IMAGE)
@@ -76,6 +80,11 @@ kafka-client: ## Open a shell with Kafka tools connected to CUSTOMER's public li
 .PHONY: metrics-test
 metrics-test: ## Check that every customer's brokers are scraped into VictoriaMetrics with their tenant
 	hack/metrics-test.sh
+
+.PHONY: agent-test
+agent-test: CUSTOMER ?= demo
+agent-test: ## Check that CUSTOMER's Kafka agent (default demo) turns on tiered storage for new topics
+	hack/agent-test.sh $(CUSTOMER)
 
 .PHONY: tiered-storage-test
 tiered-storage-test: CUSTOMER ?= demo

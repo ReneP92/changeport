@@ -93,7 +93,7 @@ func TestRenderProducesLabeledObjectsInApplyOrder(t *testing.T) {
 	}
 	// The tiered storage keys and the certificate come before the Kafka
 	// cluster that uses them.
-	wantKinds := []string{"Namespace", "Secret", "Certificate", "KafkaNodePool", "Kafka", "KafkaUser", "KafkaUser"}
+	wantKinds := []string{"Namespace", "Secret", "Certificate", "KafkaNodePool", "Kafka", "KafkaUser", "KafkaUser", "Deployment"}
 	if len(objects) != len(wantKinds) {
 		t.Fatalf("got %d objects, want %d", len(objects), len(wantKinds))
 	}
