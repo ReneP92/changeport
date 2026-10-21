@@ -79,6 +79,7 @@ for progress.
 | `web` | React frontend (placeholder) |
 | `terraform` | Base infrastructure per environment: VPC, EKS, S3, IAM (empty modules, nothing applied) |
 | `deploy` | Kubernetes manifests: the kind cluster, and the platform components (Strimzi, cert-manager) with one overlay per environment |
+| `images` | Container images we build: `images/kafka` is Strimzi's Kafka image plus the tiered storage plugin |
 | `hack` | Local development scripts behind the Makefile |
 | `tools` | Go module pinning the tools (kind, golangci-lint); `make tools` builds them into `bin/` |
 
@@ -99,7 +100,9 @@ cert-manager) into `deploy/base/*/upstream/`, and build kind from
 make dev-up
 ```
 
-This creates the `changeport` kind cluster on Kubernetes 1.37 (a control
+This builds the Kafka broker image (`images/kafka`, Strimzi's image plus the
+Aiven tiered storage plugin; the first build takes about 10 minutes), creates
+the `changeport` kind cluster on Kubernetes 1.37 (a control
 plane and three workers, one per zone, like the three availability zones on
 EKS), installs the platform components from `deploy/overlays/kind` (Strimzi
 1.3.0 watching all namespaces, and cert-manager with a local CA), provisions
@@ -157,6 +160,8 @@ make lint test
 ```
 
 CI runs the same Go lint and tests, plus `make tf-fmt tf-validate`,
-`make shellcheck`, and `make platform-check`, which applies the kind overlay
-to a kind cluster and server-side dry-runs the EKS overlays against it. Run
+`make shellcheck`, `make platform-check`, which applies the kind overlay to a
+kind cluster and server-side dry-runs the EKS overlays against it, and builds
+the Kafka image for amd64 and arm64 and runs `make kafka-image-test`, which
+starts a broker from it with tiered storage configured. Run
 `make help` for every target.

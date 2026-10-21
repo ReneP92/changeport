@@ -30,8 +30,8 @@ done
 log "Checking that every image was preloaded"
 missing=$(kubectl get pods -A -o jsonpath='{range .items[*]}{.metadata.namespace}{range .spec.initContainers[*]}{" "}{.image}{end}{range .spec.containers[*]}{" "}{.image}{end}{"\n"}{end}' |
   awk '$1 != "kube-system" && $1 != "local-path-storage" { for (i = 2; i <= NF; i++) print $i }' | sort -u |
-  grep -vxF -f <(printf '%s\n' "${KIND_PRELOAD_IMAGES[@]}") || true)
-[[ -z "$missing" ]] || die "pods run images that are not in KIND_PRELOAD_IMAGES (hack/lib.sh):"$'\n'"$missing"
+  grep -vxF -f <(printf '%s\n' "${KIND_PRELOAD_IMAGES[@]}" "$KAFKA_IMAGE") || true)
+[[ -z "$missing" ]] || die "pods run images that are neither KAFKA_IMAGE nor in KIND_PRELOAD_IMAGES (hack/lib.sh):"$'\n'"$missing"
 
 if [[ ${KEEP:-0} != 1 ]]; then
   log "Deprovisioning customer $customer"

@@ -2,6 +2,7 @@ package provisioning
 
 import (
 	"errors"
+	"os"
 	"strings"
 	"testing"
 )
@@ -71,6 +72,19 @@ func TestBuiltInPlatformsAreValid(t *testing.T) {
 		if err := platform.validate(); err != nil {
 			t.Errorf("platform %q: %v", name, err)
 		}
+	}
+}
+
+// TestKindKafkaImageMatchesDevScripts keeps the kind platform's image in step
+// with the image the dev scripts build and load into kind.
+func TestKindKafkaImageMatchesDevScripts(t *testing.T) {
+	lib, err := os.ReadFile("../../hack/lib.sh")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := "\nKAFKA_IMAGE=" + KindPlatform.KafkaImage + "\n"
+	if !strings.Contains(string(lib), want) {
+		t.Errorf("hack/lib.sh does not set KAFKA_IMAGE=%s, the kind platform's image", KindPlatform.KafkaImage)
 	}
 }
 

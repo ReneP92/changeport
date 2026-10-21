@@ -41,6 +41,16 @@ tidy: ## Tidy the Go and tools modules
 golden: ## Regenerate the provisioning template golden files
 	go test ./internal/provisioning -run Golden -update
 
+##@ Images
+
+.PHONY: kafka-image
+kafka-image: ## Build the Kafka broker image (images/kafka) for this machine as changeport/kafka:local
+	@bash -c 'source hack/lib.sh && build_kafka_image'
+
+.PHONY: kafka-image-test
+kafka-image-test: ## Start a broker from the Kafka image with tiered storage configured (IMAGE=changeport/kafka:local)
+	hack/kafka-image-test.sh $(IMAGE)
+
 ##@ Local development (kind + Strimzi)
 
 .PHONY: dev-up

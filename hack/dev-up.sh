@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# Creates the local kind cluster, installs the platform components (Strimzi,
-# cert-manager) and provisions the "demo" customer's Kafka cluster with the
+# Builds the Kafka image, creates the local kind cluster, installs the platform
+# components (Strimzi, cert-manager) and provisions the "demo" customer's Kafka cluster with the
 # provisioning service, then runs the smoke test against it. Safe to run again.
 # shellcheck source=lib.sh
 source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
@@ -11,6 +11,7 @@ require_tools
 ensure_kind
 ensure_kubectl
 
+build_kafka_image
 ensure_kind_cluster
 "$ROOT/hack/platform-apply.sh" kind
 
