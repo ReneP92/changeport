@@ -27,6 +27,12 @@ for c in "$customer" "$DEMO_CUSTOMER"; do
   [[ -z "$warnings" ]] || die "Kafka cluster of customer $c reports warnings:"$'\n'"$warnings"
 done
 
+log "Checking that every image was preloaded"
+missing=$(kubectl get pods -A -o jsonpath='{range .items[*]}{.metadata.namespace}{range .spec.initContainers[*]}{" "}{.image}{end}{range .spec.containers[*]}{" "}{.image}{end}{"\n"}{end}' |
+  awk '$1 != "kube-system" && $1 != "local-path-storage" { for (i = 2; i <= NF; i++) print $i }' | sort -u |
+  grep -vxF -f <(printf '%s\n' "${KIND_PRELOAD_IMAGES[@]}") || true)
+[[ -z "$missing" ]] || die "pods run images that are not in KIND_PRELOAD_IMAGES (hack/lib.sh):"$'\n'"$missing"
+
 if [[ ${KEEP:-0} != 1 ]]; then
   log "Deprovisioning customer $customer"
   provisioner deprovision -customer "$customer" -wait -timeout 5m

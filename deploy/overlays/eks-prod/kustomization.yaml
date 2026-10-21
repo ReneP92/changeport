@@ -1,0 +1,19 @@
+# Platform components of the EKS cluster in the prod account, applied by
+# make platform-apply ENV=prod CONFIRM=prod.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - ../../base/strimzi
+  - ../../base/cert-manager
+  - ../../base/eks-storage
+patches:
+  # Keep a customer's volumes when their claims are deleted, so a mistaken
+  # deprovision loses no data. A StorageClass is immutable: changing this on
+  # a running cluster means deleting and recreating the class.
+  - target:
+      kind: StorageClass
+      name: gp3
+    patch: |-
+      - op: replace
+        path: /reclaimPolicy
+        value: Retain

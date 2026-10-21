@@ -5,13 +5,26 @@ set -euo pipefail
 ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 cd "$ROOT"
 
-# Pinned versions. Strimzi 1.3.0 is the newest release and supports Kafka 4.3.1,
-# the newest Kafka 4.x (see internal/provisioning.KafkaVersion).
-# shellcheck disable=SC2034 # used by the scripts that source this file
-STRIMZI_VERSION=1.3.0
-# shellcheck disable=SC2034
-STRIMZI_SHA256=c58da61a66c20169d1c9c42736a9355b183ee17ac7779ab7875beaedbf972232
-KUBECTL_VERSION=v1.36.5
+# Pinned versions. The platform manifests' upstream files are pinned in
+# deploy/upstream-files.txt. The kind node image follows the Kubernetes minor
+# version of EKS (terraform/environments/*/variables.tf); images are listed
+# at https://github.com/kubernetes-sigs/kind/releases/tag/v0.33.0
+KIND_NODE_IMAGE=kindest/node:v1.37.0@sha256:a1ed56cfb0e7b93589bdf97c8cd566405a265939e3620fc4f5de89adff580ae5
+KUBECTL_VERSION=v1.37.1
+
+# Every image the platform components and customer clusters run on kind,
+# matching the versions in deploy/upstream-files.txt and
+# internal/provisioning.KafkaVersion. They are pulled once into the host's
+# Docker, which keeps them across cluster rebuilds, and loaded into every kind
+# node; pulling 400 MB Kafka images on each node can outlast Strimzi's
+# timeouts. make e2e fails if a pod runs an image missing here.
+KIND_PRELOAD_IMAGES=(
+  quay.io/strimzi/operator:1.3.0
+  quay.io/strimzi/kafka:1.3.0-kafka-4.3.1
+  quay.io/jetstack/cert-manager-cainjector:v1.21.2
+  quay.io/jetstack/cert-manager-controller:v1.21.2
+  quay.io/jetstack/cert-manager-webhook:v1.21.2
+)
 
 CLUSTER_NAME=${CLUSTER_NAME:-changeport}
 KUBE_CONTEXT="kind-${CLUSTER_NAME}"
@@ -21,7 +34,8 @@ KUBECTL_BIN="$BIN_DIR/kubectl-$KUBECTL_VERSION"
 log() { printf '\033[1m==> %s\033[0m\n' "$*" >&2; }
 die() { printf 'error: %s\n' "$*" >&2; exit 1; }
 
-# kubectl always targets the local kind cluster, never the current context.
+# kubectl always targets KUBE_CONTEXT, never the current context. It is the
+# local kind cluster unless a script sets it explicitly (hack/platform-apply.sh).
 kubectl() { "$KUBECTL_BIN" --context "$KUBE_CONTEXT" "$@"; }
 kind() { "$BIN_DIR/kind" "$@"; }
 provisioner() { go run ./cmd/provisioner "$1" -context "$KUBE_CONTEXT" "${@:2}"; }
@@ -39,30 +53,79 @@ require_tools() {
 # Builds kind at the version pinned in tools/go.mod.
 ensure_kind() { go -C "$ROOT/tools" build -o "$BIN_DIR/" sigs.k8s.io/kind; }
 
+# Downloads url to dest unless dest already has the SHA-256 want. The file only
+# appears at dest once its checksum matches.
+download_verified() {
+  local url=$1 want=$2 dest=$3 tmp
+  [[ -f "$dest" && $(sha256_of "$dest") == "$want" ]] && return
+  log "Downloading $url"
+  mkdir -p "$(dirname "$dest")"
+  tmp=$(mktemp "$dest.XXXXXX")
+  if ! curl -fsSL -o "$tmp" "$url"; then
+    rm -f "$tmp"
+    die "download of $url failed"
+  fi
+  if [[ $(sha256_of "$tmp") != "$want" ]]; then
+    rm -f "$tmp"
+    die "checksum mismatch for $url"
+  fi
+  mv "$tmp" "$dest"
+}
+
 ensure_kubectl() {
-  [[ -x "$KUBECTL_BIN" ]] && return
   local os arch want
   os=$(uname -s | tr '[:upper:]' '[:lower:]')
   arch=$(uname -m)
   case "$arch" in x86_64) arch=amd64 ;; aarch64) arch=arm64 ;; esac
   case "$os/$arch" in
-    darwin/arm64) want=c5850a4a6b9469b26cce47c1ab456285f58e308283dcdf72b4ddda3db49b0ec0 ;;
-    darwin/amd64) want=03338828c3ba74c37bf5964573fbfbab132eb5bb15da2f821c25a4043d6eb3f0 ;;
-    linux/amd64) want=33bc88a24c3b09cf55bfd59e6ca977881b61fc3f25ab65bc80c65b430248648e ;;
-    linux/arm64) want=88fc1aca8fd0c1b44fe379f67c39bd6858bdfc50241dc55775f84d0f5b31da3a ;;
+    darwin/arm64) want=fd65982c97ddad3106754b69ffa196d0e543aa591930ae52aed1adfb92f8c77f ;;
+    darwin/amd64) want=6851381c486ff6edd691623e3d65c87cb9a5b02887ff8fbbb38d8a031b748387 ;;
+    linux/amd64) want=65691ff77eb6fa44c908b77a1082c9f092c3b9733b5cefabec0d1104890e21a8 ;;
+    linux/arm64) want=ff749f4b78d9c4f1ec87307df9b50119ed819e2094aa9810cb9acffc3286c8c7 ;;
     *) die "unsupported platform $os/$arch" ;;
   esac
-  log "Downloading kubectl $KUBECTL_VERSION"
-  mkdir -p "$BIN_DIR"
-  local tmp
-  tmp=$(mktemp "$BIN_DIR/kubectl.XXXXXX")
-  curl -fsSL -o "$tmp" "https://dl.k8s.io/release/$KUBECTL_VERSION/bin/$os/$arch/kubectl"
-  if [[ $(sha256_of "$tmp") != "$want" ]]; then
-    rm -f "$tmp"
-    die "kubectl checksum mismatch"
-  fi
-  chmod +x "$tmp"
-  mv "$tmp" "$KUBECTL_BIN"
+  download_verified "https://dl.k8s.io/release/$KUBECTL_VERSION/bin/$os/$arch/kubectl" "$want" "$KUBECTL_BIN"
+  chmod +x "$KUBECTL_BIN"
+}
+
+# Downloads every upstream file pinned in deploy/upstream-files.txt.
+fetch_upstream_files() {
+  local sha path url
+  while read -r sha path url; do
+    [[ -z "$sha" || "$sha" == \#* ]] && continue
+    download_verified "$url" "$sha" "$ROOT/$path"
+  done <"$ROOT/deploy/upstream-files.txt"
 }
 
 cluster_exists() { kind get clusters 2>/dev/null | grep -qx "$CLUSTER_NAME"; }
+
+# Creates the kind cluster from deploy/kind/cluster.yaml, or checks that the
+# existing one still matches it: three zone-labelled workers on the pinned
+# Kubernetes version. Then preloads KIND_PRELOAD_IMAGES into its nodes.
+ensure_kind_cluster() {
+  if cluster_exists; then
+    check_kind_cluster
+  else
+    log "Creating kind cluster $CLUSTER_NAME"
+    kind create cluster --name "$CLUSTER_NAME" --config deploy/kind/cluster.yaml --image "$KIND_NODE_IMAGE" --wait 3m
+  fi
+  local image
+  for image in "${KIND_PRELOAD_IMAGES[@]}"; do
+    docker image inspect "$image" >/dev/null 2>&1 && continue
+    log "Pulling $image"
+    docker pull --quiet "$image" >/dev/null
+  done
+  log "Loading images into the kind nodes"
+  kind load docker-image --name "$CLUSTER_NAME" "${KIND_PRELOAD_IMAGES[@]}" >/dev/null
+}
+
+check_kind_cluster() {
+  log "kind cluster $CLUSTER_NAME already exists"
+  local want=${KIND_NODE_IMAGE#kindest/node:} zones versions
+  want=${want%@*}
+  zones=$(kubectl get nodes -o jsonpath='{range .items[*]}{.metadata.labels.topology\.kubernetes\.io/zone}{"\n"}{end}' | sort -u | grep -c . || true)
+  versions=$(kubectl get nodes -o jsonpath='{range .items[*]}{.status.nodeInfo.kubeletVersion}{"\n"}{end}' | sort -u | paste -sd ' ' -)
+  if [[ $zones -ne 3 || "$versions" != "$want" ]]; then
+    die "kind cluster $CLUSTER_NAME has nodes in $zones zones on Kubernetes $versions; deploy/kind/cluster.yaml wants 3 zones on $want. Recreate it: make dev-down dev-up"
+  fi
+}

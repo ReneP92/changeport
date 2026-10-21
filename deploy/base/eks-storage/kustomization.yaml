@@ -1,0 +1,9 @@
+# Storage for broker volumes on EKS Auto Mode, which creates no StorageClass
+# of its own.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+labels:
+  - pairs:
+      changeport.io/platform: eks-storage
+resources:
+  - storageclass.yaml

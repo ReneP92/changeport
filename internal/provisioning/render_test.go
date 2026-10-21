@@ -121,7 +121,7 @@ func TestRenderRejectsInvalidSpecs(t *testing.T) {
 		{CustomerID: "Bad_ID", Profile: DevProfile, Platform: KindPlatform},
 		{CustomerID: "acme", Profile: Profile{}, Platform: KindPlatform},
 		{CustomerID: "acme", Profile: DevProfile, Platform: Platform{}},
-		{CustomerID: "acme", Profile: ProductionProfile, Platform: KindPlatform},
+		{CustomerID: "acme", Profile: ProductionProfile, Platform: Platform{Name: "one-zone", StorageClass: "standard", Zones: 1}},
 	} {
 		if _, err := Render(spec); err == nil {
 			t.Errorf("Render(%+v) = nil error, want an error", spec)

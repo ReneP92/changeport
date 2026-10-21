@@ -1,0 +1,11 @@
+# cert-manager, installed into the cert-manager namespace. It issues the
+# certificates of the customer endpoints: from a local CA on kind, from
+# Let's Encrypt on EKS. The upstream install file is pinned in
+# deploy/upstream-files.txt.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+labels:
+  - pairs:
+      changeport.io/platform: cert-manager
+resources:
+  - upstream/cert-manager.yaml

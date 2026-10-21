@@ -1,0 +1,10 @@
+# Upstream files the platform manifests build on, pinned by URL and SHA-256.
+# hack/lib.sh (fetch_upstream_files) downloads each one that is missing or
+# does not match, into the git-ignored path given here.
+#
+# Strimzi 1.3.0 supports Kafka 4.3.1, the newest Kafka 4.x (see
+# internal/provisioning.KafkaVersion).
+#
+# sha256 path url
+c58da61a66c20169d1c9c42736a9355b183ee17ac7779ab7875beaedbf972232 deploy/base/strimzi/upstream/strimzi-cluster-operator.yaml https://github.com/strimzi/strimzi-kafka-operator/releases/download/1.3.0/strimzi-cluster-operator-1.3.0.yaml
+e03b668ec8675214af6b0a671699d088f2601fa3878e0dbe1b41d3feafd1879f deploy/base/cert-manager/upstream/cert-manager.yaml https://github.com/cert-manager/cert-manager/releases/download/v1.21.2/cert-manager.yaml

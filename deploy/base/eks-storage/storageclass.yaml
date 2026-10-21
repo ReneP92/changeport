@@ -1,0 +1,14 @@
+# Encrypted gp3 volumes from the EKS Auto Mode block storage driver, named in
+# internal/provisioning (EKSDevPlatform, EKSProdPlatform). Volumes bind once a
+# broker is scheduled, so each volume lands in its broker's zone.
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: gp3
+provisioner: ebs.csi.eks.amazonaws.com
+parameters:
+  type: gp3
+  encrypted: "true"
+volumeBindingMode: WaitForFirstConsumer
+allowVolumeExpansion: true
+reclaimPolicy: Delete

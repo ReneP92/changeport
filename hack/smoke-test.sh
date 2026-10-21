@@ -13,8 +13,8 @@ message="changeport smoke test $run_id"
 
 ensure_kubectl
 
-# Use the broker image so the client tools match the Kafka version and the
-# image is already on the node.
+# Use the broker image so the client tools match the Kafka version; dev-up
+# preloads it into every node.
 image=$(kubectl -n "$namespace" get pods -l "strimzi.io/cluster=$customer,strimzi.io/broker-role=true" \
   -o jsonpath='{.items[0].spec.containers[0].image}')
 [[ -n "$image" ]] || die "no Kafka broker pods for customer $customer in namespace $namespace"
@@ -35,8 +35,12 @@ run_pod() {
     [[ $phase == Succeeded || $phase == Failed ]] && break
     sleep 1
   done
+  if [[ $phase != Succeeded && $phase != Failed ]]; then
+    kubectl -n "$namespace" get events --field-selector "involvedObject.name=$name" >&2
+    die "pod $name did not finish within 2 minutes (phase '${phase:-unknown}')"
+  fi
   kubectl -n "$namespace" logs "$name"
-  [[ $phase == Succeeded ]] || die "pod $name ended in phase '${phase:-unknown}'"
+  [[ $phase == Succeeded ]] || die "pod $name ended in phase '$phase'"
 }
 
 log "Smoke test for customer $customer: creating topic $topic"

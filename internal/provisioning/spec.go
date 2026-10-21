@@ -188,12 +188,12 @@ func (p Platform) validate() error {
 	return nil
 }
 
-// KindPlatform is the local kind cluster from deploy/kind, with kind's default
-// "standard" storage class.
+// KindPlatform is the local kind cluster from deploy/kind: three workers in
+// three zones, with kind's default "standard" storage class.
 var KindPlatform = Platform{
 	Name:         "kind",
 	StorageClass: "standard",
-	Zones:        1,
+	Zones:        3,
 }
 
 // EKSDevPlatform is the EKS cluster of the dev AWS account, with gp3 volumes
