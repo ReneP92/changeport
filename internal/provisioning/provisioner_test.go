@@ -181,7 +181,10 @@ func TestKafkaReady(t *testing.T) {
 		message    string
 	}{
 		{"no status", 1, nil, false, "operator has not reconciled the latest spec"},
-		{"stale generation", 2, map[string]any{"observedGeneration": int64(1), "conditions": []any{ready}}, false, "operator has not reconciled the latest spec"},
+		{"stale generation", 2, map[string]any{"observedGeneration": int64(1), "conditions": []any{ready}}, false, "operator has not reconciled the latest spec; last status Ready"},
+		{"creating", 1, map[string]any{"observedGeneration": int64(0), "conditions": []any{
+			map[string]any{"type": "NotReady", "status": "True", "reason": "Creating"},
+		}}, false, "operator has not reconciled the latest spec; last status NotReady=True (Creating)"},
 		{"ready", 2, map[string]any{"observedGeneration": int64(2), "conditions": []any{ready}}, true, "Ready"},
 		{"not ready", 1, map[string]any{"observedGeneration": int64(1), "conditions": []any{
 			map[string]any{"type": "NotReady", "status": "True", "reason": "Creating"},

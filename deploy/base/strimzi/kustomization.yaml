@@ -1,8 +1,11 @@
 # Strimzi cluster operator, installed into the strimzi namespace and watching
-# all namespaces. hack/dev-up.sh downloads the pinned upstream install file
-# into upstream/ and checks its SHA-256 before applying this kustomization.
+# all namespaces. The upstream install file is pinned in
+# deploy/upstream-files.txt and downloaded into upstream/ by hack scripts.
 apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
+labels:
+  - pairs:
+      changeport.io/platform: strimzi
 resources:
   - namespace.yaml
   - upstream/strimzi-cluster-operator.yaml

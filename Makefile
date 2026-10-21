@@ -44,7 +44,7 @@ golden: ## Regenerate the provisioning template golden files
 ##@ Local development (kind + Strimzi)
 
 .PHONY: dev-up
-dev-up: ## Create the kind cluster, install Strimzi, provision the demo customer and smoke test it
+dev-up: ## Create the kind cluster, install the platform components, provision the demo customer and smoke test it
 	hack/dev-up.sh
 
 .PHONY: dev-down
@@ -70,6 +70,17 @@ deprovision: ## Delete CUSTOMER's Kafka cluster from kind
 e2e: ## Provision a second customer, smoke test both clusters, then deprovision it (KEEP=1 keeps it)
 	hack/e2e.sh $(CUSTOMER)
 
+##@ Platform components
+
+.PHONY: platform-apply
+platform-apply: ## Apply the platform components to ENV (kind, dev, or prod with CONFIRM=prod)
+	@test -n "$(ENV)" || { echo "usage: make platform-apply ENV=kind|dev|prod" >&2; exit 1; }
+	CONFIRM=$(CONFIRM) hack/platform-apply.sh $(ENV)
+
+.PHONY: platform-check
+platform-check: ## Apply the kind overlay to kind and server-side dry-run the EKS overlays there
+	hack/platform-check.sh
+
 .PHONY: shellcheck
 shellcheck: ## Lint the shell scripts (needs shellcheck)
 	shellcheck hack/*.sh
@@ -89,4 +100,4 @@ tf-validate: ## Validate every Terraform environment without a backend
 
 .PHONY: clean
 clean: ## Remove build output and downloaded tools
-	rm -rf bin deploy/strimzi/upstream
+	rm -rf bin deploy/base/*/upstream

@@ -1,8 +1,8 @@
 # Build output and pinned tool downloads
 /bin/
 
-# Downloaded and checksum-verified by hack/dev-up.sh
-/deploy/strimzi/upstream/
+# Downloaded and checksum-verified from deploy/upstream-files.txt
+/deploy/base/*/upstream/
 
 # Terraform
 .terraform/

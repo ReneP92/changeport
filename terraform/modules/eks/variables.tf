@@ -4,6 +4,6 @@ variable "name" {
 }
 
 variable "kubernetes_version" {
-  description = "Kubernetes minor version of the control plane, kept in step with deploy/kind/cluster.yaml."
+  description = "Kubernetes minor version of the control plane, kept in step with KIND_NODE_IMAGE in hack/lib.sh."
   type        = string
 }

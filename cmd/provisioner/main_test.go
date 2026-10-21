@@ -32,7 +32,6 @@ func TestCommandErrors(t *testing.T) {
 		{"missing customer", []string{"provision"}, `customer ID ""`},
 		{"unknown profile", []string{"provision", "-customer", "acme", "-profile", "huge"}, `unknown profile "huge"`},
 		{"unknown platform", []string{"render", "-customer", "acme", "-platform", "gke"}, `unknown platform "gke"`},
-		{"profile needs more zones", []string{"render", "-customer", "acme", "-profile", "production"}, `platform "kind" has 1`},
 		{"deprovision invalid customer", []string{"deprovision", "-customer", "a_b"}, `customer ID "a_b"`},
 	}
 	for _, tt := range tests {

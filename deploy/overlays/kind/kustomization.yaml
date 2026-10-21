@@ -1,0 +1,7 @@
+# Platform components of the local kind cluster. Applied first by
+# hack/platform-apply.sh; config/ follows once the operators are ready.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - ../../base/strimzi
+  - ../../base/cert-manager

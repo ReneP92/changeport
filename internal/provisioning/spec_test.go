@@ -57,7 +57,7 @@ func TestProductionProfileFollowsDurabilityDecisions(t *testing.T) {
 		t.Errorf("production clusters spread across %d zones; the plan requires 3", p.Zones)
 	}
 	for name, platform := range Platforms {
-		if name != KindPlatform.Name && platform.Zones < p.Zones {
+		if platform.Zones < p.Zones {
 			t.Errorf("platform %q has %d zones and cannot run the production profile", name, platform.Zones)
 		}
 	}
@@ -95,14 +95,16 @@ func TestPlatformValidate(t *testing.T) {
 }
 
 func TestSpecValidateRejectsProfileWithMoreZonesThanPlatform(t *testing.T) {
-	spec := Spec{CustomerID: "acme", Profile: ProductionProfile, Platform: KindPlatform}
+	spec := Spec{CustomerID: "acme", Profile: ProductionProfile, Platform: Platform{Name: "one-zone", StorageClass: "standard", Zones: 1}}
 	err := spec.Validate()
-	if err == nil || !strings.Contains(err.Error(), `platform "kind" has 1`) {
+	if err == nil || !strings.Contains(err.Error(), `platform "one-zone" has 1`) {
 		t.Errorf("Validate() = %v, want a zone mismatch error", err)
 	}
-	spec.Platform = EKSProdPlatform
-	if err := spec.Validate(); err != nil {
-		t.Errorf("Validate() on eks-prod = %v, want nil", err)
+	for _, platform := range Platforms {
+		spec.Platform = platform
+		if err := spec.Validate(); err != nil {
+			t.Errorf("Validate() on %s = %v, want nil", platform.Name, err)
+		}
 	}
 }
 
