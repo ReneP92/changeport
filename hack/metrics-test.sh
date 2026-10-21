@@ -14,15 +14,6 @@ series_budget=1000
 
 ensure_kubectl
 
-# Prints the value of a PromQL query that returns at most one number, or
-# nothing when it returns no series.
-query() {
-  local encoded
-  encoded=$(printf '%s' "$1" | od -An -tx1 -v | tr -d ' \n' | sed 's/../%&/g')
-  kubectl get --raw "/api/v1/namespaces/metrics/services/victoria-metrics:http/proxy/api/v1/query?query=$encoded" |
-    sed -nE 's/.*"value":\[[^,]*,"([^"]*)"\].*/\1/p'
-}
-
 tenants=$(kubectl get kafka -A -o jsonpath='{range .items[*]}{.metadata.labels.changeport\.io/tenant}{"\n"}{end}' | sort -u)
 [[ -n "$tenants" ]] || die "no customer Kafka clusters to check"
 
@@ -30,7 +21,7 @@ for tenant in $tenants; do
   brokers=$(kubectl -n "customer-$tenant" get pods -l "strimzi.io/cluster=$tenant,strimzi.io/broker-role=true" -o name | grep -c .)
   log "Waiting for the metrics of customer $tenant's $brokers brokers"
   for _ in $(seq 24); do
-    scraped=$(query "count(kafka_server_replicamanager_partitioncount{tenant=\"$tenant\"})")
+    scraped=$(metrics_query "count(kafka_server_replicamanager_partitioncount{tenant=\"$tenant\"})")
     [[ ${scraped:-0} == "$brokers" ]] && break
     sleep 5
   done
@@ -38,16 +29,16 @@ for tenant in $tenants; do
 done
 
 for label in tenant cluster node_id zone env; do
-  missing=$(query "count({job=\"kafka\", __name__!~\"up|scrape_.*\", $label=\"\"})")
+  missing=$(metrics_query "count({job=\"kafka\", __name__!~\"up|scrape_.*\", $label=\"\"})")
   [[ -z "$missing" ]] || die "$missing broker series have no $label label"
 done
-untenanted=$(query 'count({__name__=~"kafka_.*", tenant=""})')
+untenanted=$(metrics_query 'count({__name__=~"kafka_.*", tenant=""})')
 [[ -z "$untenanted" ]] || die "$untenanted Kafka series have no tenant"
 log "Every broker series carries tenant, cluster, node_id, zone and env"
 
-bytes_in=$(query 'sum(kafka_server_brokertopicmetrics_bytesinpersec_total{tenant!="", topic=""})')
+bytes_in=$(metrics_query 'sum(kafka_server_brokertopicmetrics_bytesinpersec_total{tenant!="", topic=""})')
 [[ -n "$bytes_in" && ${bytes_in%.*} -gt 0 ]] || die "no bytes-in traffic was recorded; run this after some traffic"
 
-largest=$(query 'max(scrape_samples_post_metric_relabeling{job="kafka"})')
+largest=$(metrics_query 'max(scrape_samples_post_metric_relabeling{job="kafka"})')
 [[ ${largest%.*} -le $series_budget ]] || die "a broker sends $largest series, over the budget of $series_budget"
 log "Metrics test passed: at most $largest series per broker, within the budget of $series_budget"

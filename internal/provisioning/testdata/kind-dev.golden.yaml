@@ -257,3 +257,76 @@ spec:
       - resource:
           type: cluster
         operations: [Describe, DescribeConfigs]
+---
+# The Kafka agent (cmd/agent) keeps the platform's topic settings in place:
+# it turns on tiered storage for every topic that can use it.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: changeport-agent
+  namespace: customer-acme
+  labels:
+    app.kubernetes.io/name: changeport-agent
+    app.kubernetes.io/managed-by: changeport-provisioner
+    changeport.io/tenant: "acme"
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: changeport-agent
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: changeport-agent
+        changeport.io/tenant: "acme"
+        changeport.io/kafka-cluster: "acme"
+    spec:
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: agent
+          image: changeport/agent:local
+          args:
+            - "-bootstrap=acme-kafka-bootstrap.customer-acme.svc:9093"
+          ports:
+            - name: metrics
+              containerPort: 8080
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: metrics
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: metrics
+            periodSeconds: 30
+          resources:
+            requests:
+              cpu: 10m
+              memory: 32Mi
+            limits:
+              memory: 64Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: [ALL]
+          volumeMounts:
+            - name: agent-user
+              mountPath: /etc/changeport/agent-user
+              readOnly: true
+            - name: cluster-ca
+              mountPath: /etc/changeport/cluster-ca
+              readOnly: true
+      volumes:
+        # The certificate of the agent's KafkaUser, from the User Operator.
+        - name: agent-user
+          secret:
+            secretName: changeport-agent
+        - name: cluster-ca
+          secret:
+            secretName: acme-cluster-ca-cert

@@ -75,16 +75,17 @@ func TestBuiltInPlatformsAreValid(t *testing.T) {
 	}
 }
 
-// TestKindKafkaImageMatchesDevScripts keeps the kind platform's image in step
-// with the image the dev scripts build and load into kind.
-func TestKindKafkaImageMatchesDevScripts(t *testing.T) {
+// TestKindImagesMatchDevScripts keeps the kind platform's images in step
+// with the images the dev scripts build and load into kind.
+func TestKindImagesMatchDevScripts(t *testing.T) {
 	lib, err := os.ReadFile("../../hack/lib.sh")
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := "\nKAFKA_IMAGE=" + KindPlatform.KafkaImage + "\n"
-	if !strings.Contains(string(lib), want) {
-		t.Errorf("hack/lib.sh does not set KAFKA_IMAGE=%s, the kind platform's image", KindPlatform.KafkaImage)
+	for variable, image := range map[string]string{"KAFKA_IMAGE": KindPlatform.KafkaImage, "AGENT_IMAGE": KindPlatform.AgentImage} {
+		if !strings.Contains(string(lib), "\n"+variable+"="+image+"\n") {
+			t.Errorf("hack/lib.sh does not set %s=%s, the kind platform's image", variable, image)
+		}
 	}
 }
 

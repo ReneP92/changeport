@@ -243,6 +243,10 @@ type Platform struct {
 	// images/kafka, which adds the tiered storage plugin to Strimzi's image.
 	// Empty means Strimzi's own image for KafkaVersion.
 	KafkaImage string
+	// AgentImage is the Kafka agent's image (images/agent), which runs next
+	// to every customer's cluster. Empty means no agent: on EKS until the
+	// images are in ECR (#18).
+	AgentImage string
 	// KafkaDomain is the DNS zone the customers' public names live under, as
 	// <customer>.<KafkaDomain>.
 	KafkaDomain string
@@ -377,6 +381,7 @@ var KindPlatform = Platform{
 	StorageClass:      "standard",
 	Zones:             3,
 	KafkaImage:        "changeport/kafka:local",
+	AgentImage:        "changeport/agent:local",
 	KafkaDomain:       "kafka.changeport.test",
 	CertificateIssuer: "local-ca",
 	// Like EKS load balancers with IP targets, send each broker's traffic only

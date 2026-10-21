@@ -19,6 +19,7 @@ var (
 	kafkaUserGVK   = schema.GroupVersionKind{Group: "kafka.strimzi.io", Version: "v1", Kind: "KafkaUser"}
 	certificateGVK = schema.GroupVersionKind{Group: "cert-manager.io", Version: "v1", Kind: "Certificate"}
 	nodeClaimGVK   = schema.GroupVersionKind{Group: "karpenter.sh", Version: "v1", Kind: "NodeClaim"}
+	deploymentGVK  = schema.GroupVersionKind{Group: "apps", Version: "v1", Kind: "Deployment"}
 )
 
 // Cluster is the part of the Kubernetes API the provisioner uses.
@@ -84,16 +85,25 @@ func (p *Provisioner) Provision(ctx context.Context, spec Spec) error {
 }
 
 // WaitReady blocks until Strimzi reports the customer's Kafka cluster and
-// users ready for the latest spec, or ctx is done.
+// users ready for the latest spec, and the Kafka agent is available, or ctx
+// is done.
 func (p *Provisioner) WaitReady(ctx context.Context, spec Spec) error {
 	objects, err := Render(spec)
 	if err != nil {
 		return err
 	}
-	for _, kind := range []schema.GroupVersionKind{kafkaGVK, kafkaUserGVK} {
+	readiness := []struct {
+		kind  schema.GroupVersionKind
+		ready func(*unstructured.Unstructured) (bool, string)
+	}{
+		{kafkaGVK, strimziReady},
+		{kafkaUserGVK, strimziReady},
+		{deploymentGVK, deploymentReady},
+	}
+	for _, r := range readiness {
 		for _, obj := range objects {
-			if obj.GroupVersionKind() == kind {
-				if err := p.waitFor(ctx, obj, strimziReady, spec.CustomerID); err != nil {
+			if obj.GroupVersionKind() == r.kind {
+				if err := p.waitFor(ctx, obj, r.ready, spec.CustomerID); err != nil {
 					return err
 				}
 			}
@@ -290,6 +300,25 @@ func certificateReady(certificate *unstructured.Unstructured) (bool, string) {
 		return false, fmt.Sprintf("Ready=%v (%s)", condition["status"], reason)
 	}
 	return false, "no Ready condition"
+}
+
+// deploymentReady reports whether a Deployment has rolled out its latest spec
+// and all its replicas are available, plus a short status for logging.
+func deploymentReady(deployment *unstructured.Unstructured) (bool, string) {
+	observed, _, _ := unstructured.NestedInt64(deployment.Object, "status", "observedGeneration")
+	if observed < deployment.GetGeneration() {
+		return false, "rollout not observed yet"
+	}
+	replicas, found, _ := unstructured.NestedInt64(deployment.Object, "spec", "replicas")
+	if !found {
+		replicas = 1
+	}
+	updated, _, _ := unstructured.NestedInt64(deployment.Object, "status", "updatedReplicas")
+	available, _, _ := unstructured.NestedInt64(deployment.Object, "status", "availableReplicas")
+	if updated < replicas || available < replicas {
+		return false, fmt.Sprintf("%d of %d replicas updated, %d available", updated, replicas, available)
+	}
+	return true, "Available"
 }
 
 // strimziWarnings returns the messages of Strimzi's Warning conditions, such

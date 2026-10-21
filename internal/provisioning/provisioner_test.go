@@ -46,11 +46,13 @@ func (f *fakeCluster) setStatus(gvk schema.GroupVersionKind, namespace, name str
 
 var readyTrue = map[string]any{"type": "Ready", "status": "True"}
 
-// setUsersReady marks the template's KafkaUsers ready.
+// setUsersReady marks the template's KafkaUsers ready and the agent available.
 func (f *fakeCluster) setUsersReady(spec Spec) {
 	for _, user := range []string{AdminUser, AgentUser} {
 		f.setStatus(kafkaUserGVK, spec.Namespace(), user, readyTrue)
 	}
+	agent := f.objects[fakeKey(deploymentGVK, spec.Namespace(), "changeport-agent")]
+	agent.Object["status"] = map[string]any{"observedGeneration": int64(0), "updatedReplicas": int64(1), "availableReplicas": int64(1)}
 }
 
 func fakeKey(gvk schema.GroupVersionKind, namespace, name string) string {
@@ -147,6 +149,7 @@ func TestProvisionAppliesTemplateInOrder(t *testing.T) {
 		"Kafka:customer-acme/acme",
 		"KafkaUser:customer-acme/admin",
 		"KafkaUser:customer-acme/changeport-agent",
+		"Deployment:customer-acme/changeport-agent",
 	}
 	if strings.Join(cluster.applied, ",") != strings.Join(want, ",") {
 		t.Errorf("applied %v, want %v", cluster.applied, want)
@@ -161,8 +164,8 @@ func TestProvisionIsIdempotent(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if len(cluster.objects) != 7 {
-		t.Errorf("cluster holds %d objects after provisioning twice, want 7", len(cluster.objects))
+	if len(cluster.objects) != 8 {
+		t.Errorf("cluster holds %d objects after provisioning twice, want 8", len(cluster.objects))
 	}
 }
 
@@ -199,7 +202,7 @@ func TestProvisionRejectsInvalidSpec(t *testing.T) {
 	}
 }
 
-func TestWaitReadyReturnsOnceKafkaAndUsersAreReady(t *testing.T) {
+func TestWaitReadyReturnsOnceKafkaUsersAndAgentAreReady(t *testing.T) {
 	cluster := newFakeCluster()
 	p := testProvisioner(cluster)
 	if err := p.Provision(t.Context(), acme); err != nil {
@@ -220,9 +223,10 @@ func TestWaitReadyReturnsOnceKafkaAndUsersAreReady(t *testing.T) {
 	if err := p.WaitReady(t.Context(), acme); err != nil {
 		t.Fatal(err)
 	}
-	// Kafka is ready on poll 4, the admin user from poll 6 and the agent on poll 7.
-	if polls != 7 {
-		t.Errorf("polled %d times, want 7", polls)
+	// Kafka is ready on poll 4 and the admin user on poll 6; the agent user
+	// and the agent Deployment take a poll each.
+	if polls != 8 {
+		t.Errorf("polled %d times, want 8", polls)
 	}
 }
 
@@ -274,6 +278,32 @@ func TestStrimziReady(t *testing.T) {
 			got, message := strimziReady(kafka)
 			if got != tt.want || message != tt.message {
 				t.Errorf("strimziReady() = %v, %q; want %v, %q", got, message, tt.want, tt.message)
+			}
+		})
+	}
+}
+
+func TestDeploymentReady(t *testing.T) {
+	tests := []struct {
+		name       string
+		generation int64
+		status     map[string]any
+		want       bool
+	}{
+		{"no status", 1, nil, false},
+		{"old generation", 2, map[string]any{"observedGeneration": int64(1), "updatedReplicas": int64(1), "availableReplicas": int64(1)}, false},
+		{"not available", 1, map[string]any{"observedGeneration": int64(1), "updatedReplicas": int64(1), "availableReplicas": int64(0)}, false},
+		{"available", 1, map[string]any{"observedGeneration": int64(1), "updatedReplicas": int64(1), "availableReplicas": int64(1)}, true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			d := &unstructured.Unstructured{Object: map[string]any{"spec": map[string]any{"replicas": int64(1)}}}
+			d.SetGeneration(tt.generation)
+			if tt.status != nil {
+				d.Object["status"] = tt.status
+			}
+			if got, message := deploymentReady(d); got != tt.want {
+				t.Errorf("deploymentReady() = %v (%s), want %v", got, message, tt.want)
 			}
 		})
 	}

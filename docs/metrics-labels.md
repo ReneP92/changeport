@@ -39,6 +39,9 @@ agent, and that must carry `tenant`, `cluster` and `env` as well:
 No label may take unbounded values: never message keys, offsets, client IP
 addresses or timestamps.
 
+The Kafka agent next to each cluster exports its own metrics
+(`changeport_agent_*`) with `tenant`, `cluster` and `instance`.
+
 ## Relabel rules
 
 `deploy/base/victoria-metrics/scrape.yaml` scrapes port 9404 of every pod
