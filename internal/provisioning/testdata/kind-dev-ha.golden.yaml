@@ -1,0 +1,194 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: customer-acme
+  labels:
+    app.kubernetes.io/managed-by: changeport-provisioner
+    changeport.io/tenant: "acme"
+---
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: external-listener
+  namespace: customer-acme
+  labels:
+    app.kubernetes.io/managed-by: changeport-provisioner
+    changeport.io/tenant: "acme"
+spec:
+  # One wildcard name covers the bootstrap name and every broker's name.
+  dnsNames:
+    - "*.acme.kafka.changeport.test"
+  secretName: external-listener-tls
+  privateKey:
+    algorithm: ECDSA
+    size: 256
+    # Kafka only loads PEM private keys in PKCS#8.
+    encoding: PKCS8
+  issuerRef:
+    group: cert-manager.io
+    kind: ClusterIssuer
+    name: local-ca
+---
+apiVersion: kafka.strimzi.io/v1
+kind: KafkaNodePool
+metadata:
+  name: dual-role
+  namespace: customer-acme
+  labels:
+    strimzi.io/cluster: "acme"
+    app.kubernetes.io/managed-by: changeport-provisioner
+    changeport.io/tenant: "acme"
+spec:
+  replicas: 3
+  roles:
+    - controller
+    - broker
+  resources:
+    requests:
+      cpu: "250m"
+      memory: "1Gi"
+    limits:
+      memory: "1Gi"
+  storage:
+    type: jbod
+    volumes:
+      - id: 0
+        type: persistent-claim
+        size: "5Gi"
+        class: "standard"
+        deleteClaim: false
+        kraftMetadata: shared
+  template:
+    pod:
+      affinity:
+        # One broker per node.
+        podAntiAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            - topologyKey: kubernetes.io/hostname
+              labelSelector: {matchLabels: {strimzi.io/cluster: "acme", strimzi.io/pool-name: dual-role}}
+      # Brokers spread evenly over the zones, or wait until they can.
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: topology.kubernetes.io/zone
+          whenUnsatisfiable: DoNotSchedule
+          labelSelector: {matchLabels: {strimzi.io/cluster: "acme", strimzi.io/pool-name: dual-role}}
+---
+apiVersion: kafka.strimzi.io/v1
+kind: Kafka
+metadata:
+  name: "acme"
+  namespace: customer-acme
+  labels:
+    app.kubernetes.io/managed-by: changeport-provisioner
+    changeport.io/tenant: "acme"
+spec:
+  kafka:
+    version: 4.3.1
+    metadataVersion: 4.3-IV0
+    image: changeport/kafka:local
+    rack:
+      topologyKey: topology.kubernetes.io/zone
+    listeners:
+      # Platform clients inside the cluster, such as the Kafka agent.
+      - name: tls
+        port: 9093
+        type: internal
+        tls: true
+        authentication:
+          type: tls
+      # Customers, over the internet.
+      - name: external
+        port: 9094
+        type: loadbalancer
+        tls: true
+        authentication:
+          type: scram-sha-512
+        configuration:
+          externalTrafficPolicy: Local
+          brokerCertChainAndKey:
+            secretName: external-listener-tls
+            certificate: tls.crt
+            key: tls.key
+          bootstrap:
+            annotations:
+              external-dns.alpha.kubernetes.io/hostname: "bootstrap.acme.kafka.changeport.test"
+          advertisedHostTemplate: b{nodeId}.acme.kafka.changeport.test
+          perBrokerAnnotationsTemplate:
+            external-dns.alpha.kubernetes.io/hostname: "b{nodeId}.acme.kafka.changeport.test"
+    authorization:
+      type: simple
+    config:
+      auto.create.topics.enable: false
+      # Follower fetching: consumers that set client.rack read from a replica
+      # in their own zone, avoiding cross-zone transfer.
+      replica.selector.class: org.apache.kafka.common.replica.RackAwareReplicaSelector
+      default.replication.factor: 3
+      min.insync.replicas: 2
+      offsets.topic.replication.factor: 3
+      transaction.state.log.replication.factor: 3
+      transaction.state.log.min.isr: 2
+  entityOperator:
+    topicOperator: {}
+    userOperator: {}
+---
+# The customer's user. It manages topics, consumer groups and transactions,
+# but cannot change the cluster's configuration, which the platform owns.
+apiVersion: kafka.strimzi.io/v1
+kind: KafkaUser
+metadata:
+  name: admin
+  namespace: customer-acme
+  labels:
+    strimzi.io/cluster: "acme"
+    app.kubernetes.io/managed-by: changeport-provisioner
+    changeport.io/tenant: "acme"
+spec:
+  authentication:
+    type: scram-sha-512
+  authorization:
+    type: simple
+    acls:
+      - resource:
+          type: topic
+          name: "*"
+          patternType: literal
+        operations: [All]
+      - resource:
+          type: group
+          name: "*"
+          patternType: literal
+        operations: [All]
+      - resource:
+          type: transactionalId
+          name: "*"
+          patternType: literal
+        operations: [All]
+      - resource:
+          type: cluster
+        operations: [Describe, DescribeConfigs, IdempotentWrite]
+---
+# The Kafka agent's user on the internal listener: it reads the cluster and
+# keeps topic settings such as tiered storage in place.
+apiVersion: kafka.strimzi.io/v1
+kind: KafkaUser
+metadata:
+  name: changeport-agent
+  namespace: customer-acme
+  labels:
+    strimzi.io/cluster: "acme"
+    app.kubernetes.io/managed-by: changeport-provisioner
+    changeport.io/tenant: "acme"
+spec:
+  authentication:
+    type: tls
+  authorization:
+    type: simple
+    acls:
+      - resource:
+          type: topic
+          name: "*"
+          patternType: literal
+        operations: [Describe, DescribeConfigs, AlterConfigs]
+      - resource:
+          type: cluster
+        operations: [Describe, DescribeConfigs]

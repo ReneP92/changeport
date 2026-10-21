@@ -1,0 +1,23 @@
+# Strimzi Drain Cleaner, installed into the strimzi-drain-cleaner namespace.
+# When a node is drained, it denies the eviction of Kafka pods and marks them
+# for the Strimzi operator, which restarts them one at a time while keeping
+# partitions in sync. Its webhook certificate comes from cert-manager, so it
+# is applied in an overlay's config/ stage. The upstream install files are
+# pinned in deploy/upstream-files.txt.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+labels:
+  - pairs:
+      changeport.io/platform: drain-cleaner
+resources:
+  - upstream/000-Namespace.yaml
+  - upstream/010-ServiceAccount.yaml
+  - upstream/020-ClusterRole.yaml
+  - upstream/021-Role.yaml
+  - upstream/030-ClusterRoleBinding.yaml
+  - upstream/031-RoleBinding.yaml
+  - upstream/040-Issuer.yaml
+  - upstream/041-Certificate.yaml
+  - upstream/050-Service.yaml
+  - upstream/060-Deployment.yaml
+  - upstream/070-ValidatingWebhookConfiguration.yaml

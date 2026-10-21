@@ -28,12 +28,17 @@ if [[ $env == kind && $server == *.eks.amazonaws.com* ]] || [[ $env != kind && $
 fi
 
 apply() { kubectl apply --server-side --force-conflicts --field-manager=changeport-platform -k "$1" >/dev/null; }
+# Waits until every platform component's deployment has rolled out.
+wait_for_deployments() {
+  local namespace name
+  while read -r namespace name; do
+    kubectl -n "$namespace" rollout status "deployment/$name" --timeout=5m
+  done < <(kubectl get deployments -A -l changeport.io/platform -o jsonpath='{range .items[*]}{.metadata.namespace} {.metadata.name}{"\n"}{end}')
+}
 
 log "Applying the $overlay platform components to $KUBE_CONTEXT"
 apply "deploy/overlays/$overlay"
-while read -r namespace name; do
-  kubectl -n "$namespace" rollout status "deployment/$name" --timeout=5m
-done < <(kubectl get deployments -A -l changeport.io/platform -o jsonpath='{range .items[*]}{.metadata.namespace} {.metadata.name}{"\n"}{end}')
+wait_for_deployments
 
 config="deploy/overlays/$overlay/config"
 if [[ -d $config ]]; then
@@ -48,5 +53,8 @@ if [[ -d $config ]]; then
   if [[ -n $(kubectl get clusterissuers -o name) ]]; then
     kubectl wait clusterissuers --all --for=condition=Ready --timeout=2m >/dev/null
   fi
+  # Components in config/, such as Drain Cleaner, start once cert-manager has
+  # issued their certificates.
+  wait_for_deployments
 fi
 log "Platform components of $env are ready"

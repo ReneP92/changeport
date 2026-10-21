@@ -23,6 +23,7 @@ type fakeCluster struct {
 	mu               sync.Mutex
 	objects          map[string]*unstructured.Unstructured
 	applied          []string
+	deleted          []string
 	applyErr         error
 	holdCertificates bool
 	onGet            func(f *fakeCluster)
@@ -89,8 +90,27 @@ func (f *fakeCluster) Get(_ context.Context, gvk schema.GroupVersionKind, namesp
 func (f *fakeCluster) Delete(_ context.Context, gvk schema.GroupVersionKind, namespace, name string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	delete(f.objects, fakeKey(gvk, namespace, name))
+	key := fakeKey(gvk, namespace, name)
+	delete(f.objects, key)
+	f.deleted = append(f.deleted, key)
 	return nil
+}
+
+// List supports label selectors of the form "key=value".
+func (f *fakeCluster) List(_ context.Context, gvk schema.GroupVersionKind, namespace, labelSelector string) ([]unstructured.Unstructured, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.onGet != nil {
+		f.onGet(f)
+	}
+	key, value, _ := strings.Cut(labelSelector, "=")
+	var items []unstructured.Unstructured
+	for _, obj := range f.objects {
+		if obj.GroupVersionKind() == gvk && obj.GetNamespace() == namespace && obj.GetLabels()[key] == value {
+			items = append(items, *obj.DeepCopy())
+		}
+	}
+	return items, nil
 }
 
 func testProvisioner(cluster Cluster) *Provisioner {
@@ -297,19 +317,55 @@ func TestDeprovisionDeletesNamespaceAndWaits(t *testing.T) {
 	if err := p.Provision(t.Context(), acme); err != nil {
 		t.Fatal(err)
 	}
-	if err := p.Deprovision(t.Context(), "acme"); err != nil {
+	if err := p.Deprovision(t.Context(), acme); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := cluster.Get(t.Context(), namespaceGVK, "", "customer-acme"); !apierrors.IsNotFound(err) {
-		t.Fatalf("namespace still present after Deprovision: %v", err)
+	if got := strings.Join(cluster.deleted, ","); got != "Namespace:/customer-acme" {
+		t.Errorf("deleted %s, want only the namespace on kind", got)
 	}
-	if err := p.WaitDeleted(t.Context(), "acme"); err != nil {
+	if err := p.WaitDeleted(t.Context(), acme); err != nil {
 		t.Fatal(err)
 	}
 }
 
+func TestDeprovisionRemovesDedicatedNodes(t *testing.T) {
+	spec := Spec{CustomerID: "acme", Profile: ProductionProfile, Platform: EKSProdPlatform}
+	cluster := newFakeCluster()
+	p := testProvisioner(cluster)
+	if err := p.Provision(t.Context(), spec); err != nil {
+		t.Fatal(err)
+	}
+	if err := p.Deprovision(t.Context(), spec); err != nil {
+		t.Fatal(err)
+	}
+	want := "Namespace:/customer-acme,NodePool:/customer-acme,NodeClass:/customer-acme"
+	if got := strings.Join(cluster.deleted, ","); got != want {
+		t.Errorf("deleted %s, want %s", got, want)
+	}
+
+	// Karpenter removes the NodePool's nodes in the background.
+	nodeClaim := &unstructured.Unstructured{Object: map[string]any{}}
+	nodeClaim.SetGroupVersionKind(nodeClaimGVK)
+	nodeClaim.SetName("customer-acme-x7k2p")
+	nodeClaim.SetLabels(map[string]string{"karpenter.sh/nodepool": "customer-acme"})
+	cluster.objects[fakeKey(nodeClaimGVK, "", nodeClaim.GetName())] = nodeClaim
+	polls := 0
+	cluster.onGet = func(f *fakeCluster) {
+		if polls++; polls == 6 {
+			delete(f.objects, fakeKey(nodeClaimGVK, "", nodeClaim.GetName()))
+		}
+	}
+	if err := p.WaitDeleted(t.Context(), spec); err != nil {
+		t.Fatal(err)
+	}
+	if _, still := cluster.objects[fakeKey(nodeClaimGVK, "", nodeClaim.GetName())]; still {
+		t.Error("WaitDeleted returned before the nodes were gone")
+	}
+}
+
 func TestDeprovisionRejectsInvalidCustomerID(t *testing.T) {
-	if err := testProvisioner(newFakeCluster()).Deprovision(t.Context(), "kube-system/../x"); err == nil {
+	spec := Spec{CustomerID: "kube-system/../x", Profile: DevProfile, Platform: KindPlatform}
+	if err := testProvisioner(newFakeCluster()).Deprovision(t.Context(), spec); err == nil {
 		t.Fatal("Deprovision() = nil, want a validation error")
 	}
 }

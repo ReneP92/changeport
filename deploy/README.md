@@ -7,11 +7,15 @@ Kubernetes manifests that are not generated per customer.
 - `base/`: the platform components, installed once per Kubernetes cluster:
   - `strimzi/`: the Strimzi cluster operator, watching every namespace.
   - `cert-manager/`: issues the customer endpoint certificates.
+  - `drain-cleaner/`: Strimzi Drain Cleaner, which turns the eviction of a
+    Kafka pod, for example when a node is replaced, into a rolling restart by
+    the Strimzi operator.
   - `eks-storage/`: the encrypted gp3 StorageClass for EKS Auto Mode.
 - `overlays/`: one per environment (`kind`, `eks-dev`, `eks-prod`), choosing
   the components and the environment's settings. Resources that need an
-  operator's CRDs or webhooks, such as cert-manager issuers, live in the
-  overlay's `config/` directory and are applied once the operators are ready.
+  operator's CRDs or webhooks, such as cert-manager issuers and Drain Cleaner,
+  live in the overlay's `config/` directory and are applied once the
+  operators are ready.
 - `upstream-files.txt`: the upstream install files the bases build on, pinned
   by URL and SHA-256 and downloaded into the git-ignored `base/*/upstream/`.
 

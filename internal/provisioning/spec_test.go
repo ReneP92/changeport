@@ -132,6 +132,37 @@ func TestSpecValidateRejectsProfileWithMoreZonesThanPlatform(t *testing.T) {
 	}
 }
 
+func TestDedicatedNodesValidate(t *testing.T) {
+	tests := []struct {
+		name   string
+		mutate func(*DedicatedNodes)
+	}{
+		{"no node role", func(d *DedicatedNodes) { d.NodeRole = "" }},
+		{"no subnet tags", func(d *DedicatedNodes) { d.SubnetTags = nil }},
+		{"no security group tags", func(d *DedicatedNodes) { d.SecurityGroupTags = nil }},
+		{"no instance families", func(d *DedicatedNodes) { d.InstanceFamilies = nil }},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			p := EKSDevPlatform
+			nodes := *p.DedicatedNodes
+			tt.mutate(&nodes)
+			p.DedicatedNodes = &nodes
+			if err := p.validate(); err == nil {
+				t.Error("validate() = nil, want an error")
+			}
+		})
+	}
+}
+
+func TestDevHAProfileIsAsDurableAsProduction(t *testing.T) {
+	ha, prod := DevHAProfile, ProductionProfile
+	if ha.Replicas != prod.Replicas || ha.ReplicationFactor != prod.ReplicationFactor ||
+		ha.MinInsyncReplicas != prod.MinInsyncReplicas || ha.Zones != prod.Zones {
+		t.Errorf("dev-ha %+v does not match production's durability %+v", ha, prod)
+	}
+}
+
 func TestPlatformByName(t *testing.T) {
 	p, err := PlatformByName("eks-dev")
 	if err != nil || p.Name != "eks-dev" {
@@ -159,6 +190,7 @@ func TestProfileValidate(t *testing.T) {
 		{"no storage size", func(p *Profile) { p.StorageSize = "" }},
 		{"no zones", func(p *Profile) { p.Zones = 0 }},
 		{"zones above replicas", func(p *Profile) { p.Zones = 2 }},
+		{"one-vCPU nodes", func(p *Profile) { p.NodeCPUs = 1 }},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

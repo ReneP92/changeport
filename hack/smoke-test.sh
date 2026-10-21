@@ -60,10 +60,10 @@ client kafka-topics.sh --bootstrap-server "$bootstrap" --command-config /config/
 
 log "Producing a message"
 echo "$message" | client kafka-console-producer.sh --bootstrap-server "$bootstrap" \
-  --producer.config /config/client.properties --topic "$topic"
+  --command-config /config/client.properties --topic "$topic"
 
 log "Consuming it back"
-consumed=$(client kafka-console-consumer.sh --bootstrap-server "$bootstrap" --consumer.config /config/client.properties \
+consumed=$(client kafka-console-consumer.sh --bootstrap-server "$bootstrap" --command-config /config/client.properties \
   --topic "$topic" --from-beginning --max-messages 1 --timeout-ms 60000 2>"$work/consumer.log")
 if ! grep -xF "$message" <<<"$consumed" >/dev/null; then
   cat "$work/consumer.log" >&2

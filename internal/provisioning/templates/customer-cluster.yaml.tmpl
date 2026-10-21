@@ -5,7 +5,17 @@ and its Platform says where it runs.
 */ -}}
 {{- define "labels" }}
     app.kubernetes.io/managed-by: {{ .ManagedBy }}
-    changeport.io/tenant: {{ .Tenant }}
+    changeport.io/tenant: {{ quote .Tenant }}
+{{- end -}}
+{{- /* Flow-style values that place pods on the customer's dedicated nodes, usable at any depth. */ -}}
+{{- define "tenant-node-affinity" -}}
+{requiredDuringSchedulingIgnoredDuringExecution: {nodeSelectorTerms: [{matchExpressions: [{key: changeport.io/tenant, operator: In, values: [{{ quote .Tenant }}]}]}]}}
+{{- end -}}
+{{- define "tenant-tolerations" -}}
+[{key: changeport.io/tenant, operator: Equal, value: {{ quote .Tenant }}, effect: NoSchedule}]
+{{- end -}}
+{{- define "broker-selector" -}}
+{matchLabels: {strimzi.io/cluster: {{ quote .ClusterName }}, strimzi.io/pool-name: {{ .NodePoolName }}}}
 {{- end -}}
 apiVersion: v1
 kind: Namespace
@@ -13,6 +23,85 @@ metadata:
   name: {{ .Namespace }}
   labels:
 {{- template "labels" . }}
+{{- with .Platform.DedicatedNodes }}
+---
+# The customer's own nodes: EKS Auto Mode launches them for this NodePool
+# only, labelled and tainted with the tenant so that no other pods run there.
+apiVersion: eks.amazonaws.com/v1
+kind: NodeClass
+metadata:
+  name: {{ $.DedicatedNodePool }}
+  labels:
+{{- template "labels" $ }}
+spec:
+  role: {{ .NodeRole }}
+  subnetSelectorTerms:
+    - tags:
+{{- range $key, $value := .SubnetTags }}
+        {{ $key }}: {{ printf "%q" $value }}
+{{- end }}
+  securityGroupSelectorTerms:
+    - tags:
+{{- range $key, $value := .SecurityGroupTags }}
+        {{ $key }}: {{ printf "%q" $value }}
+{{- end }}
+  # Shows each customer's nodes in cost allocation.
+  tags:
+    changeport.io/tenant: {{ quote $.Tenant }}
+---
+apiVersion: karpenter.sh/v1
+kind: NodePool
+metadata:
+  name: {{ $.DedicatedNodePool }}
+  labels:
+{{- template "labels" $ }}
+spec:
+  template:
+    metadata:
+      labels:
+        changeport.io/tenant: {{ quote $.Tenant }}
+    spec:
+      nodeClassRef:
+        group: eks.amazonaws.com
+        kind: NodeClass
+        name: {{ $.DedicatedNodePool }}
+      taints:
+        - key: changeport.io/tenant
+          value: {{ quote $.Tenant }}
+          effect: NoSchedule
+      requirements:
+        - key: kubernetes.io/arch
+          operator: In
+          values: [arm64]
+        - key: karpenter.sh/capacity-type
+          operator: In
+          values: [on-demand]
+        - key: eks.amazonaws.com/instance-family
+          operator: In
+          values: [{{ range $i, $family := .InstanceFamilies }}{{ if $i }}, {{ end }}{{ $family }}{{ end }}]
+        - key: eks.amazonaws.com/instance-cpu
+          operator: In
+          values: ["{{ $.Profile.NodeCPUs }}"]
+      # The longest node lifetime EKS Auto Mode allows. Expiry ignores the
+      # disruption budgets; Strimzi Drain Cleaner turns the eviction of a
+      # broker into a rolling restart by the Strimzi operator instead.
+      expireAfter: 504h
+      terminationGracePeriod: 24h
+  disruption:
+    consolidationPolicy: WhenEmpty
+    consolidateAfter: 5m
+    budgets:
+      # One node at a time.
+      - nodes: "1"
+      # Drifted nodes, mostly after new Auto Mode AMIs (about weekly), are
+      # replaced only between 06:00 and 10:00 UTC, at night in us-east-1.
+      - nodes: "0"
+        reasons: [Drifted]
+        schedule: "0 10 * * *"
+        duration: 20h
+  limits:
+    cpu: "{{ $.DedicatedNodeCPULimit }}"
+{{- end }}
 ---
 apiVersion: cert-manager.io/v1
 kind: Certificate
@@ -42,7 +131,7 @@ metadata:
   name: {{ .NodePoolName }}
   namespace: {{ .Namespace }}
   labels:
-    strimzi.io/cluster: {{ .ClusterName }}
+    strimzi.io/cluster: {{ quote .ClusterName }}
 {{- template "labels" . }}
 spec:
   replicas: {{ .Profile.Replicas }}
@@ -64,11 +153,33 @@ spec:
         class: "{{ .Platform.StorageClass }}"
         deleteClaim: false
         kraftMetadata: shared
+  template:
+    pod:
+      affinity:
+{{- if .Platform.DedicatedNodes }}
+        nodeAffinity: {{ template "tenant-node-affinity" . }}
+{{- end }}
+        # One broker per node.
+        podAntiAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            - topologyKey: kubernetes.io/hostname
+              labelSelector: {{ template "broker-selector" . }}
+{{- if gt .Profile.Zones 1 }}
+      # Brokers spread evenly over the zones, or wait until they can.
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: {{ .ZoneTopologyKey }}
+          whenUnsatisfiable: DoNotSchedule
+          labelSelector: {{ template "broker-selector" . }}
+{{- end }}
+{{- if .Platform.DedicatedNodes }}
+      tolerations: {{ template "tenant-tolerations" . }}
+{{- end }}
 ---
 apiVersion: kafka.strimzi.io/v1
 kind: Kafka
 metadata:
-  name: {{ .ClusterName }}
+  name: {{ quote .ClusterName }}
   namespace: {{ .Namespace }}
   labels:
 {{- template "labels" . }}
@@ -102,6 +213,9 @@ spec:
 {{- with .Platform.LoadBalancer.Class }}
           class: {{ . }}
 {{- end }}
+{{- with .Platform.LoadBalancer.ExternalTrafficPolicy }}
+          externalTrafficPolicy: {{ . }}
+{{- end }}
           brokerCertChainAndKey:
             secretName: {{ .ExternalListenerSecret }}
             certificate: tls.crt
@@ -120,12 +234,24 @@ spec:
       type: simple
     config:
       auto.create.topics.enable: false
+{{- if gt .Profile.Zones 1 }}
+      # Follower fetching: consumers that set client.rack read from a replica
+      # in their own zone, avoiding cross-zone transfer.
+      replica.selector.class: org.apache.kafka.common.replica.RackAwareReplicaSelector
+{{- end }}
       default.replication.factor: {{ .Profile.ReplicationFactor }}
       min.insync.replicas: {{ .Profile.MinInsyncReplicas }}
       offsets.topic.replication.factor: {{ .Profile.ReplicationFactor }}
       transaction.state.log.replication.factor: {{ .Profile.ReplicationFactor }}
       transaction.state.log.min.isr: {{ .Profile.MinInsyncReplicas }}
   entityOperator:
+{{- if .Platform.DedicatedNodes }}
+    template:
+      pod:
+        affinity:
+          nodeAffinity: {{ template "tenant-node-affinity" . }}
+        tolerations: {{ template "tenant-tolerations" . }}
+{{- end }}
     topicOperator: {}
     userOperator: {}
 ---
@@ -137,7 +263,7 @@ metadata:
   name: {{ .AdminUser }}
   namespace: {{ .Namespace }}
   labels:
-    strimzi.io/cluster: {{ .ClusterName }}
+    strimzi.io/cluster: {{ quote .ClusterName }}
 {{- template "labels" . }}
 spec:
   authentication:
@@ -172,7 +298,7 @@ metadata:
   name: {{ .AgentUser }}
   namespace: {{ .Namespace }}
   labels:
-    strimzi.io/cluster: {{ .ClusterName }}
+    strimzi.io/cluster: {{ quote .ClusterName }}
 {{- template "labels" . }}
 spec:
   authentication:

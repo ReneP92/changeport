@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"maps"
+	"strconv"
 	"text/template"
 
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -16,9 +17,13 @@ import (
 //go:embed templates/customer-cluster.yaml.tmpl
 var templates embed.FS
 
+// clusterTemplate quotes values that stand alone as YAML scalars with
+// "quote": a customer ID such as "true", "no" or "null" would otherwise be
+// read as a boolean or null.
 var clusterTemplate = template.Must(
 	template.New("customer-cluster.yaml.tmpl").
 		Option("missingkey=error").
+		Funcs(template.FuncMap{"quote": strconv.Quote}).
 		ParseFS(templates, "templates/customer-cluster.yaml.tmpl"),
 )
 
@@ -45,6 +50,12 @@ type templateValues struct {
 	ExternalListenerSecret string
 	AdminUser              string
 	AgentUser              string
+
+	// DedicatedNodePool names the customer's NodePool and NodeClass;
+	// DedicatedNodeCPULimit caps the NodePool at one node per broker plus one
+	// for replacing a node before the old one goes.
+	DedicatedNodePool     string
+	DedicatedNodeCPULimit int
 }
 
 // RenderYAML renders the customer cluster template for spec.
@@ -73,6 +84,9 @@ func RenderYAML(spec Spec) ([]byte, error) {
 		ExternalListenerSecret: ExternalListenerSecret,
 		AdminUser:              AdminUser,
 		AgentUser:              AgentUser,
+
+		DedicatedNodePool:     spec.DedicatedNodePool(),
+		DedicatedNodeCPULimit: (spec.Profile.Replicas + 1) * spec.Profile.NodeCPUs,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("render customer cluster template: %w", err)

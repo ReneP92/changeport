@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"slices"
 	"time"
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -13,11 +14,11 @@ import (
 )
 
 var (
-	namespaceGVK   = schema.GroupVersionKind{Version: "v1", Kind: "Namespace"}
 	secretGVK      = schema.GroupVersionKind{Version: "v1", Kind: "Secret"}
 	kafkaGVK       = schema.GroupVersionKind{Group: "kafka.strimzi.io", Version: "v1", Kind: "Kafka"}
 	kafkaUserGVK   = schema.GroupVersionKind{Group: "kafka.strimzi.io", Version: "v1", Kind: "KafkaUser"}
 	certificateGVK = schema.GroupVersionKind{Group: "cert-manager.io", Version: "v1", Kind: "Certificate"}
+	nodeClaimGVK   = schema.GroupVersionKind{Group: "karpenter.sh", Version: "v1", Kind: "NodeClaim"}
 )
 
 // Cluster is the part of the Kubernetes API the provisioner uses.
@@ -28,6 +29,9 @@ type Cluster interface {
 	Get(ctx context.Context, gvk schema.GroupVersionKind, namespace, name string) (*unstructured.Unstructured, error)
 	// Delete deletes the object; deleting a missing object is not an error.
 	Delete(ctx context.Context, gvk schema.GroupVersionKind, namespace, name string) error
+	// List returns the objects of a kind in namespace ("" for cluster-scoped
+	// kinds) that match labelSelector, such as "a=b".
+	List(ctx context.Context, gvk schema.GroupVersionKind, namespace, labelSelector string) ([]unstructured.Unstructured, error)
 }
 
 // Provisioner creates and removes customer Kafka clusters.
@@ -117,36 +121,85 @@ func (p *Provisioner) waitFor(ctx context.Context, obj *unstructured.Unstructure
 	return nil
 }
 
-// Deprovision deletes the customer's namespace, which removes the Kafka
-// cluster and everything else the template created.
-func (p *Provisioner) Deprovision(ctx context.Context, customerID string) error {
-	if err := ValidateCustomerID(customerID); err != nil {
+// Deprovision deletes the cluster-scoped resources the template created for
+// the customer: the namespace, which removes the Kafka cluster and everything
+// else in it, and on platforms with dedicated nodes the NodePool and
+// NodeClass, which removes the nodes.
+func (p *Provisioner) Deprovision(ctx context.Context, spec Spec) error {
+	objects, err := clusterScoped(spec)
+	if err != nil {
 		return err
 	}
-	namespace := Spec{CustomerID: customerID}.Namespace()
-	if err := p.Cluster.Delete(ctx, namespaceGVK, "", namespace); err != nil {
-		return fmt.Errorf("delete namespace %s: %w", namespace, err)
+	for _, obj := range objects {
+		if err := p.Cluster.Delete(ctx, obj.GroupVersionKind(), "", obj.GetName()); err != nil {
+			return fmt.Errorf("delete %s %s: %w", obj.GetKind(), obj.GetName(), err)
+		}
+		p.Logger.Info("deleting", "kind", obj.GetKind(), "object", obj.GetName(), "tenant", spec.CustomerID)
 	}
-	p.Logger.Info("deleting namespace", "namespace", namespace, "tenant", customerID)
 	return nil
 }
 
-// WaitDeleted blocks until the customer's namespace is gone, or ctx is done.
-func (p *Provisioner) WaitDeleted(ctx context.Context, customerID string) error {
-	namespace := Spec{CustomerID: customerID}.Namespace()
-	err := wait.PollUntilContextCancel(ctx, p.PollInterval, true, func(ctx context.Context) (bool, error) {
-		_, err := p.Cluster.Get(ctx, namespaceGVK, "", namespace)
-		if apierrors.IsNotFound(err) {
-			return true, nil
+// WaitDeleted blocks until the resources Deprovision deletes are gone, and on
+// platforms with dedicated nodes until the nodes are, or ctx is done.
+func (p *Provisioner) WaitDeleted(ctx context.Context, spec Spec) error {
+	objects, err := clusterScoped(spec)
+	if err != nil {
+		return err
+	}
+	for _, obj := range objects {
+		err := wait.PollUntilContextCancel(ctx, p.PollInterval, true, func(ctx context.Context) (bool, error) {
+			_, err := p.Cluster.Get(ctx, obj.GroupVersionKind(), "", obj.GetName())
+			if apierrors.IsNotFound(err) {
+				return true, nil
+			}
+			return false, err
+		})
+		if err != nil {
+			return fmt.Errorf("%s %s not deleted: %w", obj.GetKind(), obj.GetName(), err)
 		}
-		return false, err
+		p.Logger.Info("deleted", "kind", obj.GetKind(), "object", obj.GetName(), "tenant", spec.CustomerID)
+	}
+	if spec.Platform.DedicatedNodes == nil {
+		return nil
+	}
+	// Deleting a NodePool deletes its NodeClaims in the background.
+	selector := "karpenter.sh/nodepool=" + spec.DedicatedNodePool()
+	err = wait.PollUntilContextCancel(ctx, p.PollInterval, true, func(ctx context.Context) (bool, error) {
+		nodeClaims, err := p.Cluster.List(ctx, nodeClaimGVK, "", selector)
+		return len(nodeClaims) == 0, err
 	})
 	if err != nil {
-		return fmt.Errorf("namespace %s not deleted: %w", namespace, err)
+		return fmt.Errorf("nodes of NodePool %s not deleted: %w", spec.DedicatedNodePool(), err)
 	}
-	p.Logger.Info("namespace deleted", "namespace", namespace, "tenant", customerID)
+	p.Logger.Info("nodes deleted", "nodepool", spec.DedicatedNodePool(), "tenant", spec.CustomerID)
 	return nil
 }
+
+// clusterScoped returns the template's cluster-scoped objects for spec, in
+// the order to delete them: the namespace first, so that its pods leave the
+// dedicated nodes, then the NodePool before its NodeClass.
+func clusterScoped(spec Spec) ([]*unstructured.Unstructured, error) {
+	objects, err := Render(spec)
+	if err != nil {
+		return nil, err
+	}
+	var scoped []*unstructured.Unstructured
+	for _, obj := range objects {
+		if obj.GetNamespace() == "" {
+			if _, ok := deleteOrder[obj.GetKind()]; !ok {
+				return nil, fmt.Errorf("the template has a cluster-scoped %s with no delete order", obj.GetKind())
+			}
+			scoped = append(scoped, obj)
+		}
+	}
+	slices.SortStableFunc(scoped, func(a, b *unstructured.Unstructured) int {
+		return deleteOrder[a.GetKind()] - deleteOrder[b.GetKind()]
+	})
+	return scoped, nil
+}
+
+// deleteOrder ranks the template's cluster-scoped kinds for deletion.
+var deleteOrder = map[string]int{"Namespace": 0, "NodePool": 1, "NodeClass": 2}
 
 // strimziReady reports whether Strimzi has reconciled the current generation
 // of one of its resources, such as a Kafka or KafkaUser, and marked it Ready,

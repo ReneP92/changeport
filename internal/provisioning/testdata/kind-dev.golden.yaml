@@ -4,7 +4,7 @@ metadata:
   name: customer-acme
   labels:
     app.kubernetes.io/managed-by: changeport-provisioner
-    changeport.io/tenant: acme
+    changeport.io/tenant: "acme"
 ---
 apiVersion: cert-manager.io/v1
 kind: Certificate
@@ -13,7 +13,7 @@ metadata:
   namespace: customer-acme
   labels:
     app.kubernetes.io/managed-by: changeport-provisioner
-    changeport.io/tenant: acme
+    changeport.io/tenant: "acme"
 spec:
   # One wildcard name covers the bootstrap name and every broker's name.
   dnsNames:
@@ -35,9 +35,9 @@ metadata:
   name: dual-role
   namespace: customer-acme
   labels:
-    strimzi.io/cluster: acme
+    strimzi.io/cluster: "acme"
     app.kubernetes.io/managed-by: changeport-provisioner
-    changeport.io/tenant: acme
+    changeport.io/tenant: "acme"
 spec:
   replicas: 1
   roles:
@@ -58,15 +58,23 @@ spec:
         class: "standard"
         deleteClaim: false
         kraftMetadata: shared
+  template:
+    pod:
+      affinity:
+        # One broker per node.
+        podAntiAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            - topologyKey: kubernetes.io/hostname
+              labelSelector: {matchLabels: {strimzi.io/cluster: "acme", strimzi.io/pool-name: dual-role}}
 ---
 apiVersion: kafka.strimzi.io/v1
 kind: Kafka
 metadata:
-  name: acme
+  name: "acme"
   namespace: customer-acme
   labels:
     app.kubernetes.io/managed-by: changeport-provisioner
-    changeport.io/tenant: acme
+    changeport.io/tenant: "acme"
 spec:
   kafka:
     version: 4.3.1
@@ -88,6 +96,7 @@ spec:
         authentication:
           type: scram-sha-512
         configuration:
+          externalTrafficPolicy: Local
           brokerCertChainAndKey:
             secretName: external-listener-tls
             certificate: tls.crt
@@ -119,9 +128,9 @@ metadata:
   name: admin
   namespace: customer-acme
   labels:
-    strimzi.io/cluster: acme
+    strimzi.io/cluster: "acme"
     app.kubernetes.io/managed-by: changeport-provisioner
-    changeport.io/tenant: acme
+    changeport.io/tenant: "acme"
 spec:
   authentication:
     type: scram-sha-512
@@ -155,9 +164,9 @@ metadata:
   name: changeport-agent
   namespace: customer-acme
   labels:
-    strimzi.io/cluster: acme
+    strimzi.io/cluster: "acme"
     app.kubernetes.io/managed-by: changeport-provisioner
-    changeport.io/tenant: acme
+    changeport.io/tenant: "acme"
 spec:
   authentication:
     type: tls

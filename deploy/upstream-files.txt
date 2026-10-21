@@ -8,3 +8,16 @@
 # sha256 path url
 c58da61a66c20169d1c9c42736a9355b183ee17ac7779ab7875beaedbf972232 deploy/base/strimzi/upstream/strimzi-cluster-operator.yaml https://github.com/strimzi/strimzi-kafka-operator/releases/download/1.3.0/strimzi-cluster-operator-1.3.0.yaml
 e03b668ec8675214af6b0a671699d088f2601fa3878e0dbe1b41d3feafd1879f deploy/base/cert-manager/upstream/cert-manager.yaml https://github.com/cert-manager/cert-manager/releases/download/v1.21.2/cert-manager.yaml
+
+# Strimzi Drain Cleaner 1.8.0, the cert-manager variant of its install files.
+abc3070dbdd36a02fb7abe5157578512a28694c176df78965f97136ee91b195c deploy/base/drain-cleaner/upstream/000-Namespace.yaml https://raw.githubusercontent.com/strimzi/drain-cleaner/1.8.0/packaging/install/certmanager/000-Namespace.yaml
+07b36a6576aba431b1e58bc352f46a5c9a4bb9cdd930ce6e890263f0e2a71d15 deploy/base/drain-cleaner/upstream/010-ServiceAccount.yaml https://raw.githubusercontent.com/strimzi/drain-cleaner/1.8.0/packaging/install/certmanager/010-ServiceAccount.yaml
+bb77351b45f0d2265ab98492f80a2ed815a3064f5732d1cda76444ecae3b6c16 deploy/base/drain-cleaner/upstream/020-ClusterRole.yaml https://raw.githubusercontent.com/strimzi/drain-cleaner/1.8.0/packaging/install/certmanager/020-ClusterRole.yaml
+931991004ff485b3f30b792fbb895e900bce4f78fda7cc0d374b1dbd40c7f2d3 deploy/base/drain-cleaner/upstream/021-Role.yaml https://raw.githubusercontent.com/strimzi/drain-cleaner/1.8.0/packaging/install/certmanager/021-Role.yaml
+d8073a2047d19f5a0cb01a112fdc1fc81becfd2ee2478e245f97c80682ea9b9c deploy/base/drain-cleaner/upstream/030-ClusterRoleBinding.yaml https://raw.githubusercontent.com/strimzi/drain-cleaner/1.8.0/packaging/install/certmanager/030-ClusterRoleBinding.yaml
+f5310f8486d0a51ac228509e126fcdf46348cc822c5d701f53c51ed4e0cdd8f0 deploy/base/drain-cleaner/upstream/031-RoleBinding.yaml https://raw.githubusercontent.com/strimzi/drain-cleaner/1.8.0/packaging/install/certmanager/031-RoleBinding.yaml
+3f50138ed77af8f29bd2be4f416dead6738d2c895b3071e280582f1685aaed8e deploy/base/drain-cleaner/upstream/040-Issuer.yaml https://raw.githubusercontent.com/strimzi/drain-cleaner/1.8.0/packaging/install/certmanager/040-Issuer.yaml
+866d64ed16861f1d98ab67fb3368e93a5ac75401f2bd73a664b17a4aa76f0c42 deploy/base/drain-cleaner/upstream/041-Certificate.yaml https://raw.githubusercontent.com/strimzi/drain-cleaner/1.8.0/packaging/install/certmanager/041-Certificate.yaml
+d395085a1174f945daa7262c0c98a1b336f4fd067f1edb7f83fb878086932298 deploy/base/drain-cleaner/upstream/050-Service.yaml https://raw.githubusercontent.com/strimzi/drain-cleaner/1.8.0/packaging/install/certmanager/050-Service.yaml
+1aaa57edbc7b2baf996b3ca36330247254b2b656fd2d284f7e769a039ce9da10 deploy/base/drain-cleaner/upstream/060-Deployment.yaml https://raw.githubusercontent.com/strimzi/drain-cleaner/1.8.0/packaging/install/certmanager/060-Deployment.yaml
+2044c5f3276766a86910f7cc79e90ddd321aa9b6a765ebebeb9c4422beb9083f deploy/base/drain-cleaner/upstream/070-ValidatingWebhookConfiguration.yaml https://raw.githubusercontent.com/strimzi/drain-cleaner/1.8.0/packaging/install/certmanager/070-ValidatingWebhookConfiguration.yaml

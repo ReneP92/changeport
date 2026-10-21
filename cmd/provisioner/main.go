@@ -145,17 +145,23 @@ func runDeprovision(ctx context.Context, args []string, logger *slog.Logger, std
 	fs.SetOutput(stderr)
 	var common commonFlags
 	common.register(fs)
+	var cluster clusterFlags
+	cluster.register(fs)
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
-	if err := provisioning.ValidateCustomerID(common.customer); err != nil {
+	spec, err := cluster.spec(common.customer)
+	if err != nil {
+		return err
+	}
+	if err := spec.Validate(); err != nil {
 		return err
 	}
 	provisioner, err := newProvisioner(common.kubeContext, logger)
 	if err != nil {
 		return err
 	}
-	if err := provisioner.Deprovision(ctx, common.customer); err != nil {
+	if err := provisioner.Deprovision(ctx, spec); err != nil {
 		return err
 	}
 	if !common.wait {
@@ -163,7 +169,7 @@ func runDeprovision(ctx context.Context, args []string, logger *slog.Logger, std
 	}
 	ctx, cancel := context.WithTimeout(ctx, common.timeout)
 	defer cancel()
-	return provisioner.WaitDeleted(ctx, common.customer)
+	return provisioner.WaitDeleted(ctx, spec)
 }
 
 func runCredentials(ctx context.Context, args []string, logger *slog.Logger, stdout, stderr io.Writer) error {
