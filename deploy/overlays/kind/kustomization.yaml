@@ -6,3 +6,4 @@ resources:
   - ../../base/strimzi
   - ../../base/cert-manager
   - ../../base/object-store
+  - ../../base/victoria-metrics

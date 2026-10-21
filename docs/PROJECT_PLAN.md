@@ -228,7 +228,6 @@ The biggest risk is getting stuck in stage 1: managed Kafka can absorb all avail
 Phase 0 is about finding the design partner and setting up the foundations. Each item is tracked as an issue in the [Phase 0 milestone](https://github.com/ReneP92/changeport/milestone/1).
 
 - [ ] [Set up the AWS organization, dev and prod accounts and the Terraform state backend](https://github.com/ReneP92/changeport/issues/10) (region decided: us-east-1)
-- [ ] [Define the metrics labeling scheme](https://github.com/ReneP92/changeport/issues/4) (tenant, topic, client), with the tenant label from day one
 - [ ] [Wireframe onboarding, the topology map and time-based lag views](https://github.com/ReneP92/changeport/issues/5)
 - [ ] [Set the trigger for starting managed Connect](https://github.com/ReneP92/changeport/issues/7)
 - [ ] [Secure a domain for Changeport](https://github.com/ReneP92/changeport/issues/8), with DNS zones for the customer endpoints
@@ -251,6 +250,7 @@ Decided:
 - [x] Client auth: SASL/SCRAM over TLS first, mTLS when a customer asks
 - [x] Customer endpoints: stable names under our own domain with Let's Encrypt certificates, opaque customer IDs
 - [x] Platform components through kustomize overlays, no GitOps controller
+- [x] [Metrics labeling scheme](https://github.com/ReneP92/changeport/issues/4): tenant, cluster, env, node_id and zone on every broker series, topic and partition from Kafka, client and consumer group labels with KIP-714 in Phase 2; a curated allow list keeps a broker near 500 series, about 80,000 for 50 clusters (see [docs/metrics-labels.md](metrics-labels.md))
 - [x] [KIP-714 telemetry receiver](https://github.com/ReneP92/changeport/issues/34) moves from Phase 1 to Phase 2, to keep Phase 1 to the deployable cluster
 
 Deferred to Phase 6: [decide whether to adopt the topic-rewriting proxy](https://github.com/ReneP92/changeport/issues/2).

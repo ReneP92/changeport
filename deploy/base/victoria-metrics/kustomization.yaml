@@ -1,0 +1,17 @@
+# VictoriaMetrics single-node, the metrics store, in the metrics namespace.
+# It scrapes the brokers of every customer cluster itself (Kubernetes pod
+# discovery), labelling each series with its tenant as docs/metrics-labels.md
+# defines. Overlays set the environment (CHANGEPORT_ENV); the volume uses the
+# cluster's default storage class.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: metrics
+labels:
+  - pairs:
+      changeport.io/platform: victoria-metrics
+resources:
+  - victoria-metrics.yaml
+configMapGenerator:
+  - name: victoria-metrics-scrape
+    files:
+      - scrape.yaml

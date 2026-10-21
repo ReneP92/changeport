@@ -1,0 +1,40 @@
+# Scrape configuration of VictoriaMetrics, following docs/metrics-labels.md.
+# %{CHANGEPORT_ENV} is the environment, set by the overlay.
+global:
+  scrape_interval: 30s
+  external_labels:
+    env: "%{CHANGEPORT_ENV}"
+scrape_configs:
+  # The Strimzi Metrics Reporter on port 9404 of every customer's brokers and
+  # controllers.
+  - job_name: kafka
+    kubernetes_sd_configs:
+      - role: pod
+    relabel_configs:
+      - source_labels: [__meta_kubernetes_pod_label_strimzi_io_kind, __meta_kubernetes_pod_label_strimzi_io_component_type, __meta_kubernetes_pod_container_port_number]
+        regex: Kafka;kafka;9404
+        action: keep
+      # Every series carries its tenant; pods without one are not scraped.
+      - source_labels: [__meta_kubernetes_pod_label_changeport_io_tenant]
+        regex: .+
+        action: keep
+      - source_labels: [__meta_kubernetes_pod_label_changeport_io_tenant]
+        target_label: tenant
+      - source_labels: [__meta_kubernetes_pod_label_strimzi_io_cluster]
+        target_label: cluster
+      - source_labels: [__meta_kubernetes_pod_label_topology_kubernetes_io_zone]
+        target_label: zone
+      - source_labels: [__meta_kubernetes_pod_name]
+        regex: .*-([0-9]+)
+        target_label: node_id
+      # The pod name, which survives restarts, rather than its address.
+      - source_labels: [__meta_kubernetes_pod_name]
+        target_label: instance
+    metric_relabel_configs:
+      # The reporter always exports JVM and process metrics, whatever its
+      # allowList says; keep memory, garbage collection, threads and CPU.
+      - if: '{__name__=~"jvm_.*|process_.*", __name__!~"jvm_memory_(used|max)_bytes|jvm_gc_collection_seconds_(count|sum)|jvm_threads_current|process_cpu_seconds_total|process_open_fds"}'
+        action: drop
+      # Request latency only for producing and fetching.
+      - if: '{__name__=~"kafka_network_requestmetrics_totaltimems.*", request!~"Produce|Fetch|FetchConsumer|FetchFollower"}'
+        action: drop
