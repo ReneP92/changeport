@@ -13,6 +13,7 @@ ensure_kind
 ensure_kubectl
 
 build_kafka_image
+check_docker_disk
 ensure_kind_cluster
 ensure_cloud_provider_kind
 "$ROOT/hack/platform-apply.sh" kind

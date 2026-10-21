@@ -128,6 +128,9 @@ func runProvision(ctx context.Context, args []string, logger *slog.Logger, stder
 	if err != nil {
 		return err
 	}
+	if err := connectAWS(ctx, provisioner, spec); err != nil {
+		return err
+	}
 	// Provision itself waits for the listener certificate.
 	ctx, cancel := context.WithTimeout(ctx, common.timeout)
 	defer cancel()
@@ -159,6 +162,9 @@ func runDeprovision(ctx context.Context, args []string, logger *slog.Logger, std
 	}
 	provisioner, err := newProvisioner(common.kubeContext, logger)
 	if err != nil {
+		return err
+	}
+	if err := connectAWS(ctx, provisioner, spec); err != nil {
 		return err
 	}
 	if err := provisioner.Deprovision(ctx, spec); err != nil {
@@ -220,6 +226,21 @@ func runRender(args []string, stdout, stderr io.Writer) error {
 	}
 	_, err = stdout.Write(rendered)
 	return err
+}
+
+// connectAWS gives the provisioner access to EKS Pod Identity when the
+// platform's brokers get their credentials from it. The EKS cluster runs in
+// the same region as its tiered storage bucket.
+func connectAWS(ctx context.Context, provisioner *provisioning.Provisioner, spec provisioning.Spec) error {
+	if spec.Platform.TieredStorage.PodIdentity == nil {
+		return nil
+	}
+	podIdentities, err := provisioning.NewAWSPodIdentities(ctx, spec.Platform.TieredStorage.Region)
+	if err != nil {
+		return err
+	}
+	provisioner.PodIdentities = podIdentities
+	return nil
 }
 
 func newProvisioner(kubeContext string, logger *slog.Logger) (*provisioning.Provisioner, error) {

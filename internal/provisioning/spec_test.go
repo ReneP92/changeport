@@ -88,6 +88,28 @@ func TestKindKafkaImageMatchesDevScripts(t *testing.T) {
 	}
 }
 
+// TestKindTieredStorageMatchesTheObjectStore keeps the kind platform's bucket
+// and keys in step with the local object store in deploy/base/object-store.
+func TestKindTieredStorageMatchesTheObjectStore(t *testing.T) {
+	manifest, err := os.ReadFile("../../deploy/base/object-store/seaweedfs.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	storage := KindPlatform.TieredStorage
+	for _, want := range []string{
+		"AWS_ACCESS_KEY_ID: " + storage.StaticCredentials.AccessKeyID + "\n",
+		"AWS_SECRET_ACCESS_KEY: " + storage.StaticCredentials.SecretAccessKey + "\n",
+		"value: " + storage.Bucket + "\n",
+	} {
+		if !strings.Contains(string(manifest), want) {
+			t.Errorf("deploy/base/object-store/seaweedfs.yaml lacks %q from the kind platform", strings.TrimSpace(want))
+		}
+	}
+	if !strings.HasPrefix(storage.Endpoint, "http://seaweedfs.object-store.svc:8333") {
+		t.Errorf("kind tiered storage endpoint %q is not the object store's Service", storage.Endpoint)
+	}
+}
+
 func TestPlatformValidate(t *testing.T) {
 	tests := []struct {
 		name   string
@@ -148,6 +170,32 @@ func TestDedicatedNodesValidate(t *testing.T) {
 			nodes := *p.DedicatedNodes
 			tt.mutate(&nodes)
 			p.DedicatedNodes = &nodes
+			if err := p.validate(); err == nil {
+				t.Error("validate() = nil, want an error")
+			}
+		})
+	}
+}
+
+func TestTieredStorageValidate(t *testing.T) {
+	tests := []struct {
+		name     string
+		platform Platform
+		mutate   func(*TieredStorage)
+	}{
+		{"no bucket", KindPlatform, func(s *TieredStorage) { s.Bucket = "" }},
+		{"no region", KindPlatform, func(s *TieredStorage) { s.Region = "" }},
+		{"no credentials", KindPlatform, func(s *TieredStorage) { s.StaticCredentials = nil }},
+		{"empty static secret", KindPlatform, func(s *TieredStorage) { s.StaticCredentials = &StaticCredentials{AccessKeyID: "a"} }},
+		{"two kinds of credentials", EKSDevPlatform, func(s *TieredStorage) {
+			s.StaticCredentials = &StaticCredentials{AccessKeyID: "a", SecretAccessKey: "b"}
+		}},
+		{"Pod Identity without role", EKSDevPlatform, func(s *TieredStorage) { s.PodIdentity = &PodIdentity{ClusterName: "c"} }},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			p := tt.platform
+			tt.mutate(&p.TieredStorage)
 			if err := p.validate(); err == nil {
 				t.Error("validate() = nil, want an error")
 			}

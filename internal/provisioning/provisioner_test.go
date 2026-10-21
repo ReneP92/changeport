@@ -113,6 +113,19 @@ func (f *fakeCluster) List(_ context.Context, gvk schema.GroupVersionKind, names
 	return items, nil
 }
 
+// fakePodIdentities records Pod Identity calls.
+type fakePodIdentities struct{ calls []string }
+
+func (f *fakePodIdentities) Associate(_ context.Context, cluster, namespace, serviceAccount, roleName string) error {
+	f.calls = append(f.calls, "associate "+cluster+" "+namespace+"/"+serviceAccount+" "+roleName)
+	return nil
+}
+
+func (f *fakePodIdentities) Disassociate(_ context.Context, cluster, namespace, serviceAccount string) error {
+	f.calls = append(f.calls, "disassociate "+cluster+" "+namespace+"/"+serviceAccount)
+	return nil
+}
+
 func testProvisioner(cluster Cluster) *Provisioner {
 	p := New(cluster, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	p.PollInterval = time.Millisecond
@@ -128,6 +141,7 @@ func TestProvisionAppliesTemplateInOrder(t *testing.T) {
 	}
 	want := []string{
 		"Namespace:/customer-acme",
+		"Secret:customer-acme/tiered-storage-credentials",
 		"Certificate:customer-acme/external-listener",
 		"KafkaNodePool:customer-acme/dual-role",
 		"Kafka:customer-acme/acme",
@@ -147,8 +161,8 @@ func TestProvisionIsIdempotent(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if len(cluster.objects) != 6 {
-		t.Errorf("cluster holds %d objects after provisioning twice, want 6", len(cluster.objects))
+	if len(cluster.objects) != 7 {
+		t.Errorf("cluster holds %d objects after provisioning twice, want 7", len(cluster.objects))
 	}
 }
 
@@ -328,10 +342,50 @@ func TestDeprovisionDeletesNamespaceAndWaits(t *testing.T) {
 	}
 }
 
+func TestProvisionAssociatesTheBrokersOnEKS(t *testing.T) {
+	spec := Spec{CustomerID: "acme", Profile: ProductionProfile, Platform: EKSProdPlatform}
+	cluster := newFakeCluster()
+	p := testProvisioner(cluster)
+	if err := p.Provision(t.Context(), spec); err == nil || len(cluster.applied) != 0 {
+		t.Fatalf("Provision() without AWS access = %v after applying %v; want an error before applying anything", err, cluster.applied)
+	}
+	identities := &fakePodIdentities{}
+	p.PodIdentities = identities
+	if err := p.Provision(t.Context(), spec); err != nil {
+		t.Fatal(err)
+	}
+	want := "associate changeport-prod customer-acme/acme-kafka changeport-prod-kafka-broker"
+	if got := strings.Join(identities.calls, ","); got != want {
+		t.Errorf("Pod Identity calls = %s, want %s", got, want)
+	}
+	if err := p.Deprovision(t.Context(), spec); err != nil {
+		t.Fatal(err)
+	}
+	if got := identities.calls[len(identities.calls)-1]; got != "disassociate changeport-prod customer-acme/acme-kafka" {
+		t.Errorf("last Pod Identity call = %s, want the disassociation", got)
+	}
+}
+
+func TestProvisionLeavesPodIdentityAloneOnKind(t *testing.T) {
+	identities := &fakePodIdentities{}
+	p := testProvisioner(newFakeCluster())
+	p.PodIdentities = identities
+	if err := p.Provision(t.Context(), acme); err != nil {
+		t.Fatal(err)
+	}
+	if err := p.Deprovision(t.Context(), acme); err != nil {
+		t.Fatal(err)
+	}
+	if len(identities.calls) != 0 {
+		t.Errorf("Pod Identity calls on kind: %v", identities.calls)
+	}
+}
+
 func TestDeprovisionRemovesDedicatedNodes(t *testing.T) {
 	spec := Spec{CustomerID: "acme", Profile: ProductionProfile, Platform: EKSProdPlatform}
 	cluster := newFakeCluster()
 	p := testProvisioner(cluster)
+	p.PodIdentities = &fakePodIdentities{}
 	if err := p.Provision(t.Context(), spec); err != nil {
 		t.Fatal(err)
 	}

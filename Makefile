@@ -73,6 +73,11 @@ kafka-client: CUSTOMER ?= demo
 kafka-client: ## Open a shell with Kafka tools connected to CUSTOMER's public listener (default demo)
 	hack/kafka-client.sh $(CUSTOMER)
 
+.PHONY: tiered-storage-test
+tiered-storage-test: CUSTOMER ?= demo
+tiered-storage-test: ## Offload a topic of CUSTOMER (default demo) to the object store and read it back from offset 0
+	hack/tiered-storage-test.sh $(CUSTOMER)
+
 .PHONY: failover-test
 failover-test: ## Freeze a zone and drain a broker of a three-zone customer under load; no message may be lost
 	hack/failover-test.sh

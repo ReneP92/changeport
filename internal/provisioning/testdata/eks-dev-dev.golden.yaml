@@ -135,6 +135,11 @@ spec:
         kraftMetadata: shared
   template:
     pod:
+      volumes:
+        # The tiered storage plugin's cache of chunks fetched back from S3.
+        - name: tiered-storage-cache
+          emptyDir:
+            sizeLimit: 3Gi
       affinity:
         nodeAffinity: {requiredDuringSchedulingIgnoredDuringExecution: {nodeSelectorTerms: [{matchExpressions: [{key: changeport.io/tenant, operator: In, values: ["acme"]}]}]}}
         # One broker per node.
@@ -143,6 +148,10 @@ spec:
             - topologyKey: kubernetes.io/hostname
               labelSelector: {matchLabels: {strimzi.io/cluster: "acme", strimzi.io/pool-name: dual-role}}
       tolerations: [{key: changeport.io/tenant, operator: Equal, value: "acme", effect: NoSchedule}]
+    kafkaContainer:
+      volumeMounts:
+        - name: tiered-storage-cache
+          mountPath: /mnt/tiered-storage-cache
 ---
 apiVersion: kafka.strimzi.io/v1
 kind: Kafka
@@ -191,8 +200,28 @@ spec:
             service.beta.kubernetes.io/aws-load-balancer-scheme: "internet-facing"
     authorization:
       type: simple
+    # Topic history goes to S3 through the Aiven plugin in the Kafka image
+    # (images/kafka). Topics opt in with remote.storage.enable=true.
+    tieredStorage:
+      type: custom
+      remoteStorageManager:
+        className: io.aiven.kafka.tieredstorage.RemoteStorageManager
+        classPath: /opt/kafka/plugins/tiered-storage/*
+        config:
+          storage.backend.class: io.aiven.kafka.tieredstorage.storage.s3.S3Storage
+          storage.s3.bucket.name: "changeport-dev-tiered-storage"
+          storage.s3.region: "us-east-1"
+          key.prefix: "customer-acme/"
+          chunk.size: "4194304"
+          fetch.chunk.cache.class: io.aiven.kafka.tieredstorage.fetch.cache.DiskChunkCache
+          fetch.chunk.cache.path: /mnt/tiered-storage-cache
+          # 2 GiB, inside the cache volume's 3 GiB.
+          fetch.chunk.cache.size: "2147483648"
     config:
       auto.create.topics.enable: false
+      # Tiered topics keep a day on the brokers' disks; the rest is in S3.
+      log.local.retention.ms: 86400000
+      rlmm.config.remote.log.metadata.topic.replication.factor: 1
       default.replication.factor: 1
       min.insync.replicas: 1
       offsets.topic.replication.factor: 1

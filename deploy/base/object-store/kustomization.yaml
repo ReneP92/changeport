@@ -1,0 +1,12 @@
+# SeaweedFS, an S3-compatible object store standing in for S3 on kind, where
+# brokers offload topic history (tiered storage). It runs as one weed mini
+# process, which creates the bucket and enforces the keys at startup. EKS
+# uses S3 itself.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: object-store
+labels:
+  - pairs:
+      changeport.io/platform: object-store
+resources:
+  - seaweedfs.yaml

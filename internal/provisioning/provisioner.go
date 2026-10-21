@@ -36,9 +36,12 @@ type Cluster interface {
 
 // Provisioner creates and removes customer Kafka clusters.
 type Provisioner struct {
-	Cluster      Cluster
-	Logger       *slog.Logger
-	PollInterval time.Duration
+	Cluster Cluster
+	// PodIdentities is needed on platforms whose brokers get their tiered
+	// storage credentials from EKS Pod Identity.
+	PodIdentities PodIdentities
+	Logger        *slog.Logger
+	PollInterval  time.Duration
 }
 
 // New returns a Provisioner with default polling.
@@ -54,6 +57,17 @@ func (p *Provisioner) Provision(ctx context.Context, spec Spec) error {
 	objects, err := Render(spec)
 	if err != nil {
 		return err
+	}
+	// Pod Identity gives pods credentials when they start, so the association
+	// comes before the brokers.
+	if identity := spec.Platform.TieredStorage.PodIdentity; identity != nil {
+		if p.PodIdentities == nil {
+			return fmt.Errorf("platform %q needs EKS Pod Identity, but the provisioner has no AWS access", spec.Platform.Name)
+		}
+		if err := p.PodIdentities.Associate(ctx, identity.ClusterName, spec.Namespace(), spec.BrokerServiceAccount(), identity.RoleName); err != nil {
+			return err
+		}
+		p.Logger.Info("associated", "serviceaccount", spec.Namespace()+"/"+spec.BrokerServiceAccount(), "role", identity.RoleName, "tenant", spec.CustomerID)
 	}
 	for _, obj := range objects {
 		if err := p.Cluster.Apply(ctx, obj); err != nil {
@@ -135,6 +149,15 @@ func (p *Provisioner) Deprovision(ctx context.Context, spec Spec) error {
 			return fmt.Errorf("delete %s %s: %w", obj.GetKind(), obj.GetName(), err)
 		}
 		p.Logger.Info("deleting", "kind", obj.GetKind(), "object", obj.GetName(), "tenant", spec.CustomerID)
+	}
+	if identity := spec.Platform.TieredStorage.PodIdentity; identity != nil {
+		if p.PodIdentities == nil {
+			return fmt.Errorf("platform %q needs EKS Pod Identity, but the provisioner has no AWS access", spec.Platform.Name)
+		}
+		if err := p.PodIdentities.Disassociate(ctx, identity.ClusterName, spec.Namespace(), spec.BrokerServiceAccount()); err != nil {
+			return err
+		}
+		p.Logger.Info("disassociated", "serviceaccount", spec.Namespace()+"/"+spec.BrokerServiceAccount(), "tenant", spec.CustomerID)
 	}
 	return nil
 }

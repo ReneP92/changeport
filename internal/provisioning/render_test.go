@@ -91,8 +91,9 @@ func TestRenderProducesLabeledObjectsInApplyOrder(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// The certificate comes before the Kafka cluster that uses it.
-	wantKinds := []string{"Namespace", "Certificate", "KafkaNodePool", "Kafka", "KafkaUser", "KafkaUser"}
+	// The tiered storage keys and the certificate come before the Kafka
+	// cluster that uses them.
+	wantKinds := []string{"Namespace", "Secret", "Certificate", "KafkaNodePool", "Kafka", "KafkaUser", "KafkaUser"}
 	if len(objects) != len(wantKinds) {
 		t.Fatalf("got %d objects, want %d", len(objects), len(wantKinds))
 	}
@@ -114,9 +115,9 @@ func TestRenderProducesLabeledObjectsInApplyOrder(t *testing.T) {
 	if got := objects[0].GetName(); got != spec.Namespace() {
 		t.Errorf("namespace is named %q, want %q", got, spec.Namespace())
 	}
-	for _, i := range []int{2, 4, 5} {
-		if got := objects[i].GetLabels()["strimzi.io/cluster"]; got != objects[3].GetName() {
-			t.Errorf("%s belongs to cluster %q, want %q", objects[i].GetKind(), got, objects[3].GetName())
+	for _, i := range []int{3, 5, 6} {
+		if got := objects[i].GetLabels()["strimzi.io/cluster"]; got != objects[4].GetName() {
+			t.Errorf("%s belongs to cluster %q, want %q", objects[i].GetKind(), got, objects[4].GetName())
 		}
 	}
 }
