@@ -181,4 +181,6 @@ tf-validate: ## Validate every Terraform environment without a backend
 
 .PHONY: clean
 clean: ## Remove build output and downloaded tools
+	@# setup-envtest leaves its binaries read-only.
+	@if [ -d bin/envtest ]; then chmod -R u+w bin/envtest; fi
 	rm -rf bin deploy/base/*/upstream web/dist web/node_modules
