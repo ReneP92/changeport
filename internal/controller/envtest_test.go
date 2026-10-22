@@ -251,8 +251,17 @@ func TestCustomerLifecycle(t *testing.T) {
 	readyReason(t, c, name, "KafkaPending")
 	setStatus(t, c, kafkaGVK, namespace, name, strimziReadyStatus)
 	readyReason(t, c, name, "UsersPending")
-	for _, user := range []string{provisioning.AdminUser, provisioning.AgentUser} {
-		setStatus(t, c, kafkaUserGVK, namespace, user, strimziReadyStatus)
+	// Strimzi's User Operator makes every user of the template ready.
+	users := &unstructured.UnstructuredList{}
+	users.SetGroupVersionKind(kafkaUserGVK.GroupVersion().WithKind("KafkaUserList"))
+	if err := c.List(t.Context(), users, client.InNamespace(namespace)); err != nil {
+		t.Fatal(err)
+	}
+	if len(users.Items) < 3 {
+		t.Fatalf("the template created %d KafkaUsers, want the admin, agent and console users", len(users.Items))
+	}
+	for _, user := range users.Items {
+		setStatus(t, c, kafkaUserGVK, namespace, user.GetName(), strimziReadyStatus)
 	}
 	readyReason(t, c, name, "AgentPending")
 	setStatus(t, c, deploymentGVK, namespace, "changeport-agent", func(generation int64) map[string]any {
