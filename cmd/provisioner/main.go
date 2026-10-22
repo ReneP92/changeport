@@ -1,7 +1,6 @@
-// Command provisioner creates and removes dedicated customer Kafka clusters.
-//
-// It is the stub of the provisioning service: today a CLI, later driven by
-// the Changeport API.
+// Command provisioner creates and removes dedicated customer Kafka clusters:
+// as a CLI, and as the controller that turns every Customer resource into its
+// cluster.
 package main
 
 import (
@@ -16,14 +15,24 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/go-logr/logr"
+	"k8s.io/apimachinery/pkg/runtime"
+	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
+	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/clientcmd"
+	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/healthz"
+	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
 
+	"github.com/ReneP92/changeport/api/v1alpha1"
+	"github.com/ReneP92/changeport/internal/controller"
 	"github.com/ReneP92/changeport/internal/provisioning"
 )
 
 const usage = `Usage: provisioner <command> [flags]
 
 Commands:
+  controller   run the controller that provisions every Customer resource
   provision    create or update a customer's Kafka cluster
   deprovision  delete a customer's Kafka cluster and namespace
   credentials  print a client.properties for connecting as the customer's admin user
@@ -53,6 +62,8 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 	logger := slog.New(slog.NewTextHandler(stderr, nil))
 	command, args := args[0], args[1:]
 	switch command {
+	case "controller":
+		return runController(ctx, args, logger, stderr)
 	case "provision":
 		return runProvision(ctx, args, logger, stderr)
 	case "deprovision":
@@ -84,21 +95,43 @@ func (c *commonFlags) register(fs *flag.FlagSet) {
 	fs.DurationVar(&c.timeout, "timeout", 10*time.Minute, "how long the command and -wait may take")
 }
 
-// clusterFlags select the profile and platform of a customer's cluster, and
-// optionally other images than the platform's, such as the content-tagged
-// local builds the dev scripts pass so that rebuilt images roll the pods.
-type clusterFlags struct {
-	profile    string
+// platformFlags select the platform clusters run on, and optionally other
+// images than the platform's, such as locally built ones.
+type platformFlags struct {
 	platform   string
 	kafkaImage string
 	agentImage string
 }
 
+func (p *platformFlags) register(fs *flag.FlagSet) {
+	fs.StringVar(&p.platform, "platform", provisioning.KindPlatform.Name, "where the clusters run: kind, eks-dev or eks-prod")
+	fs.StringVar(&p.kafkaImage, "kafka-image", "", "broker image to use instead of the platform's")
+	fs.StringVar(&p.agentImage, "agent-image", "", "Kafka agent image to use instead of the platform's")
+}
+
+func (p *platformFlags) resolve() (provisioning.Platform, error) {
+	platform, err := provisioning.PlatformByName(p.platform)
+	if err != nil {
+		return provisioning.Platform{}, err
+	}
+	if p.kafkaImage != "" {
+		platform.KafkaImage = p.kafkaImage
+	}
+	if p.agentImage != "" {
+		platform.AgentImage = p.agentImage
+	}
+	return platform, nil
+}
+
+// clusterFlags select the profile and platform of a customer's cluster.
+type clusterFlags struct {
+	profile string
+	platformFlags
+}
+
 func (c *clusterFlags) register(fs *flag.FlagSet) {
 	fs.StringVar(&c.profile, "profile", provisioning.DevProfile.Name, "cluster size profile: dev, dev-ha or production")
-	fs.StringVar(&c.platform, "platform", provisioning.KindPlatform.Name, "where the cluster runs: kind, eks-dev or eks-prod")
-	fs.StringVar(&c.kafkaImage, "kafka-image", "", "broker image to use instead of the platform's")
-	fs.StringVar(&c.agentImage, "agent-image", "", "Kafka agent image to use instead of the platform's")
+	c.platformFlags.register(fs)
 }
 
 func (c *clusterFlags) spec(customer string) (provisioning.Spec, error) {
@@ -106,15 +139,9 @@ func (c *clusterFlags) spec(customer string) (provisioning.Spec, error) {
 	if err != nil {
 		return provisioning.Spec{}, err
 	}
-	platform, err := provisioning.PlatformByName(c.platform)
+	platform, err := c.resolve()
 	if err != nil {
 		return provisioning.Spec{}, err
-	}
-	if c.kafkaImage != "" {
-		platform.KafkaImage = c.kafkaImage
-	}
-	if c.agentImage != "" {
-		platform.AgentImage = c.agentImage
 	}
 	return provisioning.Spec{CustomerID: customer, Profile: profile, Platform: platform}, nil
 }
@@ -240,6 +267,79 @@ func runRender(args []string, stdout, stderr io.Writer) error {
 	return err
 }
 
+func runController(ctx context.Context, args []string, logger *slog.Logger, stderr io.Writer) error {
+	fs := flag.NewFlagSet("controller", flag.ContinueOnError)
+	fs.SetOutput(stderr)
+	kubeContext := fs.String("context", "", "kubeconfig context to use (default: the current context, or the pod's service account in a cluster)")
+	var platformFlags platformFlags
+	platformFlags.register(fs)
+	metricsAddress := fs.String("metrics-address", ":8080", `address of the metrics endpoint, or "0" for none`)
+	probeAddress := fs.String("probe-address", ":8081", "address of the /healthz and /readyz endpoints")
+	leaderElection := fs.Bool("leader-elect", false, "elect a leader, so that only one of several replicas reconciles")
+	leaderNamespace := fs.String("leader-election-namespace", "", "namespace of the leader election lease (default: the pod's own)")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	platform, err := platformFlags.resolve()
+	if err != nil {
+		return err
+	}
+	config, err := restConfig(*kubeContext)
+	if err != nil {
+		return err
+	}
+	cluster, err := provisioning.NewKubeCluster(config)
+	if err != nil {
+		return err
+	}
+	provisioner := provisioning.New(cluster, logger)
+	if identity := platform.TieredStorage.PodIdentity; identity != nil {
+		if provisioner.PodIdentities, err = provisioning.NewAWSPodIdentities(ctx, platform.TieredStorage.Region); err != nil {
+			return err
+		}
+	}
+
+	ctrl.SetLogger(logr.FromSlogHandler(logger.Handler()))
+	scheme := runtime.NewScheme()
+	if err := clientgoscheme.AddToScheme(scheme); err != nil {
+		return err
+	}
+	if err := v1alpha1.AddToScheme(scheme); err != nil {
+		return err
+	}
+	mgr, err := ctrl.NewManager(config, ctrl.Options{
+		Scheme:                  scheme,
+		Metrics:                 metricsserver.Options{BindAddress: *metricsAddress},
+		HealthProbeBindAddress:  *probeAddress,
+		LeaderElection:          *leaderElection,
+		LeaderElectionID:        "changeport-provisioner",
+		LeaderElectionNamespace: *leaderNamespace,
+		// The new leader starts right away when the old one shuts down.
+		LeaderElectionReleaseOnCancel: true,
+	})
+	if err != nil {
+		return fmt.Errorf("create the controller manager: %w", err)
+	}
+	reconciler := &controller.CustomerReconciler{
+		Client:         mgr.GetClient(),
+		Provisioner:    provisioner,
+		Platform:       platform,
+		PollInterval:   10 * time.Second,
+		ResyncInterval: 10 * time.Minute,
+	}
+	if err := reconciler.SetupWithManager(mgr); err != nil {
+		return err
+	}
+	if err := mgr.AddHealthzCheck("ping", healthz.Ping); err != nil {
+		return err
+	}
+	if err := mgr.AddReadyzCheck("ping", healthz.Ping); err != nil {
+		return err
+	}
+	logger.Info("controller starting", "platform", platform.Name, "kafkaImage", platform.KafkaImage, "agentImage", platform.AgentImage)
+	return mgr.Start(ctx)
+}
+
 // connectAWS gives the provisioner access to EKS Pod Identity when the
 // platform's brokers get their credentials from it. The EKS cluster runs in
 // the same region as its tiered storage bucket.
@@ -256,6 +356,20 @@ func connectAWS(ctx context.Context, provisioner *provisioning.Provisioner, spec
 }
 
 func newProvisioner(kubeContext string, logger *slog.Logger) (*provisioning.Provisioner, error) {
+	config, err := restConfig(kubeContext)
+	if err != nil {
+		return nil, err
+	}
+	cluster, err := provisioning.NewKubeCluster(config)
+	if err != nil {
+		return nil, err
+	}
+	return provisioning.New(cluster, logger), nil
+}
+
+// restConfig connects to the cluster of kubeContext in the kubeconfig, or,
+// without a kubeconfig in a pod, to the pod's own cluster.
+func restConfig(kubeContext string) (*rest.Config, error) {
 	config, err := clientcmd.NewNonInteractiveDeferredLoadingClientConfig(
 		clientcmd.NewDefaultClientConfigLoadingRules(),
 		&clientcmd.ConfigOverrides{CurrentContext: kubeContext},
@@ -263,9 +377,5 @@ func newProvisioner(kubeContext string, logger *slog.Logger) (*provisioning.Prov
 	if err != nil {
 		return nil, fmt.Errorf("load kubeconfig: %w", err)
 	}
-	cluster, err := provisioning.NewKubeCluster(config)
-	if err != nil {
-		return nil, err
-	}
-	return provisioning.New(cluster, logger), nil
+	return config, nil
 }

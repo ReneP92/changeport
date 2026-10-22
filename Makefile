@@ -1,6 +1,6 @@
 # Common development tasks. Run "make help" for the list.
 
-TOOLS := sigs.k8s.io/kind github.com/golangci/golangci-lint/v2/cmd/golangci-lint
+TOOLS := sigs.k8s.io/kind github.com/golangci/golangci-lint/v2/cmd/golangci-lint sigs.k8s.io/controller-tools/cmd/controller-gen
 PROFILE ?= dev
 KUBE_CONTEXT := kind-$(or $(CLUSTER_NAME),changeport)
 
@@ -17,8 +17,8 @@ build: ## Build all Go binaries into bin/
 	go build -o bin/ ./cmd/...
 
 .PHONY: test
-test: ## Run the Go unit tests
-	go test -race ./...
+test: ## Run the Go tests, the controller's against envtest's API server
+	hack/go-test.sh
 
 .PHONY: tools
 tools: ## Build the pinned tools from tools/go.mod into bin/
@@ -36,6 +36,10 @@ fmt: tools ## Format Go code
 tidy: ## Tidy the Go and tools modules
 	go mod tidy
 	go -C tools mod tidy
+
+.PHONY: generate
+generate: tools ## Generate the API's deep copy functions and CRDs from api/
+	bin/controller-gen object paths=./api/... crd output:crd:dir=deploy/base/provisioner
 
 .PHONY: golden
 golden: ## Regenerate the provisioning template golden files
@@ -130,6 +134,10 @@ failover-test: ## Freeze a zone and drain a broker of a three-zone customer unde
 .PHONY: provision
 provision: ## Provision CUSTOMER's Kafka cluster on kind (default acme, PROFILE=dev)
 	go run ./cmd/provisioner provision -context $(KUBE_CONTEXT) -customer $(CUSTOMER) -profile $(PROFILE) -wait
+
+.PHONY: controller
+controller: ## Run the Customer controller against kind until interrupted
+	@bash -c 'source hack/lib.sh && provisioner controller -metrics-address 0 -probe-address 0'
 
 .PHONY: deprovision
 deprovision: ## Delete CUSTOMER's Kafka cluster from kind

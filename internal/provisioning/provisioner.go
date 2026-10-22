@@ -50,37 +50,149 @@ func New(cluster Cluster, logger *slog.Logger) *Provisioner {
 	return &Provisioner{Cluster: cluster, Logger: logger, PollInterval: 5 * time.Second}
 }
 
-// Provision applies every resource of the customer's cluster in template
-// order. After a Certificate it waits until cert-manager has issued it, so
-// that the Kafka cluster never starts without its listener certificate. It is
-// idempotent: running it again converges the resources to the template.
-func (p *Provisioner) Provision(ctx context.Context, spec Spec) error {
+// Readiness is how far one part of a customer's cluster is.
+type Readiness struct {
+	Ready bool
+	// Object names the first object of the part that is not ready yet, such
+	// as "Kafka customer-acme/acme"; empty when Ready.
+	Object string
+	// Status describes the object's state for people, such as
+	// "NotReady=True (Creating)".
+	Status string
+}
+
+func (r Readiness) String() string {
+	if r.Object == "" {
+		return r.Status
+	}
+	return r.Object + ": " + r.Status
+}
+
+// Progress is how far a customer's cluster is, part by part, in the order
+// the parts get ready.
+type Progress struct {
+	// Certificate is the public listener's certificate. Nothing after it in
+	// the template is applied until cert-manager has issued it.
+	Certificate Readiness
+	Kafka       Readiness
+	// Users are the Kafka users and their credentials.
+	Users Readiness
+	// Agent is the Kafka agent next to the cluster, ready when the platform
+	// runs none.
+	Agent Readiness
+}
+
+// Ready reports whether every part of the cluster is ready.
+func (p Progress) Ready() bool {
+	return p.Certificate.Ready && p.Kafka.Ready && p.Users.Ready && p.Agent.Ready
+}
+
+// Reconcile applies the customer's resources in template order and reports
+// how far the cluster is, without waiting for anything: after a Certificate
+// that cert-manager has not issued yet it stops, so that the Kafka cluster
+// never starts without its listener certificate. Calling it again carries on
+// from there. It is idempotent: it converges the resources to the template.
+func (p *Provisioner) Reconcile(ctx context.Context, spec Spec) (Progress, error) {
 	objects, err := Render(spec)
 	if err != nil {
-		return err
+		return Progress{}, err
 	}
 	// Pod Identity gives pods credentials when they start, so the association
 	// comes before the brokers.
 	if identity := spec.Platform.TieredStorage.PodIdentity; identity != nil {
 		if p.PodIdentities == nil {
-			return fmt.Errorf("platform %q needs EKS Pod Identity, but the provisioner has no AWS access", spec.Platform.Name)
+			return Progress{}, fmt.Errorf("platform %q needs EKS Pod Identity, but the provisioner has no AWS access", spec.Platform.Name)
 		}
 		if err := p.PodIdentities.Associate(ctx, identity.ClusterName, spec.Namespace(), spec.BrokerServiceAccount(), identity.RoleName); err != nil {
-			return err
+			return Progress{}, err
 		}
-		p.Logger.Info("associated", "serviceaccount", spec.Namespace()+"/"+spec.BrokerServiceAccount(), "role", identity.RoleName, "tenant", spec.CustomerID)
 	}
 	for _, obj := range objects {
 		if err := p.Cluster.Apply(ctx, obj); err != nil {
-			return fmt.Errorf("apply %s %s: %w", obj.GetKind(), objectKey(obj), err)
+			return Progress{}, fmt.Errorf("apply %s %s: %w", obj.GetKind(), objectKey(obj), err)
 		}
-		p.Logger.Info("applied", "kind", obj.GetKind(), "object", objectKey(obj), "tenant", spec.CustomerID)
-		if obj.GroupVersionKind() == certificateGVK {
-			if err := p.waitFor(ctx, obj, certificateReady, spec.CustomerID); err != nil {
-				return err
-			}
+		p.Logger.Debug("applied", "kind", obj.GetKind(), "object", objectKey(obj), "tenant", spec.CustomerID)
+		if obj.GroupVersionKind() != certificateGVK {
+			continue
+		}
+		certificate, err := p.observe(ctx, []*unstructured.Unstructured{obj}, certificateGVK, certificateReady)
+		if err != nil {
+			return Progress{}, err
+		}
+		if !certificate.Ready {
+			waiting := Readiness{Status: "waiting for the listener certificate"}
+			return Progress{Certificate: certificate, Kafka: waiting, Users: waiting, Agent: waiting}, nil
 		}
 	}
+	progress := Progress{Certificate: Readiness{Ready: true, Status: "Issued"}}
+	parts := []struct {
+		readiness *Readiness
+		kind      schema.GroupVersionKind
+		ready     func(*unstructured.Unstructured) (bool, string)
+	}{
+		{&progress.Kafka, kafkaGVK, strimziReady},
+		{&progress.Users, kafkaUserGVK, strimziReady},
+		{&progress.Agent, deploymentGVK, deploymentReady},
+	}
+	for _, part := range parts {
+		if *part.readiness, err = p.observe(ctx, objects, part.kind, part.ready); err != nil {
+			return Progress{}, err
+		}
+	}
+	return progress, nil
+}
+
+// observe reports the readiness of the objects of one kind: that of the
+// first one not ready yet, or Ready when all are, or when there are none.
+func (p *Provisioner) observe(ctx context.Context, objects []*unstructured.Unstructured, kind schema.GroupVersionKind, ready func(*unstructured.Unstructured) (bool, string)) (Readiness, error) {
+	found := false
+	for _, obj := range objects {
+		if obj.GroupVersionKind() != kind {
+			continue
+		}
+		found = true
+		name := obj.GetKind() + " " + objectKey(obj)
+		current, err := p.Cluster.Get(ctx, kind, obj.GetNamespace(), obj.GetName())
+		if apierrors.IsNotFound(err) {
+			return Readiness{Object: name, Status: "not observed yet"}, nil
+		}
+		if err != nil {
+			return Readiness{}, fmt.Errorf("get %s: %w", name, err)
+		}
+		if done, status := ready(current); !done {
+			return Readiness{Object: name, Status: status}, nil
+		}
+	}
+	if !found {
+		return Readiness{Ready: true, Status: "None on this platform"}, nil
+	}
+	return Readiness{Ready: true, Status: "Ready"}, nil
+}
+
+// Provision applies every resource of the customer's cluster in template
+// order, waiting after a Certificate until cert-manager has issued it, like
+// Reconcile called until the certificate is issued. It does not wait for the
+// cluster itself; WaitReady does.
+func (p *Provisioner) Provision(ctx context.Context, spec Spec) error {
+	var last Readiness
+	err := wait.PollUntilContextCancel(ctx, p.PollInterval, true, func(ctx context.Context) (bool, error) {
+		progress, err := p.Reconcile(ctx, spec)
+		if err != nil {
+			return false, err
+		}
+		if progress.Certificate != last && !progress.Certificate.Ready {
+			p.Logger.Info("waiting", "object", progress.Certificate.Object, "tenant", spec.CustomerID, "status", progress.Certificate.Status)
+		}
+		last = progress.Certificate
+		return progress.Certificate.Ready, nil
+	})
+	if err != nil && last.Object != "" {
+		return fmt.Errorf("%s not ready (%s): %w", last.Object, last.Status, err)
+	}
+	if err != nil {
+		return err
+	}
+	p.Logger.Info("applied the template", "tenant", spec.CustomerID)
 	return nil
 }
 
@@ -148,13 +260,25 @@ func (p *Provisioner) waitFor(ctx context.Context, obj *unstructured.Unstructure
 // Deprovision deletes the cluster-scoped resources the template created for
 // the customer: the namespace, which removes the Kafka cluster and everything
 // else in it, and on platforms with dedicated nodes the NodePool and
-// NodeClass, which removes the nodes.
+// NodeClass, which removes the nodes. It is idempotent, and does not wait;
+// Deleted and WaitDeleted report when everything is gone.
 func (p *Provisioner) Deprovision(ctx context.Context, spec Spec) error {
 	objects, err := clusterScoped(spec)
 	if err != nil {
 		return err
 	}
 	for _, obj := range objects {
+		current, err := p.Cluster.Get(ctx, obj.GroupVersionKind(), "", obj.GetName())
+		if apierrors.IsNotFound(err) {
+			continue
+		}
+		if err != nil {
+			return fmt.Errorf("get %s %s: %w", obj.GetKind(), obj.GetName(), err)
+		}
+		// Calling Deprovision again while the deletion runs changes nothing.
+		if current.GetDeletionTimestamp() != nil {
+			continue
+		}
 		if err := p.Cluster.Delete(ctx, obj.GroupVersionKind(), "", obj.GetName()); err != nil {
 			return fmt.Errorf("delete %s %s: %w", obj.GetKind(), obj.GetName(), err)
 		}
@@ -172,39 +296,58 @@ func (p *Provisioner) Deprovision(ctx context.Context, spec Spec) error {
 	return nil
 }
 
-// WaitDeleted blocks until the resources Deprovision deletes are gone, and on
-// platforms with dedicated nodes until the nodes are, or ctx is done.
-func (p *Provisioner) WaitDeleted(ctx context.Context, spec Spec) error {
+// Deleted reports whether the resources Deprovision deletes are gone, and on
+// platforms with dedicated nodes whether the nodes are, and otherwise what
+// is left, without waiting.
+func (p *Provisioner) Deleted(ctx context.Context, spec Spec) (bool, string, error) {
 	objects, err := clusterScoped(spec)
+	if err != nil {
+		return false, "", err
+	}
+	for _, obj := range objects {
+		_, err := p.Cluster.Get(ctx, obj.GroupVersionKind(), "", obj.GetName())
+		if err == nil {
+			return false, fmt.Sprintf("%s %s is being deleted", obj.GetKind(), obj.GetName()), nil
+		}
+		if !apierrors.IsNotFound(err) {
+			return false, "", fmt.Errorf("get %s %s: %w", obj.GetKind(), obj.GetName(), err)
+		}
+	}
+	if spec.Platform.DedicatedNodes == nil {
+		return true, "", nil
+	}
+	// Deleting a NodePool deletes its NodeClaims in the background.
+	nodeClaims, err := p.Cluster.List(ctx, nodeClaimGVK, "", "karpenter.sh/nodepool="+spec.DedicatedNodePool())
+	if err != nil {
+		return false, "", fmt.Errorf("list the nodes of NodePool %s: %w", spec.DedicatedNodePool(), err)
+	}
+	if len(nodeClaims) > 0 {
+		return false, fmt.Sprintf("%d nodes of NodePool %s are being deleted", len(nodeClaims), spec.DedicatedNodePool()), nil
+	}
+	return true, "", nil
+}
+
+// WaitDeleted blocks until Deleted reports everything gone, or ctx is done.
+func (p *Provisioner) WaitDeleted(ctx context.Context, spec Spec) error {
+	last := ""
+	err := wait.PollUntilContextCancel(ctx, p.PollInterval, true, func(ctx context.Context) (bool, error) {
+		deleted, status, err := p.Deleted(ctx, spec)
+		if err != nil {
+			return false, err
+		}
+		if status != last && !deleted {
+			p.Logger.Info("waiting", "tenant", spec.CustomerID, "status", status)
+		}
+		last = status
+		return deleted, nil
+	})
+	if err != nil && last != "" {
+		return fmt.Errorf("not deleted (%s): %w", last, err)
+	}
 	if err != nil {
 		return err
 	}
-	for _, obj := range objects {
-		err := wait.PollUntilContextCancel(ctx, p.PollInterval, true, func(ctx context.Context) (bool, error) {
-			_, err := p.Cluster.Get(ctx, obj.GroupVersionKind(), "", obj.GetName())
-			if apierrors.IsNotFound(err) {
-				return true, nil
-			}
-			return false, err
-		})
-		if err != nil {
-			return fmt.Errorf("%s %s not deleted: %w", obj.GetKind(), obj.GetName(), err)
-		}
-		p.Logger.Info("deleted", "kind", obj.GetKind(), "object", obj.GetName(), "tenant", spec.CustomerID)
-	}
-	if spec.Platform.DedicatedNodes == nil {
-		return nil
-	}
-	// Deleting a NodePool deletes its NodeClaims in the background.
-	selector := "karpenter.sh/nodepool=" + spec.DedicatedNodePool()
-	err = wait.PollUntilContextCancel(ctx, p.PollInterval, true, func(ctx context.Context) (bool, error) {
-		nodeClaims, err := p.Cluster.List(ctx, nodeClaimGVK, "", selector)
-		return len(nodeClaims) == 0, err
-	})
-	if err != nil {
-		return fmt.Errorf("nodes of NodePool %s not deleted: %w", spec.DedicatedNodePool(), err)
-	}
-	p.Logger.Info("nodes deleted", "nodepool", spec.DedicatedNodePool(), "tenant", spec.CustomerID)
+	p.Logger.Info("deleted", "tenant", spec.CustomerID)
 	return nil
 }
 

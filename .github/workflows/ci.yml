@@ -32,6 +32,10 @@ jobs:
         run: |
           go mod tidy -diff
           go -C tools mod tidy -diff
+      - name: Check that the generated code is up to date
+        run: |
+          make generate
+          git diff --exit-code
       - name: Lint
         run: make lint
       - name: Test

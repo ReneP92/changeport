@@ -10,6 +10,9 @@ Kubernetes manifests that are not generated per customer.
   - `drain-cleaner/`: Strimzi Drain Cleaner, which turns the eviction of a
     Kafka pod, for example when a node is replaced, into a rolling restart by
     the Strimzi operator.
+  - `provisioner/`: the `Customer` CRD (`customers.changeport.io`), which
+    `make generate` writes from `api/v1alpha1`, and later the provisioning
+    controller that reconciles it.
   - `eks-storage/`: the encrypted gp3 StorageClass for EKS Auto Mode.
   - `object-store/`: SeaweedFS, standing in for S3 on kind, where brokers
     offload topic history.
@@ -44,5 +47,6 @@ make platform-check
 EKS cluster.
 
 Per-customer resources (namespace, Kafka, node pool) are not here: the
-provisioning service renders them from
-`internal/provisioning/templates/customer-cluster.yaml.tmpl`.
+provisioner renders them from
+`internal/provisioning/templates/customer-cluster.yaml.tmpl`, for each
+`Customer` resource.

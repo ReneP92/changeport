@@ -11,12 +11,13 @@ import (
 	"time"
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 )
 
 // fakeCluster is an in-memory Cluster. Like cert-manager, it issues every
-// Certificate as it is applied unless holdCertificates is set. onGet, when
+// Certificate as it is first applied unless holdCertificates is set. onGet, when
 // set, runs before every Get so tests can change objects while the
 // provisioner polls.
 type fakeCluster struct {
@@ -66,9 +67,16 @@ func (f *fakeCluster) Apply(_ context.Context, obj *unstructured.Unstructured) e
 		return f.applyErr
 	}
 	key := fakeKey(obj.GroupVersionKind(), obj.GetNamespace(), obj.GetName())
-	f.objects[key] = obj.DeepCopy()
+	applied := obj.DeepCopy()
+	// Like server-side apply, applying the spec leaves the status alone.
+	if old, ok := f.objects[key]; ok {
+		if status, ok := old.Object["status"]; ok {
+			applied.Object["status"] = status
+		}
+	}
+	f.objects[key] = applied
 	f.applied = append(f.applied, key)
-	if obj.GroupVersionKind() == certificateGVK && !f.holdCertificates {
+	if obj.GroupVersionKind() == certificateGVK && !f.holdCertificates && applied.Object["status"] == nil {
 		f.objects[key].Object["status"] = map[string]any{"conditions": []any{
 			map[string]any{"type": "Ready", "status": "True", "observedGeneration": int64(0)},
 		}}
@@ -451,5 +459,133 @@ func TestDeprovisionRejectsInvalidCustomerID(t *testing.T) {
 	spec := Spec{CustomerID: "kube-system/../x", Profile: DevProfile, Platform: KindPlatform}
 	if err := testProvisioner(newFakeCluster()).Deprovision(t.Context(), spec); err == nil {
 		t.Fatal("Deprovision() = nil, want a validation error")
+	}
+}
+
+func TestReconcileStopsAtTheUnissuedCertificate(t *testing.T) {
+	cluster := newFakeCluster()
+	cluster.holdCertificates = true
+	progress, err := testProvisioner(cluster).Reconcile(t.Context(), acme)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := Readiness{Object: "Certificate customer-acme/external-listener", Status: "no Ready condition"}
+	if progress.Certificate != want {
+		t.Errorf("certificate = %+v, want %+v", progress.Certificate, want)
+	}
+	if progress.Ready() || progress.Kafka.Ready || progress.Kafka.Status != "waiting for the listener certificate" {
+		t.Errorf("progress = %+v, want everything after the certificate waiting for it", progress)
+	}
+	if got := cluster.applied[len(cluster.applied)-1]; got != "Certificate:customer-acme/external-listener" {
+		t.Errorf("last applied %s; nothing may be applied before the certificate is issued", got)
+	}
+}
+
+func TestReconcileReportsEachPart(t *testing.T) {
+	cluster := newFakeCluster()
+	p := testProvisioner(cluster)
+	steps := []struct {
+		name   string
+		before func()
+		want   Progress
+	}{
+		{
+			name:   "operator has not seen the cluster",
+			before: func() {},
+			want: Progress{
+				Certificate: Readiness{Ready: true, Status: "Issued"},
+				Kafka:       Readiness{Object: "Kafka customer-acme/acme", Status: "operator has not reconciled the latest spec"},
+				Users:       Readiness{Object: "KafkaUser customer-acme/admin", Status: "operator has not reconciled the latest spec"},
+				Agent:       Readiness{Object: "Deployment customer-acme/changeport-agent", Status: "0 of 1 replicas updated, 0 available"},
+			},
+		},
+		{
+			name: "everything ready",
+			before: func() {
+				cluster.setStatus(kafkaGVK, acme.Namespace(), acme.ClusterName(), readyTrue)
+				cluster.setUsersReady(acme)
+			},
+			want: Progress{
+				Certificate: Readiness{Ready: true, Status: "Issued"},
+				Kafka:       Readiness{Ready: true, Status: "Ready"},
+				Users:       Readiness{Ready: true, Status: "Ready"},
+				Agent:       Readiness{Ready: true, Status: "Ready"},
+			},
+		},
+	}
+	for _, step := range steps {
+		step.before()
+		progress, err := p.Reconcile(t.Context(), acme)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if progress != step.want {
+			t.Errorf("%s: progress = %+v, want %+v", step.name, progress, step.want)
+		}
+		if progress.Ready() != (step.name == "everything ready") {
+			t.Errorf("%s: Ready() = %v", step.name, progress.Ready())
+		}
+	}
+}
+
+func TestReconcileWithoutAnAgent(t *testing.T) {
+	spec := acme
+	spec.Platform.AgentImage = ""
+	cluster := newFakeCluster()
+	progress, err := testProvisioner(cluster).Reconcile(t.Context(), spec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := (Readiness{Ready: true, Status: "None on this platform"}); progress.Agent != want {
+		t.Errorf("agent = %+v, want %+v", progress.Agent, want)
+	}
+}
+
+func TestReconcileReportsGetErrors(t *testing.T) {
+	p := testProvisioner(failingGets{newFakeCluster()})
+	if _, err := p.Reconcile(t.Context(), acme); err == nil || !strings.Contains(err.Error(), "Certificate customer-acme/external-listener") {
+		t.Fatalf("Reconcile() error = %v, want it to name the object it could not read", err)
+	}
+}
+
+// failingGets is a Cluster whose reads fail with something other than not
+// found, such as a lost connection.
+type failingGets struct{ *fakeCluster }
+
+func (failingGets) Get(context.Context, schema.GroupVersionKind, string, string) (*unstructured.Unstructured, error) {
+	return nil, errors.New("connection refused")
+}
+
+func TestDeletedReportsWhatIsLeft(t *testing.T) {
+	cluster := newFakeCluster()
+	p := testProvisioner(cluster)
+	if err := p.Provision(t.Context(), acme); err != nil {
+		t.Fatal(err)
+	}
+	deleted, status, err := p.Deleted(t.Context(), acme)
+	if err != nil || deleted || status != "Namespace customer-acme is being deleted" {
+		t.Fatalf("Deleted() before deprovisioning = %v, %q, %v", deleted, status, err)
+	}
+	if err := p.Deprovision(t.Context(), acme); err != nil {
+		t.Fatal(err)
+	}
+	if deleted, status, err := p.Deleted(t.Context(), acme); err != nil || !deleted {
+		t.Fatalf("Deleted() after deprovisioning = %v, %q, %v", deleted, status, err)
+	}
+}
+
+func TestDeprovisionLeavesADeletionInProgressAlone(t *testing.T) {
+	cluster := newFakeCluster()
+	p := testProvisioner(cluster)
+	if err := p.Provision(t.Context(), acme); err != nil {
+		t.Fatal(err)
+	}
+	// The namespace controller is still emptying the namespace.
+	cluster.objects[fakeKey(schema.GroupVersionKind{Version: "v1", Kind: "Namespace"}, "", acme.Namespace())].SetDeletionTimestamp(&metav1.Time{Time: time.Now()})
+	if err := p.Deprovision(t.Context(), acme); err != nil {
+		t.Fatal(err)
+	}
+	if len(cluster.deleted) != 0 {
+		t.Errorf("deleted %v again while its deletion runs", cluster.deleted)
 	}
 }
