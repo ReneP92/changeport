@@ -58,7 +58,29 @@ die() { printf 'error: %s\n' "$*" >&2; exit 1; }
 # local kind cluster unless a script sets it explicitly (hack/platform-apply.sh).
 kubectl() { "$KUBECTL_BIN" --context "$KUBE_CONTEXT" "$@"; }
 kind() { "$BIN_DIR/kind" "$@"; }
-provisioner() { go run ./cmd/provisioner "$1" -context "$KUBE_CONTEXT" "${@:2}"; }
+# Runs the provisioning CLI against KUBE_CONTEXT. provision also gets the
+# content-tagged local images, so that customers run the latest builds.
+provisioner() {
+  local images=()
+  if [[ $1 == provision ]]; then
+    for image in KAFKA_IMAGE AGENT_IMAGE; do
+      if docker image inspect "${!image}" >/dev/null 2>&1; then
+        images+=("-$(echo "${image%_IMAGE}" | tr '[:upper:]' '[:lower:]')-image" "$(content_tag "${!image}")")
+      fi
+    done
+  fi
+  go run ./cmd/provisioner "$1" -context "$KUBE_CONTEXT" "${images[@]}" "${@:2}"
+}
+
+# Prints the content-addressed name of a locally built image, such as
+# changeport/agent:7a88857b2635 for changeport/agent:local: a rebuild with
+# new content gets a new name, so the pods running it roll.
+content_tag() {
+  local id
+  id=$(docker image inspect -f '{{.Id}}' "$1")
+  id=${id#sha256:}
+  echo "${1%:*}:${id:0:12}"
+}
 
 sha256_of() {
   if command -v sha256sum >/dev/null; then sha256sum "$1" | cut -d' ' -f1; else shasum -a 256 "$1" | cut -d' ' -f1; fi
@@ -158,11 +180,13 @@ check_docker_disk() {
 build_kafka_image() {
   log "Building $KAFKA_IMAGE"
   docker buildx build --load --quiet -t "$KAFKA_IMAGE" images/kafka >/dev/null
+  docker tag "$KAFKA_IMAGE" "$(content_tag "$KAFKA_IMAGE")"
 }
 
 build_agent_image() {
   log "Building $AGENT_IMAGE"
   docker buildx build --load --quiet -t "$AGENT_IMAGE" -f images/agent/Dockerfile . >/dev/null
+  docker tag "$AGENT_IMAGE" "$(content_tag "$AGENT_IMAGE")"
 }
 
 cluster_exists() { kind get clusters 2>/dev/null | grep -x "$CLUSTER_NAME" >/dev/null; }
@@ -193,7 +217,7 @@ ensure_kind_cluster() {
   local image
   for image in "$KAFKA_IMAGE" "$AGENT_IMAGE"; do
     if docker image inspect "$image" >/dev/null 2>&1; then
-      kind load docker-image --name "$CLUSTER_NAME" --nodes "$workers" "$image" >/dev/null 2>&1
+      kind load docker-image --name "$CLUSTER_NAME" --nodes "$workers" "$(content_tag "$image")" >/dev/null 2>&1
     fi
   done
 }

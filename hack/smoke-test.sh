@@ -92,7 +92,7 @@ spec:
   restartPolicy: Never
   containers:
     - name: client
-      image: $KAFKA_IMAGE
+      image: $cluster_kafka_image
       command: [sh, -c, '$command']
       env:
         - name: LOG_DIR
@@ -120,6 +120,8 @@ YAML
 }
 
 internal="$customer-kafka-bootstrap:9093"
+# Pods in the cluster run the content-tagged image the nodes have loaded.
+cluster_kafka_image=$(content_tag "$KAFKA_IMAGE")
 tls_config='security.protocol=SSL\nssl.truststore.type=PEM\nssl.truststore.location=/cluster-ca/ca.crt\nrequest.timeout.ms=5000\ndefault.api.timeout.ms=10000\n'
 log "Listing topics as the agent user on the internal mTLS listener $internal"
 agent_topics=$(run_pod agent "cat /agent/user.key /agent/user.crt >/tmp/keystore.pem &&

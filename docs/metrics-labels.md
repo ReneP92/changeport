@@ -40,7 +40,27 @@ No label may take unbounded values: never message keys, offsets, client IP
 addresses or timestamps.
 
 The Kafka agent next to each cluster exports its own metrics
-(`changeport_agent_*`) with `tenant`, `cluster` and `instance`.
+(`changeport_agent_*`) with `tenant`, `cluster` and `instance`, and each
+consumer group's lag with `consumer_group` and `topic` added:
+
+| Metric | Meaning |
+| --- | --- |
+| `changeport_consumergroup_lag_seconds` | Age of the oldest message the group has not consumed yet, the highest over the topic's partitions |
+| `changeport_consumergroup_lag_messages` | Messages the group has not consumed yet, summed over the topic's partitions |
+| `changeport_consumergroup_lag_capped` | 1 when the lag is older than 23 hours, so `lag_seconds` is a lower bound |
+
+The agent measures lag every 30 seconds without reading any message. It
+reads each group's committed offsets and the partitions' end offsets, looks
+up the offsets at fixed times in Kafka's time index (15 seconds to 23 hours
+ago), and interpolates the age of the oldest unconsumed message between the
+two times around it. The estimate is exact under steady traffic and off by
+at most the gap between those two times otherwise: 15 seconds below a
+minute, half an hour around an hour and a half. It depends on producers'
+clocks, since it uses the time the producer gave each message. Classic and
+KIP-848 consumer groups are both covered; groups that keep their offsets
+outside Kafka are not. When a lookup fails, for example while a topic
+switches to tiered storage, the group keeps its last value instead of
+reporting a wrong one.
 
 ## Relabel rules
 
@@ -98,6 +118,9 @@ The design partner's cluster, with 3 brokers and an assumed 20 topics of 6
 partitions at replication factor 3, holds (20 × 6 + 100) × 3 = 660 partition
 replicas, 220 per broker. Each broker then sends about 135 + 220 + 22 × 8 ≈
 530 series, and the cluster about **1,600**.
+
+Consumer lag adds 3 series per consumer group and topic it reads, capped at
+2,000 pairs per cluster: 20 groups reading 3 topics each add 180 series.
 
 Fifty such clusters come to about **80,000** active series. At the 30-second
 scrape interval that is about 2,700 samples per second, well below the one

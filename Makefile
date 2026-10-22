@@ -113,6 +113,11 @@ agent-test: CUSTOMER ?= demo
 agent-test: ## Check that CUSTOMER's Kafka agent (default demo) turns on tiered storage for new topics
 	hack/agent-test.sh $(CUSTOMER)
 
+.PHONY: lag-test
+lag-test: CUSTOMER ?= demo
+lag-test: ## Check the consumer lag in seconds that CUSTOMER's Kafka agent (default demo) reports
+	hack/lag-test.sh $(CUSTOMER)
+
 .PHONY: tiered-storage-test
 tiered-storage-test: CUSTOMER ?= demo
 tiered-storage-test: ## Offload a topic of CUSTOMER (default demo) to the object store and read it back from offset 0

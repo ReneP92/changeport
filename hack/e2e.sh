@@ -4,10 +4,11 @@
 # template as the demo cluster, both clusters pass the smoke test side by side,
 # the metrics test checks that both customers' brokers are scraped with their
 # tenant, and the second customer is deprovisioned again. Then the agent test
-# checks that the Kafka agent tiers new topics, the tiered storage test
-# offloads a topic of the demo customer to the object store and reads it back,
-# and the failover test freezes a zone and drains a broker of a three-zone
-# customer under load. Set KEEP=1 to keep the customers. Run make dev-up first.
+# checks that the Kafka agent tiers new topics, the lag test checks its
+# consumer lag in seconds, the tiered storage test offloads a topic of the demo
+# customer to the object store and reads it back, and the failover test freezes
+# a zone and drains a broker of a three-zone customer under load. Set KEEP=1 to
+# keep the customers. Run make dev-up first.
 # shellcheck source=lib.sh
 source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 
@@ -37,7 +38,7 @@ done
 log "Checking that every image was preloaded"
 missing=$(kubectl get pods -A -o jsonpath='{range .items[*]}{.metadata.namespace}{range .spec.initContainers[*]}{" "}{.image}{end}{range .spec.containers[*]}{" "}{.image}{end}{"\n"}{end}' |
   awk '$1 != "kube-system" && $1 != "local-path-storage" { for (i = 2; i <= NF; i++) print $i }' | sort -u |
-  grep -vxF -f <(printf '%s\n' "${KIND_PRELOAD_IMAGES[@]}" "$KAFKA_IMAGE" "$AGENT_IMAGE") || true)
+  grep -vxF -f <(printf '%s\n' "${KIND_PRELOAD_IMAGES[@]}" "$(content_tag "$KAFKA_IMAGE")" "$(content_tag "$AGENT_IMAGE")") || true)
 [[ -z "$missing" ]] || die "pods run images that are not built or preloaded by hack/lib.sh:"$'\n'"$missing"
 
 if [[ ${KEEP:-0} != 1 ]]; then
@@ -46,6 +47,7 @@ if [[ ${KEEP:-0} != 1 ]]; then
 fi
 
 "$ROOT/hack/agent-test.sh" "$DEMO_CUSTOMER"
+"$ROOT/hack/lag-test.sh" "$DEMO_CUSTOMER"
 "$ROOT/hack/tiered-storage-test.sh" "$DEMO_CUSTOMER"
 "$ROOT/hack/failover-test.sh"
 log "End-to-end test passed"

@@ -21,6 +21,19 @@ func TestRenderCommandPrintsCustomerResources(t *testing.T) {
 	}
 }
 
+func TestRenderUsesImageOverrides(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	args := []string{"render", "-customer", "acme", "-kafka-image", "changeport/kafka:0123456789ab", "-agent-image", "changeport/agent:ba9876543210"}
+	if err := run(t.Context(), args, &stdout, &stderr); err != nil {
+		t.Fatalf("run() = %v, stderr: %s", err, stderr.String())
+	}
+	for _, want := range []string{"image: changeport/kafka:0123456789ab", "image: changeport/agent:ba9876543210"} {
+		if !strings.Contains(stdout.String(), want) {
+			t.Errorf("output does not contain %q", want)
+		}
+	}
+}
+
 func TestCommandErrors(t *testing.T) {
 	tests := []struct {
 		name string
