@@ -27,12 +27,23 @@ const (
 
 	// ExternalPort is the port of the public listener customers connect to.
 	ExternalPort = 9094
+	// InternalPort is the port of the internal mTLS listener.
+	InternalPort = 9093
 	// AdminUser is the KafkaUser customers connect as; its Secret holds the
 	// SCRAM password.
 	AdminUser = "admin"
 	// AgentUser is the KafkaUser of the platform's Kafka agent on the internal
 	// mTLS listener.
 	AgentUser = "changeport-agent"
+	// ConsoleUser is the KafkaUser of the Changeport console on the internal
+	// mTLS listener: it manages topics and reads cluster metadata, and cannot
+	// read or write messages.
+	ConsoleUser = "changeport-console"
+	// ConsoleNamespace is where the console runs.
+	ConsoleNamespace = "changeport"
+	// ConsoleServiceAccount is who the console runs as; each customer
+	// namespace lets it read the Secrets in Spec.ConsoleSecrets.
+	ConsoleServiceAccount = "changeport-console"
 	// ExternalListenerSecret holds the public listener's certificate, issued by
 	// cert-manager for the customer's names.
 	ExternalListenerSecret = "external-listener-tls"
@@ -90,6 +101,24 @@ func (s Spec) BootstrapHost() string { return "bootstrap." + s.Domain() }
 // BrokerHostTemplate is the public name of each broker, with Strimzi's
 // {nodeId} placeholder.
 func (s Spec) BrokerHostTemplate() string { return "b{nodeId}." + s.Domain() }
+
+// InternalBootstrapAddress is the bootstrap address of the internal mTLS
+// listener, which the platform's own clients use from inside the cluster.
+func (s Spec) InternalBootstrapAddress() string {
+	return fmt.Sprintf("%s-kafka-bootstrap.%s.svc:%d", s.ClusterName(), s.Namespace(), InternalPort)
+}
+
+// ClusterCASecret holds the CA certificate of the internal listener, which
+// Strimzi creates.
+func (s Spec) ClusterCASecret() string { return s.ClusterName() + "-cluster-ca-cert" }
+
+// ConsoleSecrets are the Secrets in the customer's namespace the console may
+// read: its own client certificate and the cluster CA for the internal
+// listener, and the admin user's credentials and the public listener's CA
+// for the client.properties customers download.
+func (s Spec) ConsoleSecrets() []string {
+	return []string{ConsoleUser, s.ClusterCASecret(), AdminUser, ExternalListenerSecret}
+}
 
 // BootstrapAddress is the public bootstrap address customers connect to.
 func (s Spec) BootstrapAddress() string {

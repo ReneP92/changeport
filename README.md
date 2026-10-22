@@ -84,6 +84,8 @@ for progress.
 | `cmd/provisioner` | Creates and removes customer Kafka clusters: a CLI, and the controller that reconciles `Customer` resources |
 | `api/v1alpha1` | The `Customer` resource (`customers.changeport.io`); `make generate` writes its CRD into `deploy/base/provisioner` |
 | `internal/controller` | The `Customer` controller, which provisions, reports status and deprovisions through a finalizer |
+| `internal/clusters` | The console's Kafka admin clients, one per customer cluster, connected on demand with certificates that follow Strimzi's renewals |
+| `internal/metrics` | The console's named VictoriaMetrics queries, which always select the customer's tenant |
 | `cmd/agent` | The Kafka agent next to every customer's cluster: turns on tiered storage for every topic that can use it |
 | `internal/provisioning` | The per-customer template and the code that applies it through the Kubernetes API |
 | `web` | The console's React app, built and tested with Bun (see [web/README.md](web/README.md)) |
@@ -180,6 +182,17 @@ in seconds the agent reports, for a classic and a KIP-848 consumer group:
 
 ```bash
 make lag-test
+```
+
+The console reaches each customer's cluster as the Kafka user
+`changeport-console` on the internal mTLS listener, and its service account
+may read only the four Secrets it needs in each customer namespace. The
+console access test checks both from the `changeport` namespace: the console
+user may create, describe and delete topics and list consumer groups, but
+producing and consuming are refused:
+
+```bash
+make console-access-test
 ```
 
 The tiered storage test offloads a topic with small segments to the local

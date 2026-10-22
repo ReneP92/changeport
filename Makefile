@@ -130,6 +130,11 @@ lag-test: CUSTOMER ?= demo
 lag-test: ## Check the consumer lag in seconds that CUSTOMER's Kafka agent (default demo) reports
 	hack/lag-test.sh $(CUSTOMER)
 
+.PHONY: console-access-test
+console-access-test: CUSTOMER ?= demo
+console-access-test: ## Check that the console may manage CUSTOMER's topics (default demo) but not read or write messages
+	hack/console-access-test.sh $(CUSTOMER)
+
 .PHONY: tiered-storage-test
 tiered-storage-test: CUSTOMER ?= demo
 tiered-storage-test: ## Offload a topic of CUSTOMER (default demo) to the object store and read it back from offset 0

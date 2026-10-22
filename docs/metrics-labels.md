@@ -62,6 +62,16 @@ outside Kafka are not. When a lookup fails, for example while a topic
 switches to tiered storage, the group keeps its last value instead of
 reporting a wrong one.
 
+## Console queries
+
+The console never sends PromQL from the browser. It asks for named queries
+(`internal/metrics`): bytes in and out and messages in per topic, each
+topic's size on the brokers and in tiered storage, and each consumer group's
+lag in seconds and messages. The server writes the PromQL and always selects
+the signed-in customer's `tenant`, with any topic or consumer group quoted as
+a label value. The end-to-end test runs every named query against the local
+VictoriaMetrics.
+
 ## Relabel rules
 
 `deploy/base/victoria-metrics/scrape.yaml` scrapes port 9404 of every pod

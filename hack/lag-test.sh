@@ -77,6 +77,8 @@ check() {
 
 check "$classic" 100
 check "$kip848" 50
+# The console's lag queries see the groups while they exist.
+check_named_queries "$customer" lag_seconds,lag_messages
 
 kafka kafka-topics.sh --bootstrap-server "$bootstrap" --command-config /config/client.properties --delete --topic "$topic"
 for group in "$classic" "$kip848"; do
