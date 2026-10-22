@@ -41,6 +41,33 @@ tidy: ## Tidy the Go and tools modules
 golden: ## Regenerate the provisioning template golden files
 	go test ./internal/provisioning -run Golden -update
 
+##@ Web (web/, run by the pinned Bun in bin/)
+
+.PHONY: web-install
+web-install: ## Install the web app's dependencies exactly as bun.lock pins them
+	hack/bun.sh install --frozen-lockfile
+
+.PHONY: web-dev
+web-dev: web-install ## Run the web app with hot reload on http://localhost:5173
+	hack/bun.sh run dev
+
+.PHONY: web-check
+web-check: web-install ## Lint, type-check, format-check, unit test and build the web app
+	hack/bun.sh run lint
+	hack/bun.sh run typecheck
+	hack/bun.sh run format:check
+	hack/bun.sh run test
+	hack/bun.sh run build
+
+.PHONY: web-e2e
+web-e2e: web-install ## Run the web app's Playwright tests in Chromium against a production build
+	hack/bun.sh x playwright install $(if $(CI),--with-deps) chromium
+	hack/bun.sh run e2e
+
+.PHONY: check-text
+check-text: ## Fail on em dashes anywhere in the repository
+	hack/check-text.sh
+
 ##@ Images
 
 .PHONY: kafka-image
@@ -137,4 +164,4 @@ tf-validate: ## Validate every Terraform environment without a backend
 
 .PHONY: clean
 clean: ## Remove build output and downloaded tools
-	rm -rf bin deploy/base/*/upstream
+	rm -rf bin deploy/base/*/upstream web/dist web/node_modules

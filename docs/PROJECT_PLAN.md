@@ -257,7 +257,7 @@ Decided:
 - [x] Platform components through kustomize overlays, no GitOps controller
 - [x] [Metrics labeling scheme](https://github.com/ReneP92/changeport/issues/4): tenant, cluster, env, node_id and zone on every broker series, topic and partition from Kafka, client and consumer group labels with KIP-714 in Phase 2; a curated allow list keeps a broker near 500 series, about 80,000 for 50 clusters (see [docs/metrics-labels.md](metrics-labels.md))
 - [x] User auth: Clerk, with organizations as customers and a staff organization for operators
-- [x] Console: one Go service with the embedded React app; a `Customer` resource and a provisioning controller; a console Kafka user that cannot read messages; Bun for all TypeScript
+- [x] Console: one Go service with the embedded React app; a `Customer` resource and a provisioning controller; a console Kafka user that cannot read messages; Bun for all TypeScript, including Playwright's test runner, so no Node is needed anywhere
 - [x] [KIP-714 telemetry receiver](https://github.com/ReneP92/changeport/issues/34) moves from Phase 1 to Phase 2, to keep Phase 1 to the deployable cluster
 
 Deferred to Phase 6: [decide whether to adopt the topic-rewriting proxy](https://github.com/ReneP92/changeport/issues/2).

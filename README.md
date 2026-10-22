@@ -84,7 +84,7 @@ for progress.
 | `cmd/provisioner` | Stub of the provisioning service: creates and removes customer Kafka clusters |
 | `cmd/agent` | The Kafka agent next to every customer's cluster: turns on tiered storage for every topic that can use it |
 | `internal/provisioning` | The per-customer template and the code that applies it through the Kubernetes API |
-| `web` | React frontend (placeholder) |
+| `web` | The console's React app, built and tested with Bun (see [web/README.md](web/README.md)) |
 | `terraform` | Base infrastructure per environment: VPC, EKS, S3, IAM (empty modules, nothing applied) |
 | `deploy` | Kubernetes manifests: the kind cluster, and the platform components (Strimzi, cert-manager) with one overlay per environment |
 | `images` | Container images we build: Strimzi's Kafka image plus the tiered storage plugin, and the Kafka agent |
@@ -227,10 +227,13 @@ go run ./cmd/provisioner render -customer acme -profile production -platform eks
 
 ```bash
 make lint test
+make web-check web-e2e
+make check-text
 ```
 
-CI runs the same Go lint and tests, plus `make tf-fmt tf-validate` and
-`make shellcheck`, and on every pull request the whole end-to-end suite on a
+CI runs the same Go lint and tests, the web app's checks and Playwright
+tests, `make tf-fmt tf-validate`, `make shellcheck`, and `make check-text`,
+which fails on any em dash in the repository, and on every pull request the whole end-to-end suite on a
 fresh kind cluster: `make dev-up e2e platform-check`, where `platform-check`
 also server-side dry-runs the EKS overlays. When that job fails, it uploads
 the output of `hack/diagnostics.sh` (pods, events, resources and logs) as the

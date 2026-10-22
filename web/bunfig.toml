@@ -1,0 +1,12 @@
+# Scripts and tools run on Bun, even those whose shebang names node.
+[run]
+bun = true
+
+# bun test runs the unit tests in a browser-like DOM (happy-dom).
+[test]
+preload = ["./src/test/setup.ts"]
+root = "./src"
+
+# bun add saves exact versions; bun.lock pins the rest of the tree.
+[install]
+exact = true
