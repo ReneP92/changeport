@@ -82,6 +82,14 @@ kafka-image: ## Build the Kafka broker image (images/kafka) for this machine as 
 agent-image: ## Build the Kafka agent image (images/agent) for this machine as changeport/agent:local
 	@bash -c 'source hack/lib.sh && build_agent_image'
 
+.PHONY: provisioner-image
+provisioner-image: ## Build the provisioner image (images/provisioner) for this machine as changeport/provisioner:local
+	@bash -c 'source hack/lib.sh && build_provisioner_image'
+
+.PHONY: provisioner-reload
+provisioner-reload: ## Rebuild the provisioner and roll it out on kind
+	@bash -c 'source hack/lib.sh && build_provisioner_image && ensure_kind && ensure_kubectl && ensure_kind_cluster && hack/platform-apply.sh kind'
+
 .PHONY: kafka-image-test
 kafka-image-test: ## Start a broker from the Kafka image with tiered storage configured (IMAGE=changeport/kafka:local)
 	hack/kafka-image-test.sh $(IMAGE)
@@ -134,10 +142,6 @@ failover-test: ## Freeze a zone and drain a broker of a three-zone customer unde
 .PHONY: provision
 provision: ## Provision CUSTOMER's Kafka cluster on kind (default acme, PROFILE=dev)
 	go run ./cmd/provisioner provision -context $(KUBE_CONTEXT) -customer $(CUSTOMER) -profile $(PROFILE) -wait
-
-.PHONY: controller
-controller: ## Run the Customer controller against kind until interrupted
-	@bash -c 'source hack/lib.sh && provisioner controller -metrics-address 0 -probe-address 0'
 
 .PHONY: deprovision
 deprovision: ## Delete CUSTOMER's Kafka cluster from kind

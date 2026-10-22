@@ -17,9 +17,7 @@ import (
 )
 
 // fakeCluster is an in-memory Cluster. Like cert-manager, it issues every
-// Certificate as it is first applied unless holdCertificates is set. onGet, when
-// set, runs before every Get so tests can change objects while the
-// provisioner polls.
+// Certificate as it is first applied unless holdCertificates is set.
 type fakeCluster struct {
 	mu               sync.Mutex
 	objects          map[string]*unstructured.Unstructured
@@ -27,7 +25,6 @@ type fakeCluster struct {
 	deleted          []string
 	applyErr         error
 	holdCertificates bool
-	onGet            func(f *fakeCluster)
 }
 
 func newFakeCluster() *fakeCluster {
@@ -87,9 +84,6 @@ func (f *fakeCluster) Apply(_ context.Context, obj *unstructured.Unstructured) e
 func (f *fakeCluster) Get(_ context.Context, gvk schema.GroupVersionKind, namespace, name string) (*unstructured.Unstructured, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	if f.onGet != nil {
-		f.onGet(f)
-	}
 	obj, ok := f.objects[fakeKey(gvk, namespace, name)]
 	if !ok {
 		return nil, apierrors.NewNotFound(schema.GroupResource{Group: gvk.Group, Resource: gvk.Kind}, name)
@@ -110,9 +104,6 @@ func (f *fakeCluster) Delete(_ context.Context, gvk schema.GroupVersionKind, nam
 func (f *fakeCluster) List(_ context.Context, gvk schema.GroupVersionKind, namespace, labelSelector string) ([]unstructured.Unstructured, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	if f.onGet != nil {
-		f.onGet(f)
-	}
 	key, value, _ := strings.Cut(labelSelector, "=")
 	var items []unstructured.Unstructured
 	for _, obj := range f.objects {
@@ -137,18 +128,27 @@ func (f *fakePodIdentities) Disassociate(_ context.Context, cluster, namespace, 
 }
 
 func testProvisioner(cluster Cluster) *Provisioner {
-	p := New(cluster, slog.New(slog.NewTextHandler(io.Discard, nil)))
-	p.PollInterval = time.Millisecond
-	return p
+	return New(cluster, slog.New(slog.NewTextHandler(io.Discard, nil)))
+}
+
+// provision applies the whole template for spec, as the controller does once
+// the listener certificate is issued, which the fake cluster does at once.
+func provision(t *testing.T, p *Provisioner, spec Spec) {
+	t.Helper()
+	progress, err := p.Reconcile(t.Context(), spec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !progress.Certificate.Ready {
+		t.Fatalf("Reconcile() stopped at the certificate: %v", progress.Certificate)
+	}
 }
 
 var acme = Spec{CustomerID: "acme", Profile: DevProfile, Platform: KindPlatform}
 
-func TestProvisionAppliesTemplateInOrder(t *testing.T) {
+func TestReconcileAppliesTemplateInOrder(t *testing.T) {
 	cluster := newFakeCluster()
-	if err := testProvisioner(cluster).Provision(t.Context(), acme); err != nil {
-		t.Fatal(err)
-	}
+	provision(t, testProvisioner(cluster), acme)
 	want := []string{
 		"Namespace:/customer-acme",
 		"Secret:customer-acme/tiered-storage-credentials",
@@ -164,92 +164,33 @@ func TestProvisionAppliesTemplateInOrder(t *testing.T) {
 	}
 }
 
-func TestProvisionIsIdempotent(t *testing.T) {
+func TestReconcileIsIdempotent(t *testing.T) {
 	cluster := newFakeCluster()
 	p := testProvisioner(cluster)
 	for range 2 {
-		if err := p.Provision(t.Context(), acme); err != nil {
-			t.Fatal(err)
-		}
+		provision(t, p, acme)
 	}
 	if len(cluster.objects) != 8 {
 		t.Errorf("cluster holds %d objects after provisioning twice, want 8", len(cluster.objects))
 	}
 }
 
-func TestProvisionWaitsForTheListenerCertificate(t *testing.T) {
-	cluster := newFakeCluster()
-	cluster.holdCertificates = true
-	ctx, cancel := context.WithTimeout(t.Context(), 20*time.Millisecond)
-	defer cancel()
-	err := testProvisioner(cluster).Provision(ctx, acme)
-	if !errors.Is(err, context.DeadlineExceeded) || !strings.Contains(err.Error(), "Certificate customer-acme/external-listener") {
-		t.Fatalf("Provision() error = %v, want a deadline error naming the certificate", err)
-	}
-	if got := cluster.applied[len(cluster.applied)-1]; got != "Certificate:customer-acme/external-listener" {
-		t.Errorf("last applied %s; nothing may be applied before the certificate is issued", got)
-	}
-}
-
-func TestProvisionReportsApplyErrors(t *testing.T) {
+func TestReconcileReportsApplyErrors(t *testing.T) {
 	cluster := newFakeCluster()
 	cluster.applyErr = errors.New("forbidden")
-	err := testProvisioner(cluster).Provision(t.Context(), acme)
+	_, err := testProvisioner(cluster).Reconcile(t.Context(), acme)
 	if err == nil || !strings.Contains(err.Error(), "Namespace customer-acme") {
-		t.Fatalf("Provision() error = %v, want it to name the failing object", err)
+		t.Fatalf("Reconcile() error = %v, want it to name the failing object", err)
 	}
 }
 
-func TestProvisionRejectsInvalidSpec(t *testing.T) {
+func TestReconcileRejectsInvalidSpec(t *testing.T) {
 	cluster := newFakeCluster()
-	if err := testProvisioner(cluster).Provision(t.Context(), Spec{CustomerID: "BAD", Profile: DevProfile, Platform: KindPlatform}); err == nil {
-		t.Fatal("Provision() = nil, want a validation error")
+	if _, err := testProvisioner(cluster).Reconcile(t.Context(), Spec{CustomerID: "BAD", Profile: DevProfile, Platform: KindPlatform}); err == nil {
+		t.Fatal("Reconcile() = nil, want a validation error")
 	}
 	if len(cluster.applied) != 0 {
 		t.Errorf("applied %v for an invalid spec", cluster.applied)
-	}
-}
-
-func TestWaitReadyReturnsOnceKafkaUsersAndAgentAreReady(t *testing.T) {
-	cluster := newFakeCluster()
-	p := testProvisioner(cluster)
-	if err := p.Provision(t.Context(), acme); err != nil {
-		t.Fatal(err)
-	}
-	polls := 0
-	cluster.onGet = func(f *fakeCluster) {
-		polls++
-		switch polls {
-		case 2:
-			f.setStatus(kafkaGVK, acme.Namespace(), acme.ClusterName(), map[string]any{"type": "NotReady", "status": "True", "reason": "Creating"})
-		case 4:
-			f.setStatus(kafkaGVK, acme.Namespace(), acme.ClusterName(), readyTrue)
-		case 6:
-			f.setUsersReady(acme)
-		}
-	}
-	if err := p.WaitReady(t.Context(), acme); err != nil {
-		t.Fatal(err)
-	}
-	// Kafka is ready on poll 4 and the admin user on poll 6; the agent user
-	// and the agent Deployment take a poll each.
-	if polls != 8 {
-		t.Errorf("polled %d times, want 8", polls)
-	}
-}
-
-func TestWaitReadyTimesOutWithLastStatus(t *testing.T) {
-	cluster := newFakeCluster()
-	p := testProvisioner(cluster)
-	if err := p.Provision(t.Context(), acme); err != nil {
-		t.Fatal(err)
-	}
-	cluster.setStatus(kafkaGVK, acme.Namespace(), acme.ClusterName(), map[string]any{"type": "NotReady", "status": "True", "reason": "Creating"})
-	ctx, cancel := context.WithTimeout(t.Context(), 20*time.Millisecond)
-	defer cancel()
-	err := p.WaitReady(ctx, acme)
-	if !errors.Is(err, context.DeadlineExceeded) || !strings.Contains(err.Error(), "NotReady=True (Creating)") {
-		t.Fatalf("WaitReady() error = %v, want a deadline error with the last status", err)
 	}
 }
 
@@ -363,35 +304,28 @@ func TestStrimziWarnings(t *testing.T) {
 	}
 }
 
-func TestDeprovisionDeletesNamespaceAndWaits(t *testing.T) {
+func TestDeprovisionDeletesTheNamespace(t *testing.T) {
 	cluster := newFakeCluster()
 	p := testProvisioner(cluster)
-	if err := p.Provision(t.Context(), acme); err != nil {
-		t.Fatal(err)
-	}
+	provision(t, p, acme)
 	if err := p.Deprovision(t.Context(), acme); err != nil {
 		t.Fatal(err)
 	}
 	if got := strings.Join(cluster.deleted, ","); got != "Namespace:/customer-acme" {
 		t.Errorf("deleted %s, want only the namespace on kind", got)
 	}
-	if err := p.WaitDeleted(t.Context(), acme); err != nil {
-		t.Fatal(err)
-	}
 }
 
-func TestProvisionAssociatesTheBrokersOnEKS(t *testing.T) {
+func TestReconcileAssociatesTheBrokersOnEKS(t *testing.T) {
 	spec := Spec{CustomerID: "acme", Profile: ProductionProfile, Platform: EKSProdPlatform}
 	cluster := newFakeCluster()
 	p := testProvisioner(cluster)
-	if err := p.Provision(t.Context(), spec); err == nil || len(cluster.applied) != 0 {
-		t.Fatalf("Provision() without AWS access = %v after applying %v; want an error before applying anything", err, cluster.applied)
+	if _, err := p.Reconcile(t.Context(), spec); err == nil || len(cluster.applied) != 0 {
+		t.Fatalf("Reconcile() without AWS access = %v after applying %v; want an error before applying anything", err, cluster.applied)
 	}
 	identities := &fakePodIdentities{}
 	p.PodIdentities = identities
-	if err := p.Provision(t.Context(), spec); err != nil {
-		t.Fatal(err)
-	}
+	provision(t, p, spec)
 	want := "associate changeport-prod customer-acme/acme-kafka changeport-prod-kafka-broker"
 	if got := strings.Join(identities.calls, ","); got != want {
 		t.Errorf("Pod Identity calls = %s, want %s", got, want)
@@ -404,13 +338,11 @@ func TestProvisionAssociatesTheBrokersOnEKS(t *testing.T) {
 	}
 }
 
-func TestProvisionLeavesPodIdentityAloneOnKind(t *testing.T) {
+func TestReconcileLeavesPodIdentityAloneOnKind(t *testing.T) {
 	identities := &fakePodIdentities{}
 	p := testProvisioner(newFakeCluster())
 	p.PodIdentities = identities
-	if err := p.Provision(t.Context(), acme); err != nil {
-		t.Fatal(err)
-	}
+	provision(t, p, acme)
 	if err := p.Deprovision(t.Context(), acme); err != nil {
 		t.Fatal(err)
 	}
@@ -424,9 +356,7 @@ func TestDeprovisionRemovesDedicatedNodes(t *testing.T) {
 	cluster := newFakeCluster()
 	p := testProvisioner(cluster)
 	p.PodIdentities = &fakePodIdentities{}
-	if err := p.Provision(t.Context(), spec); err != nil {
-		t.Fatal(err)
-	}
+	provision(t, p, spec)
 	if err := p.Deprovision(t.Context(), spec); err != nil {
 		t.Fatal(err)
 	}
@@ -441,17 +371,13 @@ func TestDeprovisionRemovesDedicatedNodes(t *testing.T) {
 	nodeClaim.SetName("customer-acme-x7k2p")
 	nodeClaim.SetLabels(map[string]string{"karpenter.sh/nodepool": "customer-acme"})
 	cluster.objects[fakeKey(nodeClaimGVK, "", nodeClaim.GetName())] = nodeClaim
-	polls := 0
-	cluster.onGet = func(f *fakeCluster) {
-		if polls++; polls == 6 {
-			delete(f.objects, fakeKey(nodeClaimGVK, "", nodeClaim.GetName()))
-		}
+	deleted, status, err := p.Deleted(t.Context(), spec)
+	if err != nil || deleted || status != "1 nodes of NodePool customer-acme are being deleted" {
+		t.Fatalf("Deleted() with a node left = %v, %q, %v", deleted, status, err)
 	}
-	if err := p.WaitDeleted(t.Context(), spec); err != nil {
-		t.Fatal(err)
-	}
-	if _, still := cluster.objects[fakeKey(nodeClaimGVK, "", nodeClaim.GetName())]; still {
-		t.Error("WaitDeleted returned before the nodes were gone")
+	delete(cluster.objects, fakeKey(nodeClaimGVK, "", nodeClaim.GetName()))
+	if deleted, status, err := p.Deleted(t.Context(), spec); err != nil || !deleted {
+		t.Fatalf("Deleted() once the nodes are gone = %v, %q, %v", deleted, status, err)
 	}
 }
 
@@ -559,9 +485,7 @@ func (failingGets) Get(context.Context, schema.GroupVersionKind, string, string)
 func TestDeletedReportsWhatIsLeft(t *testing.T) {
 	cluster := newFakeCluster()
 	p := testProvisioner(cluster)
-	if err := p.Provision(t.Context(), acme); err != nil {
-		t.Fatal(err)
-	}
+	provision(t, p, acme)
 	deleted, status, err := p.Deleted(t.Context(), acme)
 	if err != nil || deleted || status != "Namespace customer-acme is being deleted" {
 		t.Fatalf("Deleted() before deprovisioning = %v, %q, %v", deleted, status, err)
@@ -577,9 +501,7 @@ func TestDeletedReportsWhatIsLeft(t *testing.T) {
 func TestDeprovisionLeavesADeletionInProgressAlone(t *testing.T) {
 	cluster := newFakeCluster()
 	p := testProvisioner(cluster)
-	if err := p.Provision(t.Context(), acme); err != nil {
-		t.Fatal(err)
-	}
+	provision(t, p, acme)
 	// The namespace controller is still emptying the namespace.
 	cluster.objects[fakeKey(schema.GroupVersionKind{Version: "v1", Kind: "Namespace"}, "", acme.Namespace())].SetDeletionTimestamp(&metav1.Time{Time: time.Now()})
 	if err := p.Deprovision(t.Context(), acme); err != nil {
@@ -587,5 +509,21 @@ func TestDeprovisionLeavesADeletionInProgressAlone(t *testing.T) {
 	}
 	if len(cluster.deleted) != 0 {
 		t.Errorf("deleted %v again while its deletion runs", cluster.deleted)
+	}
+}
+
+func TestReconcileReportsStrimziWarnings(t *testing.T) {
+	cluster := newFakeCluster()
+	p := testProvisioner(cluster)
+	provision(t, p, acme)
+	cluster.setStatus(kafkaGVK, acme.Namespace(), acme.ClusterName(), readyTrue,
+		map[string]any{"type": "Warning", "status": "True", "reason": "UnsafeStorage", "message": "the storage is not replicated"})
+	progress, err := p.Reconcile(t.Context(), acme)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := Readiness{Ready: true, Status: "Ready, with warnings: UnsafeStorage: the storage is not replicated"}
+	if progress.Kafka != want {
+		t.Errorf("Kafka = %+v, want %+v", progress.Kafka, want)
 	}
 }

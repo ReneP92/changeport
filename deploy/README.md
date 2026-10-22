@@ -10,9 +10,13 @@ Kubernetes manifests that are not generated per customer.
   - `drain-cleaner/`: Strimzi Drain Cleaner, which turns the eviction of a
     Kafka pod, for example when a node is replaced, into a rolling restart by
     the Strimzi operator.
-  - `provisioner/`: the `Customer` CRD (`customers.changeport.io`), which
-    `make generate` writes from `api/v1alpha1`, and later the provisioning
-    controller that reconciles it.
+  - `provisioner/`: the provisioning controller in the `changeport`
+    namespace, with its RBAC, and the `Customer` CRD
+    (`customers.changeport.io`), which `make generate` writes from
+    `api/v1alpha1`. On EKS it stays at zero replicas until its image is in
+    ECR (#18). On kind, `hack/platform-apply.sh` applies the kind overlay
+    through the git-ignored `overlays/kind-local`, which points the
+    controller at the locally built images.
   - `eks-storage/`: the encrypted gp3 StorageClass for EKS Auto Mode.
   - `object-store/`: SeaweedFS, standing in for S3 on kind, where brokers
     offload topic history.

@@ -8,3 +8,12 @@ resources:
   - ../../base/provisioner
   - ../../base/object-store
   - ../../base/victoria-metrics
+patches:
+  # The platform the provisioner provisions customers on.
+  - target:
+      kind: Deployment
+      name: changeport-provisioner
+    patch: |-
+      - op: add
+        path: /spec/template/spec/containers/0/args/-
+        value: -platform=kind

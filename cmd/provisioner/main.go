@@ -33,8 +33,8 @@ const usage = `Usage: provisioner <command> [flags]
 
 Commands:
   controller   run the controller that provisions every Customer resource
-  provision    create or update a customer's Kafka cluster
-  deprovision  delete a customer's Kafka cluster and namespace
+  provision    create or update a Customer, whose Kafka cluster the controller provisions
+  deprovision  delete a Customer, whose Kafka cluster the controller deletes first
   credentials  print a client.properties for connecting as the customer's admin user
   render       print the resources for a customer without applying them
 
@@ -146,75 +146,69 @@ func (c *clusterFlags) spec(customer string) (provisioning.Spec, error) {
 	return provisioning.Spec{CustomerID: customer, Profile: profile, Platform: platform}, nil
 }
 
+// runProvision creates or updates a Customer; the controller provisions its
+// cluster.
 func runProvision(ctx context.Context, args []string, logger *slog.Logger, stderr io.Writer) error {
 	fs := flag.NewFlagSet("provision", flag.ContinueOnError)
 	fs.SetOutput(stderr)
 	var common commonFlags
 	common.register(fs)
-	var cluster clusterFlags
-	cluster.register(fs)
+	profile := fs.String("profile", provisioning.DevProfile.Name, "cluster size profile: dev, dev-ha or production")
+	displayName := fs.String("display-name", "", "the customer's name as people know it (default: the customer ID)")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
-	spec, err := cluster.spec(common.customer)
+	if err := provisioning.ValidateCustomerID(common.customer); err != nil {
+		return err
+	}
+	if _, err := provisioning.ProfileByName(*profile); err != nil {
+		return err
+	}
+	if *displayName == "" {
+		*displayName = common.customer
+	}
+	c, err := newCustomerClient(common.kubeContext)
 	if err != nil {
 		return err
 	}
-	if err := spec.Validate(); err != nil {
-		return err
-	}
-	provisioner, err := newProvisioner(common.kubeContext, logger)
-	if err != nil {
-		return err
-	}
-	if err := connectAWS(ctx, provisioner, spec); err != nil {
-		return err
-	}
-	// Provision itself waits for the listener certificate.
 	ctx, cancel := context.WithTimeout(ctx, common.timeout)
 	defer cancel()
-	if err := provisioner.Provision(ctx, spec); err != nil {
+	if err := applyCustomer(ctx, c, common.customer, *displayName, *profile); err != nil {
 		return err
 	}
+	logger.Info("applied the Customer", "tenant", common.customer, "profile", *profile)
 	if !common.wait {
 		return nil
 	}
-	return provisioner.WaitReady(ctx, spec)
+	return waitReady(ctx, c, common.customer, logger)
 }
 
+// runDeprovision deletes a Customer; the controller deletes its cluster
+// first.
 func runDeprovision(ctx context.Context, args []string, logger *slog.Logger, stderr io.Writer) error {
 	fs := flag.NewFlagSet("deprovision", flag.ContinueOnError)
 	fs.SetOutput(stderr)
 	var common commonFlags
 	common.register(fs)
-	var cluster clusterFlags
-	cluster.register(fs)
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
-	spec, err := cluster.spec(common.customer)
+	if err := provisioning.ValidateCustomerID(common.customer); err != nil {
+		return err
+	}
+	c, err := newCustomerClient(common.kubeContext)
 	if err != nil {
 		return err
 	}
-	if err := spec.Validate(); err != nil {
-		return err
-	}
-	provisioner, err := newProvisioner(common.kubeContext, logger)
-	if err != nil {
-		return err
-	}
-	if err := connectAWS(ctx, provisioner, spec); err != nil {
-		return err
-	}
-	if err := provisioner.Deprovision(ctx, spec); err != nil {
+	ctx, cancel := context.WithTimeout(ctx, common.timeout)
+	defer cancel()
+	if err := deleteCustomer(ctx, c, common.customer); err != nil {
 		return err
 	}
 	if !common.wait {
 		return nil
 	}
-	ctx, cancel := context.WithTimeout(ctx, common.timeout)
-	defer cancel()
-	return provisioner.WaitDeleted(ctx, spec)
+	return waitGone(ctx, c, common.customer, logger)
 }
 
 func runCredentials(ctx context.Context, args []string, logger *slog.Logger, stdout, stderr io.Writer) error {
@@ -338,21 +332,6 @@ func runController(ctx context.Context, args []string, logger *slog.Logger, stde
 	}
 	logger.Info("controller starting", "platform", platform.Name, "kafkaImage", platform.KafkaImage, "agentImage", platform.AgentImage)
 	return mgr.Start(ctx)
-}
-
-// connectAWS gives the provisioner access to EKS Pod Identity when the
-// platform's brokers get their credentials from it. The EKS cluster runs in
-// the same region as its tiered storage bucket.
-func connectAWS(ctx context.Context, provisioner *provisioning.Provisioner, spec provisioning.Spec) error {
-	if spec.Platform.TieredStorage.PodIdentity == nil {
-		return nil
-	}
-	podIdentities, err := provisioning.NewAWSPodIdentities(ctx, spec.Platform.TieredStorage.Region)
-	if err != nil {
-		return err
-	}
-	provisioner.PodIdentities = podIdentities
-	return nil
 }
 
 func newProvisioner(kubeContext string, logger *slog.Logger) (*provisioning.Provisioner, error) {

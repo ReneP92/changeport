@@ -89,7 +89,7 @@ for progress.
 | `web` | The console's React app, built and tested with Bun (see [web/README.md](web/README.md)) |
 | `terraform` | Base infrastructure per environment: VPC, EKS, S3, IAM (empty modules, nothing applied) |
 | `deploy` | Kubernetes manifests: the kind cluster, and the platform components (Strimzi, cert-manager) with one overlay per environment |
-| `images` | Container images we build: Strimzi's Kafka image plus the tiered storage plugin, and the Kafka agent |
+| `images` | Container images we build: Strimzi's Kafka image plus the tiered storage plugin, the Kafka agent and the provisioner |
 | `hack` | Local development scripts behind the Makefile |
 | `tools` | Go module pinning the tools (kind, golangci-lint); `make tools` builds them into `bin/` |
 
@@ -232,22 +232,25 @@ NodeClass of their own, so their brokers run on dedicated nodes:
 go run ./cmd/provisioner render -customer acme -profile production -platform eks-prod
 ```
 
-Customers are also Kubernetes resources: a cluster-scoped `Customer`, named
-by the customer ID, with a display name, a profile, an optional Clerk
-organization and deletion protection. `provisioner controller` turns each one
-into its cluster. It applies the template in order without blocking,
-reports how far the cluster is in the conditions `CertificateIssued`,
-`KafkaReady`, `UsersReady`, `AgentAvailable` and `Ready`, and on deletion
-removes the cluster before the `Customer` goes, unless deletion protection
-is on. Until it runs in the cluster (#48), run it against kind by hand, with
-the locally built images, and watch the Customers in another terminal:
-
-```bash
-make controller
-```
+Customers are Kubernetes resources: a cluster-scoped `Customer`, named by
+the customer ID, with a display name, a profile, an optional Clerk
+organization and deletion protection. The provisioning controller
+(`provisioner controller`, in the `changeport` namespace) turns each one into
+its cluster. It applies the template in order without blocking, reports how
+far the cluster is in the conditions `CertificateIssued`, `KafkaReady`,
+`UsersReady`, `AgentAvailable` and `Ready`, and on deletion removes the
+cluster before the `Customer` goes, unless deletion protection is on.
+`make provision` and `make deprovision` create and delete Customers and wait
+for the controller; `render` and `credentials` work without it.
 
 ```bash
 kubectl get customers
+```
+
+After changing the provisioner, rebuild it and roll it out on kind:
+
+```bash
+make provisioner-reload
 ```
 
 ## Checks
@@ -270,7 +273,7 @@ whole end-to-end suite on a fresh kind cluster: `make dev-up e2e
 platform-check`, where `platform-check` also server-side dry-runs the EKS
 overlays. When that job fails, it uploads
 the output of `hack/diagnostics.sh` (pods, events, resources and logs) as the
-`e2e-diagnostics` artifact. CI also builds the Kafka and agent images for
-amd64 and arm64 and runs `make kafka-image-test`, which starts a broker from
+`e2e-diagnostics` artifact. CI also builds the Kafka, agent and provisioner
+images for amd64 and arm64 and runs `make kafka-image-test`, which starts a broker from
 the Kafka image with tiered storage configured. Run
 `make help` for every target.
