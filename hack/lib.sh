@@ -14,6 +14,10 @@ KUBECTL_VERSION=v1.37.1
 # The kube-apiserver and etcd the controller tests run against (envtest),
 # matching the kind node image. setup-envtest verifies their checksums.
 ENVTEST_K8S_VERSION=1.37.0
+# Bun runs all TypeScript and React work in web/. The version must match
+# packageManager in web/package.json, which CI installs from; ensure_bun
+# checks that they agree.
+BUN_VERSION=1.4.3
 
 # The Changeport Kafka image from images/kafka, as named by
 # internal/provisioning.KindPlatform. dev-up builds it and loads it into kind.
@@ -48,6 +52,7 @@ CLUSTER_NAME=${CLUSTER_NAME:-changeport}
 KUBE_CONTEXT="kind-${CLUSTER_NAME}"
 BIN_DIR="$ROOT/bin"
 KUBECTL_BIN="$BIN_DIR/kubectl-$KUBECTL_VERSION"
+BUN_BIN="$BIN_DIR/bun-$BUN_VERSION"
 
 log() { printf '\033[1m==> %s\033[0m\n' "$*" >&2; }
 die() { printf 'error: %s\n' "$*" >&2; exit 1; }
@@ -134,6 +139,31 @@ ensure_kubectl() {
   esac
   download_verified "https://dl.k8s.io/release/$KUBECTL_VERSION/bin/$os/$arch/kubectl" "$want" "$KUBECTL_BIN"
   chmod +x "$KUBECTL_BIN"
+}
+
+# Downloads the pinned Bun into bin/, checksum-verified, unless it is there.
+ensure_bun() {
+  local pinned os arch want archive
+  pinned=$(sed -n 's/^ *"packageManager": "bun@\(.*\)",*$/\1/p' web/package.json)
+  [[ "$pinned" == "$BUN_VERSION" ]] ||
+    die "web/package.json pins Bun ${pinned:-nowhere} but hack/lib.sh pins $BUN_VERSION; change both, with the checksums"
+  [[ -x "$BUN_BIN" ]] && return
+  os=$(uname -s | tr '[:upper:]' '[:lower:]')
+  arch=$(uname -m)
+  case "$arch" in x86_64) arch=x64 ;; arm64) arch=aarch64 ;; esac
+  case "$os-$arch" in
+    darwin-aarch64) want=80afd4c069b46a6fa8f3ec520bebc750a7843e4a8d5b9583d29ad436c00a3403 ;;
+    darwin-x64) want=62660e6438eb872278877acca77e1152d5d031324df368d4a81b428211489d2d ;;
+    linux-x64) want=3e730528d89775f03f87f05c06787c4df4099d0a37f3f252e7b829cb23816e18 ;;
+    linux-aarch64) want=efa9813da5ed72423bf847f916e8d2c47c0d776add972354026a75e10da9aa21 ;;
+    *) die "unsupported platform $os-$arch" ;;
+  esac
+  archive="$BIN_DIR/bun-$BUN_VERSION-$os-$arch.zip"
+  download_verified "https://github.com/oven-sh/bun/releases/download/bun-v$BUN_VERSION/bun-$os-$arch.zip" "$want" "$archive"
+  unzip -o -q -j "$archive" "bun-$os-$arch/bun" -d "$BIN_DIR/bun-unpack"
+  mv "$BIN_DIR/bun-unpack/bun" "$BUN_BIN"
+  rm -rf "$BIN_DIR/bun-unpack" "$archive"
+  chmod +x "$BUN_BIN"
 }
 
 # Downloads every upstream file pinned in deploy/upstream-files.txt.
