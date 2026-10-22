@@ -1,6 +1,6 @@
 // Command agent keeps the settings the platform owns in place on one
-// customer's Kafka cluster: it turns on tiered storage for every topic that
-// can use it. It runs next to the cluster, connects to the internal mTLS
+// customer's Kafka cluster, turning on tiered storage for every topic that
+// can use it, and measures each consumer group's lag in seconds. It runs next to the cluster, connects to the internal mTLS
 // listener as the changeport-agent KafkaUser, and serves its metrics and
 // health on -listen.
 package main
@@ -80,7 +80,9 @@ func run(ctx context.Context, args []string, stderr io.Writer) error {
 	defer client.Close()
 
 	registry := prometheus.NewRegistry()
-	reconciler := &agent.Reconciler{Admin: kadm.NewClient(client), Logger: logger, Metrics: agent.NewMetrics(registry)}
+	admin := kadm.NewClient(client)
+	reconciler := &agent.Reconciler{Admin: admin, Logger: logger, Metrics: agent.NewMetrics(registry)}
+	lag := agent.NewLagCollector(admin, registry)
 	health := &health{started: time.Now(), stale: 10 * o.interval}
 	server := &http.Server{Addr: o.listen, Handler: health.routes(registry), ReadHeaderTimeout: 5 * time.Second}
 	go func() {
@@ -90,6 +92,22 @@ func run(ctx context.Context, args []string, stderr io.Writer) error {
 	}()
 
 	logger.Info("agent started", "bootstrap", o.bootstrap, "interval", o.interval.String())
+	// Lag is measured in its own loop, so that a slow measurement never delays
+	// the tiering reconciliation; its failures do not affect health.
+	go func() {
+		ticker := time.NewTicker(o.interval)
+		defer ticker.Stop()
+		for {
+			if err := lag.Measure(ctx); err != nil && ctx.Err() == nil {
+				logger.Error("measuring consumer lag failed", "error", err)
+			}
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+			}
+		}
+	}()
 	ticker := time.NewTicker(o.interval)
 	defer ticker.Stop()
 	for {

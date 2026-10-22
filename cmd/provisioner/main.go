@@ -84,15 +84,21 @@ func (c *commonFlags) register(fs *flag.FlagSet) {
 	fs.DurationVar(&c.timeout, "timeout", 10*time.Minute, "how long the command and -wait may take")
 }
 
-// clusterFlags select the profile and platform of a customer's cluster.
+// clusterFlags select the profile and platform of a customer's cluster, and
+// optionally other images than the platform's, such as the content-tagged
+// local builds the dev scripts pass so that rebuilt images roll the pods.
 type clusterFlags struct {
-	profile  string
-	platform string
+	profile    string
+	platform   string
+	kafkaImage string
+	agentImage string
 }
 
 func (c *clusterFlags) register(fs *flag.FlagSet) {
-	fs.StringVar(&c.profile, "profile", provisioning.DevProfile.Name, "cluster size profile: dev or production")
+	fs.StringVar(&c.profile, "profile", provisioning.DevProfile.Name, "cluster size profile: dev, dev-ha or production")
 	fs.StringVar(&c.platform, "platform", provisioning.KindPlatform.Name, "where the cluster runs: kind, eks-dev or eks-prod")
+	fs.StringVar(&c.kafkaImage, "kafka-image", "", "broker image to use instead of the platform's")
+	fs.StringVar(&c.agentImage, "agent-image", "", "Kafka agent image to use instead of the platform's")
 }
 
 func (c *clusterFlags) spec(customer string) (provisioning.Spec, error) {
@@ -103,6 +109,12 @@ func (c *clusterFlags) spec(customer string) (provisioning.Spec, error) {
 	platform, err := provisioning.PlatformByName(c.platform)
 	if err != nil {
 		return provisioning.Spec{}, err
+	}
+	if c.kafkaImage != "" {
+		platform.KafkaImage = c.kafkaImage
+	}
+	if c.agentImage != "" {
+		platform.AgentImage = c.agentImage
 	}
 	return provisioning.Spec{CustomerID: customer, Profile: profile, Platform: platform}, nil
 }

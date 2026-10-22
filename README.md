@@ -173,6 +173,13 @@ that can use it, leaving compacted topics and a customer's explicit
 make agent-test
 ```
 
+The lag test produces messages at a known moment and checks the consumer lag
+in seconds the agent reports, for a classic and a KIP-848 consumer group:
+
+```bash
+make lag-test
+```
+
 The tiered storage test offloads a topic with small segments to the local
 object store (SeaweedFS, standing in for S3), checks that the brokers delete
 their local copies, and reads every message back from offset 0:

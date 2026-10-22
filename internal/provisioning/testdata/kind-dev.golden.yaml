@@ -232,8 +232,9 @@ spec:
           type: cluster
         operations: [Describe, DescribeConfigs, IdempotentWrite]
 ---
-# The Kafka agent's user on the internal listener: it reads the cluster and
-# keeps topic settings such as tiered storage in place.
+# The Kafka agent's user on the internal listener: it reads the cluster,
+# keeps topic settings such as tiered storage in place, and reads consumer
+# groups' committed offsets to measure their lag. It cannot read messages.
 apiVersion: kafka.strimzi.io/v1
 kind: KafkaUser
 metadata:
@@ -254,6 +255,11 @@ spec:
           name: "*"
           patternType: literal
         operations: [Describe, DescribeConfigs, AlterConfigs]
+      - resource:
+          type: group
+          name: "*"
+          patternType: literal
+        operations: [Describe]
       - resource:
           type: cluster
         operations: [Describe, DescribeConfigs]
