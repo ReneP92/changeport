@@ -4,6 +4,9 @@
 # Downloaded and checksum-verified from deploy/upstream-files.txt
 /deploy/base/*/upstream/
 
+# The kind overlay with the locally built images, written by hack/lib.sh
+/deploy/overlays/kind-local/
+
 # Terraform
 .terraform/
 *.tfstate

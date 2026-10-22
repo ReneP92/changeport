@@ -1,7 +1,9 @@
 #!/usr/bin/env bash
 # Applies the platform components of one environment: the operators in
 # deploy/overlays/<overlay>, then, once they are ready, the resources in
-# config/ that need their CRDs and webhooks. Safe to run again.
+# config/ that need their CRDs and webhooks. On kind, the components built
+# here run the locally built images (make dev-up builds them). Safe to run
+# again.
 # Usage: hack/platform-apply.sh kind|dev|prod (prod also needs CONFIRM=prod)
 # shellcheck source=lib.sh
 source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
@@ -36,8 +38,13 @@ wait_for_deployments() {
   done < <(kubectl get deployments -A -l changeport.io/platform -o jsonpath='{range .items[*]}{.metadata.namespace} {.metadata.name}{"\n"}{end}')
 }
 
+components="deploy/overlays/$overlay"
+if [[ $env == kind ]]; then
+  kind_local_overlay
+  components=$KIND_LOCAL_OVERLAY
+fi
 log "Applying the $overlay platform components to $KUBE_CONTEXT"
-apply "deploy/overlays/$overlay"
+apply "$components"
 wait_for_deployments
 
 config="deploy/overlays/$overlay/config"

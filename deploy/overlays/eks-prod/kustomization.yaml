@@ -9,6 +9,18 @@ resources:
   - ../../base/eks-storage
   - ../../base/victoria-metrics
 patches:
+  # The platform the provisioner provisions customers on.
+  - target:
+      kind: Deployment
+      name: changeport-provisioner
+    patch: |-
+      - op: add
+        path: /spec/template/spec/containers/0/args/-
+        value: -platform=eks-prod
+      # Nothing to run until the provisioner image is in ECR (#18).
+      - op: replace
+        path: /spec/replicas
+        value: 0
   # The environment of every metric.
   - target:
       kind: Deployment

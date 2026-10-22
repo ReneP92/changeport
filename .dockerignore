@@ -1,7 +1,9 @@
-# Images built from the repository root (images/agent) need only the Go module.
+# Images built from the repository root (images/agent, images/provisioner)
+# need only the Go module.
 *
 !go.mod
 !go.sum
+!api/
 !cmd/
 !internal/
 **/*_test.go

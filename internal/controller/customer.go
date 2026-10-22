@@ -29,16 +29,6 @@ type Provisioner interface {
 
 var _ Provisioner = (*provisioning.Provisioner)(nil)
 
-// The reasons on a Customer's conditions.
-const (
-	reasonDone               = "Done"
-	reasonPending            = "Pending"
-	reasonInvalidSpec        = "InvalidSpec"
-	reasonProvisioningFailed = "ProvisioningFailed"
-	reasonDeletionProtected  = "DeletionProtected"
-	reasonDeprovisioning     = "Deprovisioning"
-)
-
 // CustomerReconciler provisions every Customer's Kafka cluster from the one
 // template, and deprovisions it before the Customer goes.
 //
@@ -89,7 +79,7 @@ func (r *CustomerReconciler) reconcile(ctx context.Context, req ctrl.Request) (c
 	if err != nil {
 		// Only a change to the Customer can fix it, which triggers a new
 		// reconciliation.
-		return ctrl.Result{}, r.notReady(ctx, &customer, reasonInvalidSpec, err.Error())
+		return ctrl.Result{}, r.notReady(ctx, &customer, v1alpha1.ReasonInvalidSpec, err.Error())
 	}
 	if err := r.ensureMetadata(ctx, &customer); err != nil {
 		return ctrl.Result{}, err
@@ -98,7 +88,7 @@ func (r *CustomerReconciler) reconcile(ctx context.Context, req ctrl.Request) (c
 	progress, err := r.Provisioner.Reconcile(ctx, spec)
 	if err != nil {
 		// Returning the error retries with backoff.
-		if statusErr := r.notReady(ctx, &customer, reasonProvisioningFailed, err.Error()); statusErr != nil {
+		if statusErr := r.notReady(ctx, &customer, v1alpha1.ReasonProvisioningFailed, err.Error()); statusErr != nil {
 			return ctrl.Result{}, statusErr
 		}
 		return ctrl.Result{}, err
@@ -111,16 +101,16 @@ func (r *CustomerReconciler) reconcile(ctx context.Context, req ctrl.Request) (c
 		// waiting is Ready's reason while the cluster waits for this part.
 		waiting string
 	}{
-		{v1alpha1.ConditionCertificateIssued, progress.Certificate, "CertificatePending"},
-		{v1alpha1.ConditionKafkaReady, progress.Kafka, "KafkaPending"},
-		{v1alpha1.ConditionUsersReady, progress.Users, "UsersPending"},
-		{v1alpha1.ConditionAgentAvailable, progress.Agent, "AgentPending"},
+		{v1alpha1.ConditionCertificateIssued, progress.Certificate, v1alpha1.ReasonCertificatePending},
+		{v1alpha1.ConditionKafkaReady, progress.Kafka, v1alpha1.ReasonKafkaPending},
+		{v1alpha1.ConditionUsersReady, progress.Users, v1alpha1.ReasonUsersPending},
+		{v1alpha1.ConditionAgentAvailable, progress.Agent, v1alpha1.ReasonAgentPending},
 	}
-	ready := metav1.Condition{Type: v1alpha1.ConditionReady, Status: metav1.ConditionTrue, Reason: reasonDone, Message: "Clients can connect to " + spec.BootstrapAddress()}
+	ready := metav1.Condition{Type: v1alpha1.ConditionReady, Status: metav1.ConditionTrue, Reason: v1alpha1.ReasonDone, Message: "Clients can connect to " + spec.BootstrapAddress()}
 	for _, part := range parts {
-		condition := metav1.Condition{Type: part.condition, Status: metav1.ConditionTrue, Reason: reasonDone, Message: part.readiness.String()}
+		condition := metav1.Condition{Type: part.condition, Status: metav1.ConditionTrue, Reason: v1alpha1.ReasonDone, Message: part.readiness.String()}
 		if !part.readiness.Ready {
-			condition.Status, condition.Reason = metav1.ConditionFalse, reasonPending
+			condition.Status, condition.Reason = metav1.ConditionFalse, v1alpha1.ReasonPending
 			// Ready names the first part the cluster waits for.
 			if ready.Status == metav1.ConditionTrue {
 				ready.Status, ready.Reason = metav1.ConditionFalse, part.waiting
@@ -148,12 +138,12 @@ func (r *CustomerReconciler) deprovision(ctx context.Context, customer *v1alpha1
 	if customer.Spec.DeletionProtection {
 		// Turning protection off changes the Customer, which triggers a new
 		// reconciliation.
-		return ctrl.Result{}, r.notReady(ctx, customer, reasonDeletionProtected,
+		return ctrl.Result{}, r.notReady(ctx, customer, v1alpha1.ReasonDeletionProtected,
 			"The Customer is deleted, but its Kafka cluster is kept until deletion protection is turned off")
 	}
 	spec, err := r.spec(customer)
 	if err != nil {
-		return ctrl.Result{}, r.notReady(ctx, customer, reasonInvalidSpec, err.Error())
+		return ctrl.Result{}, r.notReady(ctx, customer, v1alpha1.ReasonInvalidSpec, err.Error())
 	}
 	if err := r.Provisioner.Deprovision(ctx, spec); err != nil {
 		return ctrl.Result{}, err
@@ -163,7 +153,7 @@ func (r *CustomerReconciler) deprovision(ctx context.Context, customer *v1alpha1
 		return ctrl.Result{}, err
 	}
 	if !deleted {
-		if err := r.notReady(ctx, customer, reasonDeprovisioning, left); err != nil {
+		if err := r.notReady(ctx, customer, v1alpha1.ReasonDeprovisioning, left); err != nil {
 			return ctrl.Result{}, err
 		}
 		return ctrl.Result{RequeueAfter: r.PollInterval}, nil

@@ -1,8 +1,14 @@
-# The provisioning controller (cmd/provisioner controller), which turns every
-# Customer into its dedicated Kafka cluster. Today only the Customer CRD,
-# which make generate writes from api/v1alpha1; the controller's Deployment
-# and RBAC follow (#48).
+# The provisioning controller (provisioner controller), which turns every
+# Customer into its dedicated Kafka cluster from the one template, in the
+# changeport namespace. The Customer CRD is written by make generate from
+# api/v1alpha1. Overlays choose the platform (-platform); on EKS, the
+# controller will also need an IAM role through EKS Pod Identity for the
+# brokers' Pod Identity associations (#58).
 apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
+labels:
+  - pairs:
+      changeport.io/platform: provisioner
 resources:
   - changeport.io_customers.yaml
+  - provisioner.yaml

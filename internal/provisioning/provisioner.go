@@ -5,12 +5,11 @@ import (
 	"fmt"
 	"log/slog"
 	"slices"
-	"time"
+	"strings"
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
-	"k8s.io/apimachinery/pkg/util/wait"
 )
 
 var (
@@ -35,19 +34,20 @@ type Cluster interface {
 	List(ctx context.Context, gvk schema.GroupVersionKind, namespace, labelSelector string) ([]unstructured.Unstructured, error)
 }
 
-// Provisioner creates and removes customer Kafka clusters.
+// Provisioner creates and removes customer Kafka clusters. It never waits:
+// the Customer controller (internal/controller) calls it again until a
+// cluster is ready or gone.
 type Provisioner struct {
 	Cluster Cluster
 	// PodIdentities is needed on platforms whose brokers get their tiered
 	// storage credentials from EKS Pod Identity.
 	PodIdentities PodIdentities
 	Logger        *slog.Logger
-	PollInterval  time.Duration
 }
 
-// New returns a Provisioner with default polling.
+// New returns a Provisioner.
 func New(cluster Cluster, logger *slog.Logger) *Provisioner {
-	return &Provisioner{Cluster: cluster, Logger: logger, PollInterval: 5 * time.Second}
+	return &Provisioner{Cluster: cluster, Logger: logger}
 }
 
 // Readiness is how far one part of a customer's cluster is.
@@ -144,8 +144,11 @@ func (p *Provisioner) Reconcile(ctx context.Context, spec Spec) (Progress, error
 
 // observe reports the readiness of the objects of one kind: that of the
 // first one not ready yet, or Ready when all are, or when there are none.
+// Ready objects add the warnings Strimzi reports about them, such as
+// deprecated configuration.
 func (p *Provisioner) observe(ctx context.Context, objects []*unstructured.Unstructured, kind schema.GroupVersionKind, ready func(*unstructured.Unstructured) (bool, string)) (Readiness, error) {
 	found := false
+	var warnings []string
 	for _, obj := range objects {
 		if obj.GroupVersionKind() != kind {
 			continue
@@ -162,106 +165,22 @@ func (p *Provisioner) observe(ctx context.Context, objects []*unstructured.Unstr
 		if done, status := ready(current); !done {
 			return Readiness{Object: name, Status: status}, nil
 		}
+		warnings = append(warnings, strimziWarnings(current)...)
 	}
 	if !found {
 		return Readiness{Ready: true, Status: "None on this platform"}, nil
 	}
+	if len(warnings) > 0 {
+		return Readiness{Ready: true, Status: "Ready, with warnings: " + strings.Join(warnings, "; ")}, nil
+	}
 	return Readiness{Ready: true, Status: "Ready"}, nil
-}
-
-// Provision applies every resource of the customer's cluster in template
-// order, waiting after a Certificate until cert-manager has issued it, like
-// Reconcile called until the certificate is issued. It does not wait for the
-// cluster itself; WaitReady does.
-func (p *Provisioner) Provision(ctx context.Context, spec Spec) error {
-	var last Readiness
-	err := wait.PollUntilContextCancel(ctx, p.PollInterval, true, func(ctx context.Context) (bool, error) {
-		progress, err := p.Reconcile(ctx, spec)
-		if err != nil {
-			return false, err
-		}
-		if progress.Certificate != last && !progress.Certificate.Ready {
-			p.Logger.Info("waiting", "object", progress.Certificate.Object, "tenant", spec.CustomerID, "status", progress.Certificate.Status)
-		}
-		last = progress.Certificate
-		return progress.Certificate.Ready, nil
-	})
-	if err != nil && last.Object != "" {
-		return fmt.Errorf("%s not ready (%s): %w", last.Object, last.Status, err)
-	}
-	if err != nil {
-		return err
-	}
-	p.Logger.Info("applied the template", "tenant", spec.CustomerID)
-	return nil
-}
-
-// WaitReady blocks until Strimzi reports the customer's Kafka cluster and
-// users ready for the latest spec, and the Kafka agent is available, or ctx
-// is done.
-func (p *Provisioner) WaitReady(ctx context.Context, spec Spec) error {
-	objects, err := Render(spec)
-	if err != nil {
-		return err
-	}
-	readiness := []struct {
-		kind  schema.GroupVersionKind
-		ready func(*unstructured.Unstructured) (bool, string)
-	}{
-		{kafkaGVK, strimziReady},
-		{kafkaUserGVK, strimziReady},
-		{deploymentGVK, deploymentReady},
-	}
-	for _, r := range readiness {
-		for _, obj := range objects {
-			if obj.GroupVersionKind() == r.kind {
-				if err := p.waitFor(ctx, obj, r.ready, spec.CustomerID); err != nil {
-					return err
-				}
-			}
-		}
-	}
-	p.Logger.Info("Kafka cluster ready", "tenant", spec.CustomerID, "bootstrap", spec.BootstrapAddress())
-	return nil
-}
-
-// waitFor polls obj until ready reports it ready for its latest spec, logging
-// each new status, or until ctx is done.
-func (p *Provisioner) waitFor(ctx context.Context, obj *unstructured.Unstructured, ready func(*unstructured.Unstructured) (bool, string), tenant string) error {
-	kind, key := obj.GetKind(), objectKey(obj)
-	lastMessage := "not observed yet"
-	err := wait.PollUntilContextCancel(ctx, p.PollInterval, true, func(ctx context.Context) (bool, error) {
-		current, err := p.Cluster.Get(ctx, obj.GroupVersionKind(), obj.GetNamespace(), obj.GetName())
-		if apierrors.IsNotFound(err) {
-			return false, nil
-		}
-		if err != nil {
-			return false, err
-		}
-		done, message := ready(current)
-		if done {
-			for _, warning := range strimziWarnings(current) {
-				p.Logger.Warn("warning", "kind", kind, "object", key, "tenant", tenant, "warning", warning)
-			}
-			return true, nil
-		}
-		if message != lastMessage {
-			lastMessage = message
-			p.Logger.Info("waiting", "kind", kind, "object", key, "tenant", tenant, "status", message)
-		}
-		return false, nil
-	})
-	if err != nil {
-		return fmt.Errorf("%s %s not ready (%s): %w", kind, key, lastMessage, err)
-	}
-	return nil
 }
 
 // Deprovision deletes the cluster-scoped resources the template created for
 // the customer: the namespace, which removes the Kafka cluster and everything
 // else in it, and on platforms with dedicated nodes the NodePool and
 // NodeClass, which removes the nodes. It is idempotent, and does not wait;
-// Deleted and WaitDeleted report when everything is gone.
+// Deleted reports when everything is gone.
 func (p *Provisioner) Deprovision(ctx context.Context, spec Spec) error {
 	objects, err := clusterScoped(spec)
 	if err != nil {
@@ -325,30 +244,6 @@ func (p *Provisioner) Deleted(ctx context.Context, spec Spec) (bool, string, err
 		return false, fmt.Sprintf("%d nodes of NodePool %s are being deleted", len(nodeClaims), spec.DedicatedNodePool()), nil
 	}
 	return true, "", nil
-}
-
-// WaitDeleted blocks until Deleted reports everything gone, or ctx is done.
-func (p *Provisioner) WaitDeleted(ctx context.Context, spec Spec) error {
-	last := ""
-	err := wait.PollUntilContextCancel(ctx, p.PollInterval, true, func(ctx context.Context) (bool, error) {
-		deleted, status, err := p.Deleted(ctx, spec)
-		if err != nil {
-			return false, err
-		}
-		if status != last && !deleted {
-			p.Logger.Info("waiting", "tenant", spec.CustomerID, "status", status)
-		}
-		last = status
-		return deleted, nil
-	})
-	if err != nil && last != "" {
-		return fmt.Errorf("not deleted (%s): %w", last, err)
-	}
-	if err != nil {
-		return err
-	}
-	p.Logger.Info("deleted", "tenant", spec.CustomerID)
-	return nil
 }
 
 // clusterScoped returns the template's cluster-scoped objects for spec, in

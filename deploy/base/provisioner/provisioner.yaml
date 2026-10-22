@@ -1,0 +1,149 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: changeport
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: changeport-provisioner
+  namespace: changeport
+---
+# What the controller needs to apply the customer template
+# (internal/provisioning/templates) and delete what it created. It is the
+# privileged half of provisioning: the console only creates and deletes
+# Customers.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: changeport-provisioner
+rules:
+  - apiGroups: [changeport.io]
+    resources: [customers]
+    verbs: [get, list, watch, patch, update]
+  - apiGroups: [changeport.io]
+    resources: [customers/status]
+    verbs: [get, patch, update]
+  - apiGroups: [changeport.io]
+    resources: [customers/finalizers]
+    verbs: [update]
+  # Server-side apply creates and changes objects with patch, and needs
+  # create for objects that do not exist yet.
+  - apiGroups: [""]
+    resources: [namespaces]
+    verbs: [get, create, patch, delete]
+  - apiGroups: [""]
+    resources: [secrets]
+    verbs: [get, create, patch]
+  - apiGroups: [apps]
+    resources: [deployments]
+    verbs: [get, create, patch]
+  - apiGroups: [cert-manager.io]
+    resources: [certificates]
+    verbs: [get, create, patch]
+  - apiGroups: [kafka.strimzi.io]
+    resources: [kafkas, kafkanodepools, kafkausers]
+    verbs: [get, create, patch]
+  # Each customer's dedicated nodes on EKS Auto Mode.
+  - apiGroups: [karpenter.sh]
+    resources: [nodepools]
+    verbs: [get, create, patch, delete]
+  - apiGroups: [karpenter.sh]
+    resources: [nodeclaims]
+    verbs: [list]
+  - apiGroups: [eks.amazonaws.com]
+    resources: [nodeclasses]
+    verbs: [get, create, patch, delete]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: changeport-provisioner
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: changeport-provisioner
+subjects:
+  - kind: ServiceAccount
+    name: changeport-provisioner
+    namespace: changeport
+---
+# Leader election, so that a rollout never runs two controllers at once.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: changeport-provisioner-leader-election
+  namespace: changeport
+rules:
+  - apiGroups: [coordination.k8s.io]
+    resources: [leases]
+    verbs: [get, list, watch, create, update, patch, delete]
+  - apiGroups: [""]
+    resources: [events]
+    verbs: [create, patch]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: changeport-provisioner-leader-election
+  namespace: changeport
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: changeport-provisioner-leader-election
+subjects:
+  - kind: ServiceAccount
+    name: changeport-provisioner
+    namespace: changeport
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: changeport-provisioner
+  namespace: changeport
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: changeport-provisioner
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: changeport-provisioner
+    spec:
+      serviceAccountName: changeport-provisioner
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: provisioner
+          image: changeport/provisioner:local
+          args:
+            - controller
+            - -leader-elect
+          ports:
+            - name: metrics
+              containerPort: 8080
+            - name: probes
+              containerPort: 8081
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: probes
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: probes
+            periodSeconds: 5
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              memory: 256Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: [ALL]

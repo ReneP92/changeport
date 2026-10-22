@@ -34,6 +34,34 @@ const (
 	ConditionReady = "Ready"
 )
 
+// The reasons of a Customer's conditions.
+const (
+	// ReasonDone is the reason of every True condition.
+	ReasonDone = "Done"
+	// ReasonPending is the reason of a part of the cluster that is not ready
+	// yet.
+	ReasonPending = "Pending"
+
+	// Ready's reasons while it is False: the part the cluster waits for.
+	ReasonCertificatePending = "CertificatePending"
+	ReasonKafkaPending       = "KafkaPending"
+	ReasonUsersPending       = "UsersPending"
+	ReasonAgentPending       = "AgentPending"
+
+	// ReasonInvalidSpec means the platform cannot run the spec, until the
+	// Customer changes.
+	ReasonInvalidSpec = "InvalidSpec"
+	// ReasonProvisioningFailed means applying the template failed; the
+	// controller retries with backoff.
+	ReasonProvisioningFailed = "ProvisioningFailed"
+	// ReasonDeletionProtected means the Customer is deleted but its cluster
+	// is kept until deletion protection is turned off.
+	ReasonDeletionProtected = "DeletionProtected"
+	// ReasonDeprovisioning means the cluster of a deleted Customer is being
+	// deleted.
+	ReasonDeprovisioning = "Deprovisioning"
+)
+
 // CustomerSpec is what Changeport runs for a customer.
 type CustomerSpec struct {
 	// DisplayName is the customer's name as people know it, such as "Acme

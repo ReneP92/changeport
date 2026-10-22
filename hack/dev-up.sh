@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
-# Builds the Kafka and agent images, creates the local kind cluster with
-# cloud-provider-kind for load balancers, installs the platform components
-# (Strimzi, cert-manager) and provisions the "demo" customer's Kafka cluster with the
-# provisioning service, then runs the smoke test against it. Safe to run again.
+# Builds the Kafka, agent and provisioner images, creates the local kind
+# cluster with cloud-provider-kind for load balancers, installs the platform
+# components (Strimzi, cert-manager, the provisioning controller) and creates
+# the "demo" Customer, which the controller provisions, then runs the smoke
+# test against it. Safe to run again.
 # shellcheck source=lib.sh
 source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 
@@ -14,6 +15,7 @@ ensure_kubectl
 
 build_kafka_image
 build_agent_image
+build_provisioner_image
 check_docker_disk
 ensure_kind_cluster
 ensure_cloud_provider_kind

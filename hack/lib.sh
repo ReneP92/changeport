@@ -25,6 +25,9 @@ KAFKA_IMAGE=changeport/kafka:local
 # The Kafka agent's image from images/agent, as named by
 # internal/provisioning.KindPlatform. dev-up builds it and loads it into kind.
 AGENT_IMAGE=changeport/agent:local
+# The provisioner's image from images/provisioner, as named by
+# deploy/base/provisioner. dev-up builds it and loads it into kind.
+PROVISIONER_IMAGE=changeport/provisioner:local
 
 # cloud-provider-kind gives LoadBalancer Services on kind an address: a
 # container per Service on the kind Docker network. It runs as a container on
@@ -61,20 +64,8 @@ die() { printf 'error: %s\n' "$*" >&2; exit 1; }
 # local kind cluster unless a script sets it explicitly (hack/platform-apply.sh).
 kubectl() { "$KUBECTL_BIN" --context "$KUBE_CONTEXT" "$@"; }
 kind() { "$BIN_DIR/kind" "$@"; }
-# Runs the provisioning CLI against KUBE_CONTEXT. provision and controller
-# also get the content-tagged local images, so that customers run the latest
-# builds.
-provisioner() {
-  local images=()
-  if [[ $1 == provision || $1 == controller ]]; then
-    for image in KAFKA_IMAGE AGENT_IMAGE; do
-      if docker image inspect "${!image}" >/dev/null 2>&1; then
-        images+=("-$(echo "${image%_IMAGE}" | tr '[:upper:]' '[:lower:]')-image" "$(content_tag "${!image}")")
-      fi
-    done
-  fi
-  go run ./cmd/provisioner "$1" -context "$KUBE_CONTEXT" "${images[@]}" "${@:2}"
-}
+# Runs the provisioning CLI against KUBE_CONTEXT.
+provisioner() { go run ./cmd/provisioner "$1" -context "$KUBE_CONTEXT" "${@:2}"; }
 
 # Prints the content-addressed name of a locally built image, such as
 # changeport/agent:7a88857b2635 for changeport/agent:local: a rebuild with
@@ -200,12 +191,58 @@ build_agent_image() {
   docker tag "$AGENT_IMAGE" "$(content_tag "$AGENT_IMAGE")"
 }
 
+build_provisioner_image() {
+  log "Building $PROVISIONER_IMAGE"
+  docker buildx build --load --quiet -t "$PROVISIONER_IMAGE" -f images/provisioner/Dockerfile . >/dev/null
+  docker tag "$PROVISIONER_IMAGE" "$(content_tag "$PROVISIONER_IMAGE")"
+}
+
+# The git-ignored overlay kind_local_overlay writes.
+KIND_LOCAL_OVERLAY="$ROOT/deploy/overlays/kind-local"
+
+# Writes KIND_LOCAL_OVERLAY: the kind overlay with the locally built images.
+# The provisioner runs the content tag of its image, and gives customers
+# those of the Kafka and agent images, so that every pod rolls when its
+# image is rebuilt.
+kind_local_overlay() {
+  local image kafka agent provisioner
+  for image in "$KAFKA_IMAGE" "$AGENT_IMAGE" "$PROVISIONER_IMAGE"; do
+    docker image inspect "$image" >/dev/null 2>&1 || die "$image has not been built; run make dev-up"
+  done
+  kafka=$(content_tag "$KAFKA_IMAGE")
+  agent=$(content_tag "$AGENT_IMAGE")
+  provisioner=$(content_tag "$PROVISIONER_IMAGE")
+  mkdir -p "$KIND_LOCAL_OVERLAY"
+  cat >"$KIND_LOCAL_OVERLAY/kustomization.yaml" <<KUSTOMIZATION
+# Written by hack/lib.sh (kind_local_overlay); do not edit.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - ../kind
+images:
+  - name: ${PROVISIONER_IMAGE%:*}
+    newTag: ${provisioner##*:}
+patches:
+  - target:
+      kind: Deployment
+      name: changeport-provisioner
+    patch: |-
+      - op: add
+        path: /spec/template/spec/containers/0/args/-
+        value: -kafka-image=$kafka
+      - op: add
+        path: /spec/template/spec/containers/0/args/-
+        value: -agent-image=$agent
+KUSTOMIZATION
+}
+
 cluster_exists() { kind get clusters 2>/dev/null | grep -x "$CLUSTER_NAME" >/dev/null; }
 
 # Creates the kind cluster from deploy/kind/cluster.yaml, or checks that the
 # existing one still matches it: three zone-labelled workers on the pinned
 # Kubernetes version. Then preloads KIND_PRELOAD_IMAGES into its workers, and
-# KAFKA_IMAGE and AGENT_IMAGE once they have been built.
+# the content tags of KAFKA_IMAGE, AGENT_IMAGE and PROVISIONER_IMAGE once they
+# have been built.
 ensure_kind_cluster() {
   if cluster_exists; then
     check_kind_cluster
@@ -226,7 +263,7 @@ ensure_kind_cluster() {
   log "Loading images into the kind workers"
   kind load docker-image --name "$CLUSTER_NAME" --nodes "$workers" "${KIND_PRELOAD_IMAGES[@]}" >/dev/null 2>&1
   local image
-  for image in "$KAFKA_IMAGE" "$AGENT_IMAGE"; do
+  for image in "$KAFKA_IMAGE" "$AGENT_IMAGE" "$PROVISIONER_IMAGE"; do
     if docker image inspect "$image" >/dev/null 2>&1; then
       kind load docker-image --name "$CLUSTER_NAME" --nodes "$workers" "$(content_tag "$image")" >/dev/null 2>&1
     fi
