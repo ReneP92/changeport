@@ -81,7 +81,9 @@ for progress.
 
 | Path | Contents |
 | --- | --- |
-| `cmd/provisioner` | Stub of the provisioning service: creates and removes customer Kafka clusters |
+| `cmd/provisioner` | Creates and removes customer Kafka clusters: a CLI, and the controller that reconciles `Customer` resources |
+| `api/v1alpha1` | The `Customer` resource (`customers.changeport.io`); `make generate` writes its CRD into `deploy/base/provisioner` |
+| `internal/controller` | The `Customer` controller, which provisions, reports status and deprovisions through a finalizer |
 | `cmd/agent` | The Kafka agent next to every customer's cluster: turns on tiered storage for every topic that can use it |
 | `internal/provisioning` | The per-customer template and the code that applies it through the Kubernetes API |
 | `web` | React frontend (placeholder) |
@@ -230,11 +232,34 @@ NodeClass of their own, so their brokers run on dedicated nodes:
 go run ./cmd/provisioner render -customer acme -profile production -platform eks-prod
 ```
 
+Customers are also Kubernetes resources: a cluster-scoped `Customer`, named
+by the customer ID, with a display name, a profile, an optional Clerk
+organization and deletion protection. `provisioner controller` turns each one
+into its cluster. It applies the template in order without blocking,
+reports how far the cluster is in the conditions `CertificateIssued`,
+`KafkaReady`, `UsersReady`, `AgentAvailable` and `Ready`, and on deletion
+removes the cluster before the `Customer` goes, unless deletion protection
+is on. Until it runs in the cluster (#48), run it against kind by hand, with
+the locally built images, and watch the Customers in another terminal:
+
+```bash
+make controller
+```
+
+```bash
+kubectl get customers
+```
+
 ## Checks
 
 ```bash
 make lint test
 ```
+
+The controller's tests run against a real API server with the Changeport,
+Strimzi and cert-manager CRDs (envtest), which `make test` downloads into
+`bin/`. After changing `api/`, run `make generate`; CI fails on stale
+generated code.
 
 CI runs the same Go lint and tests, plus `make tf-fmt tf-validate` and
 `make shellcheck`, and on every pull request the whole end-to-end suite on a

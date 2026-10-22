@@ -5,6 +5,7 @@ kind: Kustomization
 resources:
   - ../../base/strimzi
   - ../../base/cert-manager
+  - ../../base/provisioner
   - ../../base/eks-storage
   - ../../base/victoria-metrics
 patches:

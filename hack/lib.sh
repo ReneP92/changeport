@@ -11,6 +11,9 @@ cd "$ROOT"
 # at https://github.com/kubernetes-sigs/kind/releases/tag/v0.33.0
 KIND_NODE_IMAGE=kindest/node:v1.37.0@sha256:a1ed56cfb0e7b93589bdf97c8cd566405a265939e3620fc4f5de89adff580ae5
 KUBECTL_VERSION=v1.37.1
+# The kube-apiserver and etcd the controller tests run against (envtest),
+# matching the kind node image. setup-envtest verifies their checksums.
+ENVTEST_K8S_VERSION=1.37.0
 
 # The Changeport Kafka image from images/kafka, as named by
 # internal/provisioning.KindPlatform. dev-up builds it and loads it into kind.
@@ -53,11 +56,12 @@ die() { printf 'error: %s\n' "$*" >&2; exit 1; }
 # local kind cluster unless a script sets it explicitly (hack/platform-apply.sh).
 kubectl() { "$KUBECTL_BIN" --context "$KUBE_CONTEXT" "$@"; }
 kind() { "$BIN_DIR/kind" "$@"; }
-# Runs the provisioning CLI against KUBE_CONTEXT. provision also gets the
-# content-tagged local images, so that customers run the latest builds.
+# Runs the provisioning CLI against KUBE_CONTEXT. provision and controller
+# also get the content-tagged local images, so that customers run the latest
+# builds.
 provisioner() {
   local images=()
-  if [[ $1 == provision ]]; then
+  if [[ $1 == provision || $1 == controller ]]; then
     for image in KAFKA_IMAGE AGENT_IMAGE; do
       if docker image inspect "${!image}" >/dev/null 2>&1; then
         images+=("-$(echo "${image%_IMAGE}" | tr '[:upper:]' '[:lower:]')-image" "$(content_tag "${!image}")")
@@ -89,6 +93,13 @@ require_tools() {
 
 # Builds kind at the version pinned in tools/go.mod.
 ensure_kind() { go -C "$ROOT/tools" build -o "$BIN_DIR/" sigs.k8s.io/kind; }
+
+# Downloads envtest's kube-apiserver and etcd into bin/envtest, unless they
+# are there, and prints their directory for KUBEBUILDER_ASSETS.
+envtest_assets() {
+  go -C "$ROOT/tools" build -o "$BIN_DIR/" sigs.k8s.io/controller-runtime/tools/setup-envtest
+  "$BIN_DIR/setup-envtest" use "$ENVTEST_K8S_VERSION" --bin-dir "$BIN_DIR/envtest" -p path
+}
 
 # Downloads url to dest unless dest already has the SHA-256 want. The file only
 # appears at dest once its checksum matches.
