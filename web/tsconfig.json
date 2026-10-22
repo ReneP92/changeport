@@ -1,0 +1,8 @@
+{
+  "files": [],
+  "references": [{ "path": "./tsconfig.app.json" }, { "path": "./tsconfig.node.json" }],
+  "compilerOptions": {
+    // bun test resolves imports with this root file, not the references.
+    "paths": { "@/*": ["./src/*"] }
+  }
+}
