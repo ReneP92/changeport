@@ -48,7 +48,7 @@ flowchart LR
     prov["Provisioning<br/>Terraform, Strimzi"]
     metrics["Metrics and alerting<br/>VictoriaMetrics,<br/>Alertmanager"]
     api["API and React UI<br/>topology, lag, diagnoses,<br/>usage"]
-    auth["User auth<br/>Clerk or Auth0"]
+    auth["User auth<br/>Clerk"]
   end
 
   team["Customer team"]
@@ -92,9 +92,12 @@ We self-host Apache Kafka on EKS and buy everything that is not Kafka.
 | Repository | One repository for Go services, React app, Terraform and Kubernetes manifests | One place to change a feature end to end |
 | Local development | kind with Strimzi on a laptop | Most work needs no AWS |
 | Customer endpoints | A stable name per customer, such as `bootstrap.<id>.kafka.<domain>`, with Let's Encrypt certificates from cert-manager and DNS records from external-dns; one load balancer per broker to start. Customer IDs are opaque, such as `c-7f3k2q` | Clients never change their bootstrap address or import a CA; the fixed names let a shared gateway replace the per-broker load balancers later without clients noticing; certificate logs and DNS are public, so readable IDs would reveal who the customers are |
-| User auth | Clerk or Auth0, for the customer team's UI login | Not a differentiator |
+| User auth | Clerk: a Clerk organization is a customer, and operators are members of a dedicated staff organization. The console verifies Clerk session tokens offline and takes the customer from the token, never from the URL | Not a differentiator; organizations map onto customers without building user management |
+| Console | One Go service (`cmd/console`) serving the API, described in OpenAPI, and the React app embedded in the binary; it reaches each customer's cluster as a KafkaUser `changeport-console` that may create, delete and describe topics but never read or write messages | One deployment and one origin; the internet-facing service can change topics but cannot see customer data |
+| Control plane state | Kubernetes: a cluster-scoped `Customer` resource per customer, reconciled into the template's resources by a provisioning controller, which alone holds the privileges to create them. Postgres arrives with invoices and audit trails in Phase 5 | One source of truth with no database to run; restarts are safe and status comes from conditions |
 | Billing | Usage-based on data processed, rates set later. Design partner invoiced manually; Stripe usage-based billing from Phase 5 | Price follows the value customers get; usage is already measured for observability |
-| Frontend | Custom React app, not embedded Grafana | The visual experience is the product |
+| Frontend | Custom React app, not embedded Grafana: React, TypeScript, Vite, Tailwind and shadcn/ui, with Bun for installing, scripts, tests and builds | The visual experience is the product; one fast toolchain for all TypeScript |
+| Consumer lag | Lag in seconds computed by the agent from Kafka's time index: the offsets at fixed times are looked up and the age of the oldest unconsumed message is interpolated | Never reads a message, survives restarts, and works for classic and KIP-848 consumer groups |
 | First CDC pair | Postgres source, Snowflake destination; other sources and warehouses follow once this pair runs in production | The most common pair for teams replicating an application database into a warehouse, and one every CDC competitor listed above supports, so customers can compare like for like. Debezium, which stage 2 already runs, has a mature Postgres connector built on logical replication; Snowflake's MERGE gives the idempotent merges behind exactly-once results |
 
 ## How the differentiators are built
@@ -183,7 +186,7 @@ Each phase is a [GitHub milestone](https://github.com/ReneP92/changeport/milesto
 | --- | --- | --- | --- |
 | [Phase 0: Design partner and foundations](https://github.com/ReneP92/changeport/milestone/1) | 3 | Nov 6, 2026 | Design partner, their data volume, AWS accounts, metrics labels, wireframes |
 | [Phase 1: Single-tenant data plane](https://github.com/ReneP92/changeport/milestone/2) | 5–7 | Dec 25, 2026 | EKS Auto Mode, Strimzi, KRaft, dedicated nodes, public TLS endpoints with SCRAM, tiered storage, broker metrics with the tenant label, the design partner's cluster in prod |
-| [Phase 2: Observability](https://github.com/ReneP92/changeport/milestone/3) | 8–10 | Mar 5, 2027 | KIP-714 telemetry receiver, topology map, time-based lag, change timeline, topic tail, alerting |
+| [Phase 2: Observability](https://github.com/ReneP92/changeport/milestone/3) | 8–10 | Mar 5, 2027 | First console (cluster overview, topic management, operator console, lag in seconds), KIP-714 telemetry receiver, topology map, change timeline, topic tail, alerting |
 | [Phase 3: Guidance layer](https://github.com/ReneP92/changeport/milestone/4) | 4–6 | Apr 16, 2027 | Diagnosis rules, health scores, guardrails, onboarding, exactly-once snippets |
 | [Phase 4: Replay, hardening and design-partner launch](https://github.com/ReneP92/changeport/milestone/5) | 6–8 | Jun 11, 2027 | Replay and offset tools, chaos tests, runbooks, docs, design partner in production |
 | [Phase 5: Grow to 50 customers](https://github.com/ReneP92/changeport/milestone/6) | 18 | Oct 15, 2027 | Automated dedicated-cluster provisioning, usage metering, Stripe usage-based billing, fleet monitoring and upgrades, onboarding |
@@ -192,7 +195,9 @@ Each phase is a [GitHub milestone](https://github.com/ReneP92/changeport/milesto
 | [Phase 8: Migration wizard](https://github.com/ReneP92/changeport/milestone/9) | 4–6 | Apr 14, 2028 | MirrorMaker 2 replication, offset translation, cutover validation |
 | [Phase 9: CDC product](https://github.com/ReneP92/changeport/milestone/10) | 13+ | Jul 14, 2028 | Postgres to Snowflake: own sink engine, idempotent merges, watermark backfills, slot monitoring |
 
-Phase 0 and Phase 1 are broken into issues, plus the KIP-714 telemetry receiver moved to Phase 2 and the proxy decision parked in Phase 6. Later phases get issues as each one starts.
+Phase 0 and Phase 1 are broken into issues, plus the first console slice and the KIP-714 telemetry receiver in Phase 2 and the proxy decision parked in Phase 6. Later phases get issues as each one starts.
+
+The first console slice is built ahead of the roadmap, on kind, while the AWS work waits for the accounts and the domain: a customer's cluster overview, topic management with guardrails and consumer lag in seconds, plus an operator console that provisions customers. Topic management and the operator console pull work forward from Phases 3 and 5. It is tracked in [the Phase 2 milestone](https://github.com/ReneP92/changeport/milestone/3) as #46 to #58.
 
 ## Team, pricing and operating model
 
@@ -251,6 +256,8 @@ Decided:
 - [x] Customer endpoints: stable names under our own domain with Let's Encrypt certificates, opaque customer IDs
 - [x] Platform components through kustomize overlays, no GitOps controller
 - [x] [Metrics labeling scheme](https://github.com/ReneP92/changeport/issues/4): tenant, cluster, env, node_id and zone on every broker series, topic and partition from Kafka, client and consumer group labels with KIP-714 in Phase 2; a curated allow list keeps a broker near 500 series, about 80,000 for 50 clusters (see [docs/metrics-labels.md](metrics-labels.md))
+- [x] User auth: Clerk, with organizations as customers and a staff organization for operators
+- [x] Console: one Go service with the embedded React app; a `Customer` resource and a provisioning controller; a console Kafka user that cannot read messages; Bun for all TypeScript
 - [x] [KIP-714 telemetry receiver](https://github.com/ReneP92/changeport/issues/34) moves from Phase 1 to Phase 2, to keep Phase 1 to the deployable cluster
 
 Deferred to Phase 6: [decide whether to adopt the topic-rewriting proxy](https://github.com/ReneP92/changeport/issues/2).

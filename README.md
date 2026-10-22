@@ -24,7 +24,7 @@ per customer; see [docs/PROJECT_PLAN.md](docs/PROJECT_PLAN.md).
 |  | cmd/provisioner   |    | topology, lag,    |    | VictoriaMetrics,  |  |
 |  |                   |    | diagnoses, usage  |    | Alertmanager      |  |
 |  +-------------------+    +-------------------+    +-------------------+  |
-|                           login: Clerk or Auth0                           |
+|                               login: Clerk                                |
 +------------|-------------------------------------------------^------------+
              | Kubernetes API:                                 |
              | namespace, node pool,        broker and client  |
