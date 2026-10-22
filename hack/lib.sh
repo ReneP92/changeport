@@ -314,6 +314,33 @@ metrics_query() {
     sed -nE 's/.*"value":\[[^,]*,"([^"]*)"\].*/\1/p'
 }
 
+# Runs the console's named metrics queries (internal/metrics) against the
+# local VictoriaMetrics for tenant, through a port-forward. Each query must
+# succeed, and those in expected (comma-separated names) must return series.
+check_named_queries() {
+  local tenant=$1 expected=$2 output port pid
+  output=$(mktemp)
+  kubectl -n metrics port-forward svc/victoria-metrics :8428 >"$output" 2>&1 &
+  pid=$!
+  for _ in $(seq 50); do
+    port=$(sed -nE 's/^Forwarding from 127\.0\.0\.1:([0-9]+) .*/\1/p' "$output")
+    [[ -n $port ]] && break
+    sleep 0.2
+  done
+  if [[ -z $port ]]; then
+    kill "$pid" 2>/dev/null || true
+    die "could not port-forward to VictoriaMetrics:"$'\n'"$(cat "$output")"
+  fi
+  if ! CHANGEPORT_METRICS_URL="http://127.0.0.1:$port" CHANGEPORT_METRICS_TENANT="$tenant" \
+    CHANGEPORT_METRICS_EXPECT="$expected" go test -count=1 -run TestQueriesAgainstVictoriaMetrics ./internal/metrics >"$output" 2>&1; then
+    kill "$pid" 2>/dev/null || true
+    die "the console's metrics queries failed for tenant $tenant:"$'\n'"$(cat "$output")"
+  fi
+  kill "$pid" 2>/dev/null || true
+  rm -f "$output"
+  log "The console's metrics queries work for tenant $tenant, with series for $expected"
+}
+
 check_kind_cluster() {
   log "kind cluster $CLUSTER_NAME already exists"
   local want=${KIND_NODE_IMAGE#kindest/node:} zones versions

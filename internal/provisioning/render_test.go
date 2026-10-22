@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 	"testing"
 
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -93,7 +94,7 @@ func TestRenderProducesLabeledObjectsInApplyOrder(t *testing.T) {
 	}
 	// The tiered storage keys and the certificate come before the Kafka
 	// cluster that uses them.
-	wantKinds := []string{"Namespace", "Secret", "Certificate", "KafkaNodePool", "Kafka", "KafkaUser", "KafkaUser", "Deployment"}
+	wantKinds := []string{"Namespace", "Secret", "Certificate", "KafkaNodePool", "Kafka", "KafkaUser", "KafkaUser", "KafkaUser", "Role", "RoleBinding", "Deployment"}
 	if len(objects) != len(wantKinds) {
 		t.Fatalf("got %d objects, want %d", len(objects), len(wantKinds))
 	}
@@ -115,9 +116,80 @@ func TestRenderProducesLabeledObjectsInApplyOrder(t *testing.T) {
 	if got := objects[0].GetName(); got != spec.Namespace() {
 		t.Errorf("namespace is named %q, want %q", got, spec.Namespace())
 	}
-	for _, i := range []int{3, 5, 6} {
+	for _, i := range []int{3, 5, 6, 7} {
 		if got := objects[i].GetLabels()["strimzi.io/cluster"]; got != objects[4].GetName() {
 			t.Errorf("%s belongs to cluster %q, want %q", objects[i].GetKind(), got, objects[4].GetName())
+		}
+	}
+}
+
+// The platform's own users can never read or write customers' messages: only
+// the customer's admin user may.
+func TestRenderPlatformUsersCannotTouchMessages(t *testing.T) {
+	objects, err := Render(Spec{CustomerID: "acme", Profile: DevProfile, Platform: KindPlatform})
+	if err != nil {
+		t.Fatal(err)
+	}
+	platformUsers := map[string]bool{AgentUser: true, ConsoleUser: true}
+	checked := 0
+	for _, obj := range objects {
+		if obj.GetKind() != "KafkaUser" || !platformUsers[obj.GetName()] {
+			continue
+		}
+		checked++
+		acls, _, err := unstructured.NestedSlice(obj.Object, "spec", "authorization", "acls")
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, a := range acls {
+			acl, _ := a.(map[string]any)
+			operations, _, _ := unstructured.NestedStringSlice(acl, "operations")
+			for _, operation := range operations {
+				switch operation {
+				case "Read", "Write", "All", "IdempotentWrite", "Alter", "AlterConfigs":
+					resource, _, _ := unstructured.NestedString(acl, "resource", "type")
+					if operation == "AlterConfigs" && obj.GetName() == AgentUser && resource == "topic" {
+						// The agent turns on tiered storage, a topic setting.
+						continue
+					}
+					t.Errorf("KafkaUser %s may %s %ss", obj.GetName(), operation, resource)
+				}
+			}
+		}
+	}
+	if checked != len(platformUsers) {
+		t.Errorf("checked %d platform users, want %d", checked, len(platformUsers))
+	}
+}
+
+// The console may read exactly the Secrets it needs, by name.
+func TestRenderConsoleSecretAccess(t *testing.T) {
+	spec := Spec{CustomerID: "acme", Profile: DevProfile, Platform: KindPlatform}
+	objects, err := Render(spec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, obj := range objects {
+		switch obj.GetKind() {
+		case "Role":
+			rules, _, _ := unstructured.NestedSlice(obj.Object, "rules")
+			if len(rules) != 1 {
+				t.Fatalf("Role %s has %d rules, want 1", obj.GetName(), len(rules))
+			}
+			rule, _ := rules[0].(map[string]any)
+			resources, _, _ := unstructured.NestedStringSlice(rule, "resources")
+			names, _, _ := unstructured.NestedStringSlice(rule, "resourceNames")
+			verbs, _, _ := unstructured.NestedStringSlice(rule, "verbs")
+			want := []string{"changeport-console", "acme-cluster-ca-cert", "admin", "external-listener-tls"}
+			if strings.Join(resources, ",") != "secrets" || strings.Join(verbs, ",") != "get" || strings.Join(names, ",") != strings.Join(want, ",") {
+				t.Errorf("Role %s allows %v on %v named %v, want get on secrets named %v", obj.GetName(), verbs, resources, names, want)
+			}
+		case "RoleBinding":
+			subjects, _, _ := unstructured.NestedSlice(obj.Object, "subjects")
+			subject, _ := subjects[0].(map[string]any)
+			if len(subjects) != 1 || subject["name"] != ConsoleServiceAccount || subject["namespace"] != ConsoleNamespace {
+				t.Errorf("RoleBinding %s binds %v, want only %s/%s", obj.GetName(), subjects, ConsoleNamespace, ConsoleServiceAccount)
+			}
 		}
 	}
 }

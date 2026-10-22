@@ -38,6 +38,11 @@ rules:
   - apiGroups: [apps]
     resources: [deployments]
     verbs: [get, create, patch]
+  # The console's access to the Secrets it needs in each customer namespace.
+  # Granting it needs no more than the controller holds itself.
+  - apiGroups: [rbac.authorization.k8s.io]
+    resources: [roles, rolebindings]
+    verbs: [get, create, patch]
   - apiGroups: [cert-manager.io]
     resources: [certificates]
     verbs: [get, create, patch]

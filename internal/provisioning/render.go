@@ -50,6 +50,14 @@ type templateValues struct {
 	ExternalListenerSecret string
 	AdminUser              string
 	AgentUser              string
+	ConsoleUser            string
+	InternalPort           int
+	// ConsoleNamespace, ConsoleServiceAccount and ConsoleSecrets let the
+	// console read the Secrets it needs, by name.
+	ConsoleNamespace      string
+	ConsoleServiceAccount string
+	ConsoleSecrets        []string
+	ClusterCASecret       string
 
 	// DedicatedNodePool names the customer's NodePool and NodeClass;
 	// DedicatedNodeCPULimit caps the NodePool at one node per broker plus one
@@ -86,6 +94,13 @@ func RenderYAML(spec Spec) ([]byte, error) {
 		ExternalListenerSecret: ExternalListenerSecret,
 		AdminUser:              AdminUser,
 		AgentUser:              AgentUser,
+		ConsoleUser:            ConsoleUser,
+		InternalPort:           InternalPort,
+
+		ConsoleNamespace:      ConsoleNamespace,
+		ConsoleServiceAccount: ConsoleServiceAccount,
+		ConsoleSecrets:        spec.ConsoleSecrets(),
+		ClusterCASecret:       spec.ClusterCASecret(),
 
 		DedicatedNodePool:     spec.DedicatedNodePool(),
 		DedicatedNodeCPULimit: (spec.Profile.Replicas + 1) * spec.Profile.NodeCPUs,

@@ -3,7 +3,8 @@
 # every customer cluster, each series carries the labels of
 # docs/metrics-labels.md, no Kafka series lacks a tenant, traffic shows up in
 # the counters, and no broker exceeds the series budget the allowList keeps
-# it under. Run it after some traffic, such as the smoke tests.
+# it under, and the console's named queries work on every tenant's series. Run
+# it after some traffic, such as the smoke tests.
 # Usage: hack/metrics-test.sh
 # shellcheck source=lib.sh
 source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
@@ -41,4 +42,7 @@ bytes_in=$(metrics_query 'sum(kafka_server_brokertopicmetrics_bytesinpersec_tota
 
 largest=$(metrics_query 'max(scrape_samples_post_metric_relabeling{job="kafka"})')
 [[ ${largest%.*} -le $series_budget ]] || die "a broker sends $largest series, over the budget of $series_budget"
+for tenant in $tenants; do
+  check_named_queries "$tenant" bytes_in,messages_in,local_size
+done
 log "Metrics test passed: at most $largest series per broker, within the budget of $series_budget"
