@@ -7,3 +7,6 @@
 /playwright-report/
 /test-results/
 /blob-report/
+
+# The signed-in tests' fixtures of the last run (e2e/clerk)
+/playwright/

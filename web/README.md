@@ -28,7 +28,10 @@ make web-e2e     # Playwright in Chromium against the production build
 - **End-to-end tests** live in `e2e/` and run under Playwright's own runner,
   which runs on Bun too, as do its workers and the preview server.
   `PLAYWRIGHT_BASE_URL` points them at a running console instead of a
-  local build. Failing tests are fixed, never retried.
+  local build. With a Clerk secret key too, which `make ui-e2e` takes from
+  `.env`, the signed-in tests in `e2e/clerk` run as well, between a setup
+  and a teardown project that create and remove the run's Clerk test users,
+  organizations and customers. Failing tests are fixed, never retried.
 - **The API client** is generated from `api/openapi.yaml` into
   `src/api/schema.ts` by `make generate`, and calls the API with
   openapi-fetch and the Clerk session token. The app learns its Clerk

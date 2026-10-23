@@ -355,6 +355,13 @@ check_named_queries() {
   log "The console's metrics queries work for tenant $tenant, with series for $expected"
 }
 
+# Prints a variable of the git-ignored .env at the repository root, without
+# running .env as a script, or nothing.
+dotenv_value() {
+  [[ -f "$ROOT/.env" ]] || return 0
+  sed -n "s/^$1=//p" "$ROOT/.env" | tail -1 | sed -e 's/^"\(.*\)"$/\1/' -e "s/^'\(.*\)'$/\1/"
+}
+
 check_kind_cluster() {
   log "kind cluster $CLUSTER_NAME already exists"
   local want=${KIND_NODE_IMAGE#kindest/node:} zones versions
