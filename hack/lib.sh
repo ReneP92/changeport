@@ -28,6 +28,11 @@ AGENT_IMAGE=changeport/agent:local
 # The provisioner's image from images/provisioner, as named by
 # deploy/base/provisioner. dev-up builds it and loads it into kind.
 PROVISIONER_IMAGE=changeport/provisioner:local
+# The console's image from images/console, as named by deploy/base/console.
+# dev-up builds it and loads it into kind, where it is served on the host at
+# http://localhost:$CONSOLE_PORT (deploy/kind/cluster.yaml).
+CONSOLE_IMAGE=changeport/console:local
+CONSOLE_PORT=8088
 
 # cloud-provider-kind gives LoadBalancer Services on kind an address: a
 # container per Service on the kind Docker network. It runs as a container on
@@ -197,21 +202,28 @@ build_provisioner_image() {
   docker tag "$PROVISIONER_IMAGE" "$(content_tag "$PROVISIONER_IMAGE")"
 }
 
+build_console_image() {
+  log "Building $CONSOLE_IMAGE"
+  docker buildx build --load --quiet -t "$CONSOLE_IMAGE" -f images/console/Dockerfile . >/dev/null
+  docker tag "$CONSOLE_IMAGE" "$(content_tag "$CONSOLE_IMAGE")"
+}
+
 # The git-ignored overlay kind_local_overlay writes.
 KIND_LOCAL_OVERLAY="$ROOT/deploy/overlays/kind-local"
 
 # Writes KIND_LOCAL_OVERLAY: the kind overlay with the locally built images.
-# The provisioner runs the content tag of its image, and gives customers
-# those of the Kafka and agent images, so that every pod rolls when its
-# image is rebuilt.
+# The provisioner and the console run the content tags of their images, and
+# the provisioner gives customers those of the Kafka and agent images, so
+# that every pod rolls when its image is rebuilt.
 kind_local_overlay() {
-  local image kafka agent provisioner
-  for image in "$KAFKA_IMAGE" "$AGENT_IMAGE" "$PROVISIONER_IMAGE"; do
+  local image kafka agent provisioner console
+  for image in "$KAFKA_IMAGE" "$AGENT_IMAGE" "$PROVISIONER_IMAGE" "$CONSOLE_IMAGE"; do
     docker image inspect "$image" >/dev/null 2>&1 || die "$image has not been built; run make dev-up"
   done
   kafka=$(content_tag "$KAFKA_IMAGE")
   agent=$(content_tag "$AGENT_IMAGE")
   provisioner=$(content_tag "$PROVISIONER_IMAGE")
+  console=$(content_tag "$CONSOLE_IMAGE")
   mkdir -p "$KIND_LOCAL_OVERLAY"
   cat >"$KIND_LOCAL_OVERLAY/kustomization.yaml" <<KUSTOMIZATION
 # Written by hack/lib.sh (kind_local_overlay); do not edit.
@@ -222,6 +234,8 @@ resources:
 images:
   - name: ${PROVISIONER_IMAGE%:*}
     newTag: ${provisioner##*:}
+  - name: ${CONSOLE_IMAGE%:*}
+    newTag: ${console##*:}
 patches:
   - target:
       kind: Deployment
@@ -241,8 +255,8 @@ cluster_exists() { kind get clusters 2>/dev/null | grep -x "$CLUSTER_NAME" >/dev
 # Creates the kind cluster from deploy/kind/cluster.yaml, or checks that the
 # existing one still matches it: three zone-labelled workers on the pinned
 # Kubernetes version. Then preloads KIND_PRELOAD_IMAGES into its workers, and
-# the content tags of KAFKA_IMAGE, AGENT_IMAGE and PROVISIONER_IMAGE once they
-# have been built.
+# the content tags of KAFKA_IMAGE, AGENT_IMAGE, PROVISIONER_IMAGE and
+# CONSOLE_IMAGE once they have been built.
 ensure_kind_cluster() {
   if cluster_exists; then
     check_kind_cluster
@@ -263,7 +277,7 @@ ensure_kind_cluster() {
   log "Loading images into the kind workers"
   kind load docker-image --name "$CLUSTER_NAME" --nodes "$workers" "${KIND_PRELOAD_IMAGES[@]}" >/dev/null 2>&1
   local image
-  for image in "$KAFKA_IMAGE" "$AGENT_IMAGE" "$PROVISIONER_IMAGE"; do
+  for image in "$KAFKA_IMAGE" "$AGENT_IMAGE" "$PROVISIONER_IMAGE" "$CONSOLE_IMAGE"; do
     if docker image inspect "$image" >/dev/null 2>&1; then
       kind load docker-image --name "$CLUSTER_NAME" --nodes "$workers" "$(content_tag "$image")" >/dev/null 2>&1
     fi
@@ -349,5 +363,8 @@ check_kind_cluster() {
   versions=$(kubectl get nodes -o jsonpath='{range .items[*]}{.status.nodeInfo.kubeletVersion}{"\n"}{end}' | sort -u | paste -sd ' ' -)
   if [[ $zones -ne 3 || "$versions" != "$want" ]]; then
     die "kind cluster $CLUSTER_NAME has nodes in $zones zones on Kubernetes $versions; deploy/kind/cluster.yaml wants 3 zones on $want. Recreate it: make dev-down dev-up"
+  fi
+  if [[ $(docker port "$CLUSTER_NAME-control-plane" 30088/tcp 2>/dev/null) != "127.0.0.1:$CONSOLE_PORT" ]]; then
+    die "kind cluster $CLUSTER_NAME does not publish the console on localhost:$CONSOLE_PORT, which deploy/kind/cluster.yaml asks for. Recreate it: make dev-down dev-up"
   fi
 }

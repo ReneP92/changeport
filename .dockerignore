@@ -1,10 +1,16 @@
-# Images built from the repository root (images/agent, images/provisioner)
-# need only the Go module.
+# Images built from the repository root (images/agent, images/provisioner,
+# images/console) need only the Go module and the web app's sources.
 *
 !go.mod
 !go.sum
 !api/
 !cmd/
 !internal/
+!web/
 **/*_test.go
 **/testdata/
+internal/console/ui/dist/
+web/node_modules/
+web/dist/
+web/test-results/
+web/playwright-report/

@@ -6,7 +6,10 @@ import globals from "globals";
 import tseslint from "typescript-eslint";
 
 export default tseslint.config(
-  { ignores: ["dist", "node_modules", "playwright-report", "test-results"] },
+  {
+    // src/api/schema.ts is generated from api/openapi.yaml (bun run generate).
+    ignores: ["dist", "node_modules", "playwright-report", "test-results", "src/api/schema.ts"],
+  },
   {
     files: ["**/*.{ts,tsx}"],
     extends: [

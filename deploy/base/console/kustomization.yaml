@@ -1,0 +1,11 @@
+# The Changeport console (cmd/console) in the changeport namespace, which
+# deploy/base/provisioner creates. Its Clerk keys come from the Secret
+# changeport-console-clerk, which hack/console-config.sh writes; without it
+# the console fails closed. Overlays set its origins and how it is reached.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+labels:
+  - pairs:
+      changeport.io/platform: console
+resources:
+  - console.yaml

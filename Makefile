@@ -1,6 +1,6 @@
 # Common development tasks. Run "make help" for the list.
 
-TOOLS := sigs.k8s.io/kind github.com/golangci/golangci-lint/v2/cmd/golangci-lint sigs.k8s.io/controller-tools/cmd/controller-gen
+TOOLS := sigs.k8s.io/kind github.com/golangci/golangci-lint/v2/cmd/golangci-lint sigs.k8s.io/controller-tools/cmd/controller-gen github.com/oapi-codegen/oapi-codegen/v2/cmd/oapi-codegen
 PROFILE ?= dev
 KUBE_CONTEXT := kind-$(or $(CLUSTER_NAME),changeport)
 
@@ -38,8 +38,11 @@ tidy: ## Tidy the Go and tools modules
 	go -C tools mod tidy
 
 .PHONY: generate
-generate: tools ## Generate the API's deep copy functions and CRDs from api/
+generate: tools ## Generate code from api/: the CRDs and deep copies, and the console API's Go server and TypeScript client
 	bin/controller-gen object paths=./api/... crd output:crd:dir=deploy/base/provisioner
+	bin/oapi-codegen -config internal/console/api/oapi-codegen.yaml api/openapi.yaml
+	hack/bun.sh install --frozen-lockfile
+	hack/bun.sh run generate
 
 .PHONY: golden
 golden: ## Regenerate the provisioning template golden files
@@ -85,6 +88,22 @@ agent-image: ## Build the Kafka agent image (images/agent) for this machine as c
 .PHONY: provisioner-image
 provisioner-image: ## Build the provisioner image (images/provisioner) for this machine as changeport/provisioner:local
 	@bash -c 'source hack/lib.sh && build_provisioner_image'
+
+.PHONY: console-image
+console-image: ## Build the console image (images/console, with the web app) as changeport/console:local
+	@bash -c 'source hack/lib.sh && build_console_image'
+
+.PHONY: console-reload
+console-reload: ## Rebuild the console and roll it out on kind (http://localhost:8088)
+	@bash -c 'source hack/lib.sh && build_console_image && ensure_kind && ensure_kubectl && ensure_kind_cluster && hack/platform-apply.sh kind && hack/console-config.sh'
+
+.PHONY: console-config
+console-config: ## Give the console on kind its Clerk keys from .env (see .env.sample)
+	hack/console-config.sh
+
+.PHONY: console-test
+console-test: ## Check the console on kind as a browser reaches it, with Playwright
+	hack/console-test.sh
 
 .PHONY: provisioner-reload
 provisioner-reload: ## Rebuild the provisioner and roll it out on kind

@@ -6,9 +6,30 @@ resources:
   - ../../base/strimzi
   - ../../base/cert-manager
   - ../../base/provisioner
+  - ../../base/console
   - ../../base/object-store
   - ../../base/victoria-metrics
 patches:
+  # The console at http://localhost:8088: a NodePort that deploy/kind maps to
+  # that port on the host, and the origins tokens may come from, including
+  # the Vite dev server of make web-dev.
+  - target:
+      kind: Deployment
+      name: changeport-console
+    patch: |-
+      - op: replace
+        path: /spec/template/spec/containers/0/env/0/value
+        value: http://localhost:8088,http://localhost:5173
+  - target:
+      kind: Service
+      name: changeport-console
+    patch: |-
+      - op: add
+        path: /spec/type
+        value: NodePort
+      - op: add
+        path: /spec/ports/0/nodePort
+        value: 30088
   # The platform the provisioner provisions customers on.
   - target:
       kind: Deployment

@@ -130,6 +130,17 @@ jobs:
       - name: Build for amd64 and arm64
         run: docker buildx build --platform linux/amd64,linux/arm64 -f images/provisioner/Dockerfile .
 
+  console-image:
+    name: Console image
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      # The docker-container driver builds for several platforms at once.
+      - run: docker buildx create --use --driver docker-container
+      - name: Build for amd64 and arm64
+        run: docker buildx build --platform linux/amd64,linux/arm64 -f images/console/Dockerfile .
+
   agent-image:
     name: Agent image
     runs-on: ubuntu-latest

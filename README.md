@@ -81,7 +81,9 @@ for progress.
 
 | Path | Contents |
 | --- | --- |
+| `cmd/console`, `internal/console` | The console: the API of `api/openapi.yaml` behind Clerk sign-in, serving the web app built into its image |
 | `cmd/provisioner` | Creates and removes customer Kafka clusters: a CLI, and the controller that reconciles `Customer` resources |
+| `api/openapi.yaml` | The console's API; `make generate` writes its Go server and TypeScript client from it |
 | `api/v1alpha1` | The `Customer` resource (`customers.changeport.io`); `make generate` writes its CRD into `deploy/base/provisioner` |
 | `internal/controller` | The `Customer` controller, which provisions, reports status and deprovisions through a finalizer |
 | `internal/clusters` | The console's Kafka admin clients, one per customer cluster, connected on demand with certificates that follow Strimzi's renewals |
@@ -91,7 +93,7 @@ for progress.
 | `web` | The console's React app, built and tested with Bun (see [web/README.md](web/README.md)) |
 | `terraform` | Base infrastructure per environment: VPC, EKS, S3, IAM (empty modules, nothing applied) |
 | `deploy` | Kubernetes manifests: the kind cluster, and the platform components (Strimzi, cert-manager) with one overlay per environment |
-| `images` | Container images we build: Strimzi's Kafka image plus the tiered storage plugin, the Kafka agent and the provisioner |
+| `images` | Container images we build: Strimzi's Kafka image plus the tiered storage plugin, the Kafka agent, the provisioner and the console |
 | `hack` | Local development scripts behind the Makefile |
 | `tools` | Go module pinning the tools (kind, golangci-lint); `make tools` builds them into `bin/` |
 
@@ -264,6 +266,43 @@ After changing the provisioner, rebuild it and roll it out on kind:
 
 ```bash
 make provisioner-reload
+```
+
+### Console
+
+`make dev-up` also runs the console at <http://localhost:8088>. Customers
+sign in with Clerk, where each Clerk organization is a customer and members
+of the "Changeport staff" organization are operators. Give it the keys of
+your Clerk development instance in a `.env` file, which git ignores:
+
+```bash
+cp .env.sample .env  # then fill it in
+make console-config
+```
+
+Without them the console fails closed: it says it is not configured and
+refuses every API call, which is how CI runs it. The console only accepts
+session tokens of that Clerk instance, issued to its own origins.
+
+To work on the web app with hot reload, run the Vite dev server, which sends
+`/api` to the console on kind, and open <http://localhost:5173>. After
+changing the console's Go code, rebuild it and roll it out:
+
+```bash
+make web-dev
+```
+
+```bash
+make console-reload
+```
+
+The console test checks it as a browser reaches it: the web app and its
+Content Security Policy, an API that refuses requests without a valid
+session, and in Chromium either the "not configured" page or Clerk's sign-in
+form:
+
+```bash
+make console-test
 ```
 
 ## Checks
