@@ -1,0 +1,9 @@
+# oapi-codegen writes api.gen.go from api/openapi.yaml: the types, and a
+# strict server on net/http that internal/console implements.
+package: api
+output: internal/console/api/api.gen.go
+generate:
+  models: true
+  std-http-server: true
+  strict-server: true
+  embedded-spec: false

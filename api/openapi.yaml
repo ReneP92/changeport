@@ -1,0 +1,252 @@
+openapi: 3.0.3
+info:
+  title: Changeport console API
+  version: 0.1.0
+  description: |
+    The API behind the Changeport console. Every route except /api/config
+    needs a Clerk session token as a Bearer token.
+
+    Customer routes act on the customer of the signed-in user's active Clerk
+    organization, never on one named in the request. Operator routes need the
+    active organization to be the Changeport staff organization.
+
+    Without its Clerk configuration the console fails closed: every route
+    answers 503.
+servers:
+  - url: /
+security:
+  - clerk: []
+paths:
+  /api/config:
+    get:
+      operationId: getConfig
+      summary: What the web app needs before anyone signs in
+      security: []
+      responses:
+        "200":
+          description: The console's public configuration
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Config"
+        "503":
+          $ref: "#/components/responses/NotConfigured"
+  /api/me:
+    get:
+      operationId: getMe
+      summary: Who is signed in, and what they may see
+      responses:
+        "200":
+          description: The signed-in user
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Me"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "503":
+          $ref: "#/components/responses/NotConfigured"
+  /api/customer:
+    get:
+      operationId: getCustomer
+      summary: The customer of the active organization and its Kafka cluster
+      responses:
+        "200":
+          description: The customer
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Customer"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "503":
+          $ref: "#/components/responses/NotConfigured"
+  /api/operator/customers:
+    get:
+      operationId: listCustomers
+      summary: Every customer, for operators
+      responses:
+        "200":
+          description: The customers, by ID
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CustomerList"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "503":
+          $ref: "#/components/responses/NotConfigured"
+  /api/operator/customers/{customerID}:
+    get:
+      operationId: getOperatorCustomer
+      summary: One customer, for operators
+      parameters:
+        - $ref: "#/components/parameters/CustomerID"
+      responses:
+        "200":
+          description: The customer
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Customer"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "503":
+          $ref: "#/components/responses/NotConfigured"
+components:
+  securitySchemes:
+    clerk:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: A Clerk session token for the console's origin.
+  parameters:
+    CustomerID:
+      name: customerID
+      in: path
+      required: true
+      description: The customer ID, such as acme
+      schema:
+        type: string
+        pattern: "^[a-z]([-a-z0-9]*[a-z0-9])?$"
+        maxLength: 30
+  responses:
+    Unauthorized:
+      description: No valid session token
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Problem"
+    Forbidden:
+      description: The signed-in user may not do this
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Problem"
+    NotFound:
+      description: There is no such customer
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Problem"
+    NotConfigured:
+      description: The console has no Clerk configuration, so it refuses everything
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Problem"
+  schemas:
+    Problem:
+      type: object
+      description: An error, after RFC 9457
+      required: [status, title]
+      properties:
+        status:
+          type: integer
+        title:
+          type: string
+        detail:
+          type: string
+    Config:
+      type: object
+      required: [clerkPublishableKey]
+      properties:
+        clerkPublishableKey:
+          type: string
+          description: The Clerk publishable key the web app signs in with
+    Me:
+      type: object
+      required: [userID, access]
+      properties:
+        userID:
+          type: string
+        organizationID:
+          type: string
+          description: The active Clerk organization, if any
+        access:
+          type: string
+          enum: [none, customer, operator]
+          description: |
+            What the user may see: their organization's customer, every
+            customer as an operator, or nothing until they choose an
+            organization that is a customer.
+        admin:
+          type: boolean
+          description: Whether the user is an admin of the active organization
+        customerID:
+          type: string
+          description: The customer of the active organization, if any
+    CustomerList:
+      type: object
+      required: [customers]
+      properties:
+        customers:
+          type: array
+          items:
+            $ref: "#/components/schemas/Customer"
+    Customer:
+      type: object
+      required: [id, displayName, profile, ready, status, conditions, deletionProtection, createdAt]
+      properties:
+        id:
+          type: string
+        displayName:
+          type: string
+        profile:
+          type: string
+          enum: [dev, dev-ha, production]
+        bootstrapAddress:
+          type: string
+          description: Where the customer's clients connect, once known
+        ready:
+          type: boolean
+          description: Whether clients can connect
+        status:
+          $ref: "#/components/schemas/Status"
+        conditions:
+          type: array
+          items:
+            $ref: "#/components/schemas/Condition"
+        deletionProtection:
+          type: boolean
+        deleting:
+          type: boolean
+          description: Whether the customer is being deleted
+        createdAt:
+          type: string
+          format: date-time
+    Status:
+      type: object
+      description: The Ready condition, which says what the cluster waits for
+      required: [reason, message]
+      properties:
+        reason:
+          type: string
+        message:
+          type: string
+    Condition:
+      type: object
+      required: [type, ready, reason, message]
+      properties:
+        type:
+          type: string
+          enum: [CertificateIssued, KafkaReady, UsersReady, AgentAvailable, Ready]
+        ready:
+          type: boolean
+        reason:
+          type: string
+        message:
+          type: string
+        since:
+          type: string
+          format: date-time

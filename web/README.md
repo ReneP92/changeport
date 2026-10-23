@@ -29,6 +29,11 @@ make web-e2e     # Playwright in Chromium against the production build
   which runs on Bun too, as do its workers and the preview server.
   `PLAYWRIGHT_BASE_URL` points them at a running console instead of a
   local build. Failing tests are fixed, never retried.
+- **The API client** is generated from `api/openapi.yaml` into
+  `src/api/schema.ts` by `make generate`, and calls the API with
+  openapi-fetch and the Clerk session token. The app learns its Clerk
+  publishable key from `GET /api/config`, so one build serves every
+  environment, and says so when the console is not configured.
 - **Components** come from [shadcn/ui](https://ui.shadcn.com) and are copied
   into `src/components/ui`, where they are ours to change. Add one with
   `hack/bun.sh x shadcn add <component>`.

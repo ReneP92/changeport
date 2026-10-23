@@ -1,11 +1,18 @@
 # Local development cluster: a control plane and three workers, each worker
 # in its own zone like the three availability zones on EKS, so rack-aware
 # placement and zone outages can be tested locally. The node image is pinned
-# in hack/lib.sh (KIND_NODE_IMAGE).
+# in hack/lib.sh (KIND_NODE_IMAGE). The console's NodePort is published on
+# the host as http://localhost:8088, an origin Clerk development instances
+# accept.
 kind: Cluster
 apiVersion: kind.x-k8s.io/v1alpha4
 nodes:
   - role: control-plane
+    extraPortMappings:
+      - containerPort: 30088
+        hostPort: 8088
+        listenAddress: 127.0.0.1
+        protocol: TCP
   - role: worker
     labels:
       topology.kubernetes.io/zone: zone-a

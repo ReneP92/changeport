@@ -13,3 +13,12 @@
 *.tfstate.*
 *.tfplan
 crash.log
+
+# Local secrets, such as the Clerk keys for the console; .env.sample lists
+# the variables without values.
+.env
+.env.*
+!.env.sample
+
+# The web app's build, copied in for go build -tags embedui
+/internal/console/ui/dist/
