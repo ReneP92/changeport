@@ -60,10 +60,19 @@ test("a customer signs in with the form and sees their cluster", async ({ page }
   await setupClerkTestingToken({ page });
   await page.goto("/");
   await page.getByLabel(/email address/i).fill(fixtures.users.formA.email);
+  // Clerk shows the code step before it has sent the code; a code entered
+  // sooner, which no person manages, is refused.
+  const codeSent = page.waitForResponse(
+    (response) =>
+      response.request().method() === "POST" &&
+      response.url().includes("/prepare_first_factor") &&
+      response.ok(),
+  );
   await page.getByRole("button", { name: "Continue", exact: true }).click();
+  await codeSent;
   await expect(page.getByRole("heading", { name: "Check your email" })).toBeVisible();
   // Clerk's test addresses take this code instead of an email.
-  await page.getByRole("textbox").first().pressSequentially("424242");
+  await page.getByRole("textbox", { name: "Enter verification code" }).pressSequentially("424242");
   await expect(page.getByRole("main").getByText(a.displayName)).toBeVisible({ timeout: 20_000 });
   await expect(page.getByRole("main").getByText(`Customer ${a.id}, dev cluster`)).toBeVisible();
 });
