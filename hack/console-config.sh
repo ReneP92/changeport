@@ -18,15 +18,11 @@ if [[ ! -f $env_file ]]; then
   exit 0
 fi
 
-# Prints a variable of .env, without running .env as a script.
-env_value() {
-  sed -n "s/^$1=//p" "$env_file" | tail -1 | sed -e 's/^"\(.*\)"$/\1/' -e "s/^'\(.*\)'$/\1/"
-}
-publishable_key=$(env_value CLERK_PUBLISHABLE_KEY)
+publishable_key=$(dotenv_value CLERK_PUBLISHABLE_KEY)
 # The name Clerk's React quickstart uses.
-[[ -n $publishable_key ]] || publishable_key=$(env_value VITE_CLERK_PUBLISHABLE_KEY)
-secret_key=$(env_value CLERK_SECRET_KEY)
-staff_org=$(env_value CHANGEPORT_STAFF_ORG_ID)
+[[ -n $publishable_key ]] || publishable_key=$(dotenv_value VITE_CLERK_PUBLISHABLE_KEY)
+secret_key=$(dotenv_value CLERK_SECRET_KEY)
+staff_org=$(dotenv_value CHANGEPORT_STAFF_ORG_ID)
 
 [[ $publishable_key == pk_* ]] || die ".env has no Clerk publishable key (CLERK_PUBLISHABLE_KEY=pk_...)"
 [[ $secret_key == sk_* ]] || die ".env has no Clerk secret key (CLERK_SECRET_KEY=sk_...)"

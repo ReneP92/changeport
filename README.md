@@ -305,6 +305,18 @@ form:
 make console-test
 ```
 
+The signed-in tests use the Clerk instance of `.env`. A setup creates this
+run's throwaway `+clerk_test` users, two customer organizations with a
+customer each, and a staff member; the tests sign in through the form and
+with Clerk's testing helpers, and check in the browser and the API that a
+customer sees only their own cluster and never the operator console. A
+teardown removes the run's users, organizations and customers, and the next
+run removes what a crashed run left behind after an hour:
+
+```bash
+make ui-e2e
+```
+
 ## Checks
 
 ```bash
@@ -325,7 +337,11 @@ whole end-to-end suite on a fresh kind cluster: `make dev-up e2e
 platform-check`, where `platform-check` also server-side dry-runs the EKS
 overlays. When that job fails, it uploads
 the output of `hack/diagnostics.sh` (pods, events, resources and logs) as the
-`e2e-diagnostics` artifact. CI also builds the Kafka, agent and provisioner
-images for amd64 and arm64 and runs `make kafka-image-test`, which starts a broker from
-the Kafka image with tiered storage configured. Run
+`e2e-diagnostics` artifact. A second kind job runs `make ui-e2e` against the
+Clerk development instance, with the secret `CLERK_SECRET_KEY` and the
+variables `CLERK_PUBLISHABLE_KEY` and `CHANGEPORT_STAFF_ORG_ID`; where the
+secret is not available, such as in pull requests from forks, it skips with
+a notice. CI also builds the Kafka, agent, provisioner and console images
+for amd64 and arm64 and runs `make kafka-image-test`, which starts a broker
+from the Kafka image with tiered storage configured. Run
 `make help` for every target.

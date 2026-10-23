@@ -43,7 +43,7 @@ test("a configured console offers Clerk's sign-in", async ({ page, request }) =>
   test.skip(config.status() !== 200, "this console is not configured");
   const violations = cspViolations(page);
   await page.goto("/");
-  await expect(page.getByRole("heading", { name: "Changeport" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Changeport", exact: true })).toBeVisible();
   // Clerk's sign-in form, loaded from the instance's Frontend API.
   await expect(page.getByLabel(/email address/i)).toBeVisible({ timeout: 20_000 });
   // Clerk's bot protection reaches out after the form shows.

@@ -105,6 +105,10 @@ console-config: ## Give the console on kind its Clerk keys from .env (see .env.s
 console-test: ## Check the console on kind as a browser reaches it, with Playwright
 	hack/console-test.sh
 
+.PHONY: ui-e2e
+ui-e2e: ## Run the console's Playwright tests on kind, signed in as Clerk test users (needs .env)
+	hack/ui-e2e.sh
+
 .PHONY: provisioner-reload
 provisioner-reload: ## Rebuild the provisioner and roll it out on kind
 	@bash -c 'source hack/lib.sh && build_provisioner_image && ensure_kind && ensure_kubectl && ensure_kind_cluster && hack/platform-apply.sh kind'

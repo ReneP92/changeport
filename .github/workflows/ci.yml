@@ -105,6 +105,61 @@ jobs:
           path: diagnostics
           retention-days: 14
 
+  # The console signed in as Clerk test users, on its own kind cluster. It
+  # needs the Clerk development instance: the secret CLERK_SECRET_KEY and the
+  # variables CLERK_PUBLISHABLE_KEY and CHANGEPORT_STAFF_ORG_ID. Where the
+  # secret is not available, such as in pull requests from forks, it skips
+  # with a notice.
+  console-e2e:
+    name: Console end to end with Clerk
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      CLERK_SECRET_KEY: ${{ secrets.CLERK_SECRET_KEY }}
+      CLERK_PUBLISHABLE_KEY: ${{ vars.CLERK_PUBLISHABLE_KEY }}
+      CHANGEPORT_STAFF_ORG_ID: ${{ vars.CHANGEPORT_STAFF_ORG_ID }}
+    steps:
+      - id: clerk
+        name: Check for the Clerk test instance
+        run: |
+          if [ -z "$CLERK_SECRET_KEY" ] || [ -z "$CLERK_PUBLISHABLE_KEY" ] || [ -z "$CHANGEPORT_STAFF_ORG_ID" ]; then
+            echo "::notice title=Console end to end skipped::The Clerk test instance is not available to this run, so the signed-in console tests did not run."
+            echo "available=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "available=true" >> "$GITHUB_OUTPUT"
+          fi
+      - if: steps.clerk.outputs.available == 'true'
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - if: steps.clerk.outputs.available == 'true'
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: |
+            go.sum
+            tools/go.sum
+      - name: Give the console its Clerk configuration
+        if: steps.clerk.outputs.available == 'true'
+        run: |
+          umask 077
+          printf 'CLERK_PUBLISHABLE_KEY=%s\nCLERK_SECRET_KEY=%s\nCHANGEPORT_STAFF_ORG_ID=%s\n' \
+            "$CLERK_PUBLISHABLE_KEY" "$CLERK_SECRET_KEY" "$CHANGEPORT_STAFF_ORG_ID" > .env
+      - if: steps.clerk.outputs.available == 'true'
+        run: make dev-up
+      - if: steps.clerk.outputs.available == 'true'
+        run: make ui-e2e
+      - name: Collect diagnostics
+        if: failure() && steps.clerk.outputs.available == 'true'
+        run: hack/diagnostics.sh diagnostics
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: failure() && steps.clerk.outputs.available == 'true'
+        with:
+          name: console-e2e
+          path: |
+            diagnostics
+            web/playwright-report
+            web/test-results
+          retention-days: 14
+
   kafka-image:
     name: Kafka image
     runs-on: ubuntu-latest
