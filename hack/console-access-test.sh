@@ -2,7 +2,8 @@
 # Tests the console's access to a customer's cluster on kind, the way the
 # console will use it: from the changeport namespace, as the changeport-console
 # service account and Kafka user. The service account may read exactly the
-# Secrets the console needs in the customer's namespace. Over the internal
+# Secrets the console needs in the customer's namespace, and its pods for the
+# brokers' health, and nothing else. Over the internal
 # mTLS listener, the console user may create, describe and delete topics and
 # list consumer groups, but neither produce nor consume, with or without a
 # consumer group.
@@ -30,8 +31,14 @@ can_i() { kubectl auth can-i --as "$console" "$@" 2>/dev/null || true; }
 for secret in changeport-console "$customer-cluster-ca-cert" admin external-listener-tls; do
   [[ $(can_i -n "$namespace" get "secret/$secret") == yes ]] || die "the console cannot read secret $namespace/$secret"
 done
+# The brokers' pods, for their health.
+for allowed in "-n $namespace get pods" "-n $namespace list pods"; do
+  # shellcheck disable=SC2086 # the words are separate arguments
+  [[ $(can_i $allowed) == yes ]] || die "the console may not $allowed"
+done
 for denied in "-n $namespace get secret/tiered-storage-credentials" "-n $namespace get secret/changeport-agent" \
-  "-n $namespace list secrets" "-n $namespace get pods" "-n kube-system get secret/admin"; do
+  "-n $namespace list secrets" "-n $namespace create pods/exec" "-n $namespace get configmaps" \
+  "-n $namespace delete pods" "-n kube-system list pods" "-n kube-system get secret/admin"; do
   # shellcheck disable=SC2086 # the words are separate arguments
   [[ $(can_i $denied) == no ]] || die "the console may $denied"
 done
