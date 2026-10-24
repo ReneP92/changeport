@@ -2,19 +2,24 @@ import { useTopics } from "@/api/queries";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { formatBytes, formatRate, formatRetention } from "@/lib/format";
+import { CreateTopicDialog } from "@/pages/overview/CreateTopicDialog";
+import { DeleteTopicDialog } from "@/pages/overview/DeleteTopicDialog";
 
 /** The topics with their settings, size and throughput. */
-export function TopicsCard() {
+export function TopicsCard({ admin }: { admin: boolean }) {
   const topics = useTopics();
   return (
     <Card>
-      <CardHeader>
-        <CardTitle>
-          <h2>Topics</h2>
-        </CardTitle>
-        <CardDescription>
-          Tiered topics keep their history in object storage and only recent data on the brokers.
-        </CardDescription>
+      <CardHeader className="flex flex-row items-start justify-between gap-4">
+        <div className="flex flex-col gap-1.5">
+          <CardTitle>
+            <h2>Topics</h2>
+          </CardTitle>
+          <CardDescription>
+            Tiered topics keep their history in object storage and only recent data on the brokers.
+          </CardDescription>
+        </div>
+        {admin && <CreateTopicDialog existing={topics.data?.map((topic) => topic.name) ?? []} />}
       </CardHeader>
       <CardContent className="text-sm">
         {topics.isPending && <p className="text-muted-foreground">Loading topics</p>}
@@ -35,6 +40,11 @@ export function TopicsCard() {
                   <th className="py-2 text-right font-medium">Size</th>
                   <th className="py-2 text-right font-medium">In</th>
                   <th className="py-2 text-right font-medium">Out</th>
+                  {admin && (
+                    <th className="py-2">
+                      <span className="sr-only">Actions</span>
+                    </th>
+                  )}
                 </tr>
               </thead>
               <tbody>
@@ -72,6 +82,11 @@ export function TopicsCard() {
                         ? "–"
                         : formatRate(topic.bytesOutPerSecond)}
                     </td>
+                    {admin && (
+                      <td className="py-1 text-right">
+                        <DeleteTopicDialog topic={topic.name} />
+                      </td>
+                    )}
                   </tr>
                 ))}
               </tbody>

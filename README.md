@@ -304,6 +304,19 @@ topics with their retention, tiering, size and throughput. The console reads
 the topics as the `changeport-console` Kafka user, which cannot read or write
 messages.
 
+The organization's admins also create and delete topics there, within the
+guardrails of `internal/topics`, which the console serves to the web app at
+`/api/customer/topic-policy`: a name that leaves the platform's prefixes
+alone, partitions up to the profile's cap, a retention preset, and old
+messages deleted (tiered from the start) or compacted. Deleting a topic takes
+its name typed and names the consumer groups still reading it. The console
+logs every change it makes for a user as an `audit=true` line with the Clerk
+user and organization:
+
+```bash
+kubectl -n changeport logs deployment/changeport-console | grep audit=true
+```
+
 To act as a customer's own client with a `client.properties` from the
 console, run the Kafka tools from the kind network with it:
 
@@ -327,7 +340,10 @@ customer each, and a staff member; the tests sign in through the form and
 with Clerk's testing helpers, and check in the browser and the API that a
 customer sees only their own cluster and never the operator console. On the
 overview, an admin downloads `client.properties` and produces with it from
-the kind network, and a member sees how to connect but not the password. A
+the kind network, and a member sees how to connect but not the password. An
+admin creates a topic keeping an hour of messages, checks with the Kafka
+tools that it is tiered, reads it with a consumer group, and deletes it
+after the warning about that group; a member cannot change topics. A
 teardown removes the run's users, organizations and customers, and the next
 run removes what a crashed run left behind after an hour:
 

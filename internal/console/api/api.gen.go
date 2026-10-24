@@ -17,6 +17,24 @@ import (
 	"github.com/oapi-codegen/runtime"
 )
 
+// Defines values for CleanupPolicyOptionName.
+const (
+	CleanupPolicyOptionNameCompact CleanupPolicyOptionName = "compact"
+	CleanupPolicyOptionNameDelete  CleanupPolicyOptionName = "delete"
+)
+
+// Valid indicates whether the value is a known member of the CleanupPolicyOptionName enum.
+func (e CleanupPolicyOptionName) Valid() bool {
+	switch e {
+	case CleanupPolicyOptionNameCompact:
+		return true
+	case CleanupPolicyOptionNameDelete:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for ConditionType.
 const (
 	AgentAvailable    ConditionType = "AgentAvailable"
@@ -116,6 +134,24 @@ func (e MeAccess) Valid() bool {
 	}
 }
 
+// Defines values for NewTopicCleanupPolicy.
+const (
+	NewTopicCleanupPolicyCompact NewTopicCleanupPolicy = "compact"
+	NewTopicCleanupPolicyDelete  NewTopicCleanupPolicy = "delete"
+)
+
+// Valid indicates whether the value is a known member of the NewTopicCleanupPolicy enum.
+func (e NewTopicCleanupPolicy) Valid() bool {
+	switch e {
+	case NewTopicCleanupPolicyCompact:
+		return true
+	case NewTopicCleanupPolicyDelete:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for GetThroughputParamsRange.
 const (
 	N1h  GetThroughputParamsRange = "1h"
@@ -147,6 +183,17 @@ type Broker struct {
 	Restarts int     `json:"restarts"`
 	Zone     *string `json:"zone,omitempty"`
 }
+
+// CleanupPolicyOption defines model for CleanupPolicyOption.
+type CleanupPolicyOption struct {
+	Name CleanupPolicyOptionName `json:"name"`
+
+	// Tiered Whether topics of this policy offload history to tiered storage
+	Tiered bool `json:"tiered"`
+}
+
+// CleanupPolicyOptionName defines model for CleanupPolicyOption.Name.
+type CleanupPolicyOptionName string
 
 // Condition defines model for Condition.
 type Condition struct {
@@ -184,6 +231,11 @@ type ConnectionSaslMechanism string
 
 // ConnectionSecurityProtocol defines model for Connection.SecurityProtocol.
 type ConnectionSecurityProtocol string
+
+// ConsumerGroupList defines model for ConsumerGroupList.
+type ConsumerGroupList struct {
+	Groups []string `json:"groups"`
+}
 
 // Customer defines model for Customer.
 type Customer struct {
@@ -249,6 +301,24 @@ type Me struct {
 // organization that is a customer.
 type MeAccess string
 
+// NewTopic defines model for NewTopic.
+type NewTopic struct {
+	CleanupPolicy NewTopicCleanupPolicy `json:"cleanupPolicy"`
+	Name          string                `json:"name"`
+	Partitions    int                   `json:"partitions"`
+	RetentionMs   int64                 `json:"retentionMs"`
+}
+
+// NewTopicCleanupPolicy defines model for NewTopic.CleanupPolicy.
+type NewTopicCleanupPolicy string
+
+// PartitionRange defines model for PartitionRange.
+type PartitionRange struct {
+	Default int `json:"default"`
+	Max     int `json:"max"`
+	Min     int `json:"min"`
+}
+
 // Point defines model for Point.
 type Point struct {
 	Time  time.Time `json:"time"`
@@ -258,8 +328,17 @@ type Point struct {
 // Problem An error, after RFC 9457
 type Problem struct {
 	Detail *string `json:"detail,omitempty"`
+
+	// Field The request field the problem is about, if one
+	Field  *string `json:"field,omitempty"`
 	Status int     `json:"status"`
 	Title  string  `json:"title"`
+}
+
+// RetentionPreset defines model for RetentionPreset.
+type RetentionPreset struct {
+	Label string `json:"label"`
+	Ms    int64  `json:"ms"`
 }
 
 // Status The Ready condition, which says what the cluster waits for
@@ -303,11 +382,30 @@ type TopicList struct {
 	Topics []Topic `json:"topics"`
 }
 
+// TopicPolicy defines model for TopicPolicy.
+type TopicPolicy struct {
+	CleanupPolicies    []CleanupPolicyOption `json:"cleanupPolicies"`
+	DefaultRetentionMs int64                 `json:"defaultRetentionMs"`
+	MaxNameLength      int                   `json:"maxNameLength"`
+	Partitions         PartitionRange        `json:"partitions"`
+
+	// ReplicationFactor Fixed by the cluster's profile
+	ReplicationFactor int               `json:"replicationFactor"`
+	ReservedPrefixes  []string          `json:"reservedPrefixes"`
+	RetentionPresets  []RetentionPreset `json:"retentionPresets"`
+}
+
 // CustomerID defines model for CustomerID.
 type CustomerID = string
 
+// TopicName defines model for TopicName.
+type TopicName = string
+
 // BadRequest An error, after RFC 9457
 type BadRequest = Problem
+
+// Conflict An error, after RFC 9457
+type Conflict = Problem
 
 // Forbidden An error, after RFC 9457
 type Forbidden = Problem
@@ -333,6 +431,9 @@ type GetThroughputParams struct {
 // GetThroughputParamsRange defines parameters for GetThroughput.
 type GetThroughputParamsRange string
 
+// CreateTopicJSONRequestBody defines body for CreateTopic for application/json ContentType.
+type CreateTopicJSONRequestBody = NewTopic
+
 // ServerInterface represents all server handlers.
 type ServerInterface interface {
 	// GetConfig What the web app needs before anyone signs in
@@ -353,9 +454,21 @@ type ServerInterface interface {
 	// GetThroughput Bytes in and out per second over the whole cluster
 	// (GET /api/customer/throughput)
 	GetThroughput(w http.ResponseWriter, r *http.Request, params GetThroughputParams)
+	// GetTopicPolicy The guardrails on the customer's topics, for the create dialog
+	// (GET /api/customer/topic-policy)
+	GetTopicPolicy(w http.ResponseWriter, r *http.Request)
 	// ListTopics The customer's topics, with their settings, size and throughput
 	// (GET /api/customer/topics)
 	ListTopics(w http.ResponseWriter, r *http.Request)
+	// CreateTopic Creates a topic within the guardrails, for organization admins
+	// (POST /api/customer/topics)
+	CreateTopic(w http.ResponseWriter, r *http.Request)
+	// DeleteTopic Deletes a topic and its messages, for organization admins
+	// (DELETE /api/customer/topics/{topic})
+	DeleteTopic(w http.ResponseWriter, r *http.Request, topic TopicName)
+	// ListTopicConsumerGroups The consumer groups with committed offsets on a topic
+	// (GET /api/customer/topics/{topic}/consumer-groups)
+	ListTopicConsumerGroups(w http.ResponseWriter, r *http.Request, topic TopicName)
 	// GetMe Who is signed in, and what they may see
 	// (GET /api/me)
 	GetMe(w http.ResponseWriter, r *http.Request)
@@ -479,11 +592,91 @@ func (siw *ServerInterfaceWrapper) GetThroughput(w http.ResponseWriter, r *http.
 	handler.ServeHTTP(w, r)
 }
 
+// GetTopicPolicy operation middleware
+func (siw *ServerInterfaceWrapper) GetTopicPolicy(w http.ResponseWriter, r *http.Request) {
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.GetTopicPolicy(w, r)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
 // ListTopics operation middleware
 func (siw *ServerInterfaceWrapper) ListTopics(w http.ResponseWriter, r *http.Request) {
 
 	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		siw.Handler.ListTopics(w, r)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// CreateTopic operation middleware
+func (siw *ServerInterfaceWrapper) CreateTopic(w http.ResponseWriter, r *http.Request) {
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.CreateTopic(w, r)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// DeleteTopic operation middleware
+func (siw *ServerInterfaceWrapper) DeleteTopic(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "topic" -------------
+	var topic TopicName
+
+	err = runtime.BindStyledParameterWithOptions("simple", "topic", r.PathValue("topic"), &topic, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "topic", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.DeleteTopic(w, r, topic)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// ListTopicConsumerGroups operation middleware
+func (siw *ServerInterfaceWrapper) ListTopicConsumerGroups(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "topic" -------------
+	var topic TopicName
+
+	err = runtime.BindStyledParameterWithOptions("simple", "topic", r.PathValue("topic"), &topic, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "topic", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.ListTopicConsumerGroups(w, r, topic)
 	}))
 
 	for _, middleware := range siw.HandlerMiddlewares {
@@ -673,7 +866,11 @@ func HandlerWithOptions(si ServerInterface, options StdHTTPServerOptions) http.H
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/customer/connection", wrapper.GetConnection)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/customer/client-properties", wrapper.GetClientProperties)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/customer/health", wrapper.GetHealth)
+	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/customer/topic-policy", wrapper.GetTopicPolicy)
+	m.HandleFunc(http.MethodDelete+" "+options.BaseURL+"/api/customer/topics/{topic}", wrapper.DeleteTopic)
+	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/customer/topics/{topic}/consumer-groups", wrapper.ListTopicConsumerGroups)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/customer/topics", wrapper.ListTopics)
+	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/customer/topics", wrapper.CreateTopic)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/customer/throughput", wrapper.GetThroughput)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/operator/customers", wrapper.ListCustomers)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/operator/customers/{customerID}", wrapper.GetOperatorCustomer)
@@ -682,6 +879,8 @@ func HandlerWithOptions(si ServerInterface, options StdHTTPServerOptions) http.H
 }
 
 type BadRequestJSONResponse Problem
+
+type ConflictJSONResponse Problem
 
 type ForbiddenJSONResponse Problem
 
@@ -1139,6 +1338,83 @@ func (response GetThroughput503JSONResponse) VisitGetThroughputResponse(w http.R
 	return err
 }
 
+type GetTopicPolicyRequestObject struct {
+}
+
+type GetTopicPolicyResponseObject interface {
+	VisitGetTopicPolicyResponse(w http.ResponseWriter) error
+}
+
+type GetTopicPolicy200JSONResponse TopicPolicy
+
+func (response GetTopicPolicy200JSONResponse) VisitGetTopicPolicyResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GetTopicPolicy401JSONResponse struct{ UnauthorizedJSONResponse }
+
+func (response GetTopicPolicy401JSONResponse) VisitGetTopicPolicyResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(401)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GetTopicPolicy403JSONResponse struct{ ForbiddenJSONResponse }
+
+func (response GetTopicPolicy403JSONResponse) VisitGetTopicPolicyResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(403)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GetTopicPolicy404JSONResponse struct{ NotFoundJSONResponse }
+
+func (response GetTopicPolicy404JSONResponse) VisitGetTopicPolicyResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(404)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GetTopicPolicy503JSONResponse struct{ NotConfiguredJSONResponse }
+
+func (response GetTopicPolicy503JSONResponse) VisitGetTopicPolicyResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(503)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
 type ListTopicsRequestObject struct {
 }
 
@@ -1219,6 +1495,290 @@ func (response ListTopics409JSONResponse) VisitListTopicsResponse(w http.Respons
 type ListTopics503JSONResponse struct{ NotConfiguredJSONResponse }
 
 func (response ListTopics503JSONResponse) VisitListTopicsResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(503)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type CreateTopicRequestObject struct {
+	Body *CreateTopicJSONRequestBody
+}
+
+type CreateTopicResponseObject interface {
+	VisitCreateTopicResponse(w http.ResponseWriter) error
+}
+
+type CreateTopic201JSONResponse Topic
+
+func (response CreateTopic201JSONResponse) VisitCreateTopicResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(201)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type CreateTopic400JSONResponse struct{ BadRequestJSONResponse }
+
+func (response CreateTopic400JSONResponse) VisitCreateTopicResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(400)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type CreateTopic401JSONResponse struct{ UnauthorizedJSONResponse }
+
+func (response CreateTopic401JSONResponse) VisitCreateTopicResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(401)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type CreateTopic403JSONResponse struct{ ForbiddenJSONResponse }
+
+func (response CreateTopic403JSONResponse) VisitCreateTopicResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(403)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type CreateTopic404JSONResponse struct{ NotFoundJSONResponse }
+
+func (response CreateTopic404JSONResponse) VisitCreateTopicResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(404)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type CreateTopic409JSONResponse struct{ ConflictJSONResponse }
+
+func (response CreateTopic409JSONResponse) VisitCreateTopicResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(409)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type CreateTopic503JSONResponse struct{ NotConfiguredJSONResponse }
+
+func (response CreateTopic503JSONResponse) VisitCreateTopicResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(503)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type DeleteTopicRequestObject struct {
+	Topic TopicName `json:"topic"`
+}
+
+type DeleteTopicResponseObject interface {
+	VisitDeleteTopicResponse(w http.ResponseWriter) error
+}
+
+type DeleteTopic204Response struct {
+}
+
+func (response DeleteTopic204Response) VisitDeleteTopicResponse(w http.ResponseWriter) error {
+	w.WriteHeader(204)
+	return nil
+}
+
+type DeleteTopic401JSONResponse struct{ UnauthorizedJSONResponse }
+
+func (response DeleteTopic401JSONResponse) VisitDeleteTopicResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(401)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type DeleteTopic403JSONResponse struct{ ForbiddenJSONResponse }
+
+func (response DeleteTopic403JSONResponse) VisitDeleteTopicResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(403)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type DeleteTopic404JSONResponse struct{ NotFoundJSONResponse }
+
+func (response DeleteTopic404JSONResponse) VisitDeleteTopicResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(404)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type DeleteTopic409JSONResponse struct{ NotReadyJSONResponse }
+
+func (response DeleteTopic409JSONResponse) VisitDeleteTopicResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(409)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type DeleteTopic503JSONResponse struct{ NotConfiguredJSONResponse }
+
+func (response DeleteTopic503JSONResponse) VisitDeleteTopicResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(503)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ListTopicConsumerGroupsRequestObject struct {
+	Topic TopicName `json:"topic"`
+}
+
+type ListTopicConsumerGroupsResponseObject interface {
+	VisitListTopicConsumerGroupsResponse(w http.ResponseWriter) error
+}
+
+type ListTopicConsumerGroups200JSONResponse ConsumerGroupList
+
+func (response ListTopicConsumerGroups200JSONResponse) VisitListTopicConsumerGroupsResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ListTopicConsumerGroups401JSONResponse struct{ UnauthorizedJSONResponse }
+
+func (response ListTopicConsumerGroups401JSONResponse) VisitListTopicConsumerGroupsResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(401)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ListTopicConsumerGroups403JSONResponse struct{ ForbiddenJSONResponse }
+
+func (response ListTopicConsumerGroups403JSONResponse) VisitListTopicConsumerGroupsResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(403)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ListTopicConsumerGroups404JSONResponse struct{ NotFoundJSONResponse }
+
+func (response ListTopicConsumerGroups404JSONResponse) VisitListTopicConsumerGroupsResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(404)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ListTopicConsumerGroups409JSONResponse struct{ NotReadyJSONResponse }
+
+func (response ListTopicConsumerGroups409JSONResponse) VisitListTopicConsumerGroupsResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(409)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ListTopicConsumerGroups503JSONResponse struct{ NotConfiguredJSONResponse }
+
+func (response ListTopicConsumerGroups503JSONResponse) VisitListTopicConsumerGroupsResponse(w http.ResponseWriter) error {
 
 	var buf bytes.Buffer
 	if err := json.NewEncoder(&buf).Encode(response); err != nil {
@@ -1440,9 +2000,21 @@ type StrictServerInterface interface {
 	// GetThroughput Bytes in and out per second over the whole cluster
 	// (GET /api/customer/throughput)
 	GetThroughput(ctx context.Context, request GetThroughputRequestObject) (GetThroughputResponseObject, error)
+	// GetTopicPolicy The guardrails on the customer's topics, for the create dialog
+	// (GET /api/customer/topic-policy)
+	GetTopicPolicy(ctx context.Context, request GetTopicPolicyRequestObject) (GetTopicPolicyResponseObject, error)
 	// ListTopics The customer's topics, with their settings, size and throughput
 	// (GET /api/customer/topics)
 	ListTopics(ctx context.Context, request ListTopicsRequestObject) (ListTopicsResponseObject, error)
+	// CreateTopic Creates a topic within the guardrails, for organization admins
+	// (POST /api/customer/topics)
+	CreateTopic(ctx context.Context, request CreateTopicRequestObject) (CreateTopicResponseObject, error)
+	// DeleteTopic Deletes a topic and its messages, for organization admins
+	// (DELETE /api/customer/topics/{topic})
+	DeleteTopic(ctx context.Context, request DeleteTopicRequestObject) (DeleteTopicResponseObject, error)
+	// ListTopicConsumerGroups The consumer groups with committed offsets on a topic
+	// (GET /api/customer/topics/{topic}/consumer-groups)
+	ListTopicConsumerGroups(ctx context.Context, request ListTopicConsumerGroupsRequestObject) (ListTopicConsumerGroupsResponseObject, error)
 	// GetMe Who is signed in, and what they may see
 	// (GET /api/me)
 	GetMe(ctx context.Context, request GetMeRequestObject) (GetMeResponseObject, error)
@@ -1639,6 +2211,30 @@ func (sh *strictHandler) GetThroughput(w http.ResponseWriter, r *http.Request, p
 	}
 }
 
+// GetTopicPolicy operation middleware
+func (sh *strictHandler) GetTopicPolicy(w http.ResponseWriter, r *http.Request) {
+	var request GetTopicPolicyRequestObject
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.GetTopicPolicy(ctx, request.(GetTopicPolicyRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "GetTopicPolicy")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(GetTopicPolicyResponseObject); ok {
+		if err := validResponse.VisitGetTopicPolicyResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
 // ListTopics operation middleware
 func (sh *strictHandler) ListTopics(w http.ResponseWriter, r *http.Request) {
 	var request ListTopicsRequestObject
@@ -1656,6 +2252,89 @@ func (sh *strictHandler) ListTopics(w http.ResponseWriter, r *http.Request) {
 		sh.options.ResponseErrorHandlerFunc(w, r, err)
 	} else if validResponse, ok := response.(ListTopicsResponseObject); ok {
 		if err := validResponse.VisitListTopicsResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// CreateTopic operation middleware
+func (sh *strictHandler) CreateTopic(w http.ResponseWriter, r *http.Request) {
+	var request CreateTopicRequestObject
+
+	var body CreateTopicJSONRequestBody
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		sh.options.RequestErrorHandlerFunc(w, r, fmt.Errorf("can't decode JSON body: %w", err))
+		return
+	}
+	request.Body = &body
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.CreateTopic(ctx, request.(CreateTopicRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "CreateTopic")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(CreateTopicResponseObject); ok {
+		if err := validResponse.VisitCreateTopicResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// DeleteTopic operation middleware
+func (sh *strictHandler) DeleteTopic(w http.ResponseWriter, r *http.Request, topic TopicName) {
+	var request DeleteTopicRequestObject
+
+	request.Topic = topic
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.DeleteTopic(ctx, request.(DeleteTopicRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "DeleteTopic")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(DeleteTopicResponseObject); ok {
+		if err := validResponse.VisitDeleteTopicResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// ListTopicConsumerGroups operation middleware
+func (sh *strictHandler) ListTopicConsumerGroups(w http.ResponseWriter, r *http.Request, topic TopicName) {
+	var request ListTopicConsumerGroupsRequestObject
+
+	request.Topic = topic
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.ListTopicConsumerGroups(ctx, request.(ListTopicConsumerGroupsRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "ListTopicConsumerGroups")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(ListTopicConsumerGroupsResponseObject); ok {
+		if err := validResponse.VisitListTopicConsumerGroupsResponse(w); err != nil {
 			sh.options.ResponseErrorHandlerFunc(w, r, err)
 		}
 	} else if response != nil {

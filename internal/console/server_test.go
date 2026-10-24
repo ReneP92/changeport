@@ -1,6 +1,7 @@
 package console
 
 import (
+	"bytes"
 	"context"
 	"crypto/rand"
 	"crypto/rsa"
@@ -26,6 +27,7 @@ import (
 	"github.com/ReneP92/changeport/internal/clusters"
 	"github.com/ReneP92/changeport/internal/console/api"
 	"github.com/ReneP92/changeport/internal/metrics"
+	"github.com/ReneP92/changeport/internal/topics"
 )
 
 const (
@@ -154,7 +156,9 @@ type fixture struct {
 	handler  http.Handler
 	signer   signer
 	clusters *fakeClusters
-	fetches  int
+	// log is what the server logged, as JSON lines.
+	log     *bytes.Buffer
+	fetches int
 }
 
 var ui = fstest.MapFS{
@@ -165,7 +169,7 @@ var ui = fstest.MapFS{
 
 func newFixture(t *testing.T) *fixture {
 	t.Helper()
-	f := &fixture{signer: newSigner(t, "key-1"), clusters: newFakeClusters()}
+	f := &fixture{signer: newSigner(t, "key-1"), clusters: newFakeClusters(), log: &bytes.Buffer{}}
 	server, err := New(Config{
 		PublishableKey:      publishableKey,
 		SecretKey:           "sk_test_unused",
@@ -176,7 +180,7 @@ func newFixture(t *testing.T) *fixture {
 		Clusters:  f.clusters,
 		Metrics:   fakeMetrics{},
 		UI:        ui,
-		Logger:    slog.New(slog.NewTextHandler(io.Discard, nil)),
+		Logger:    slog.New(slog.NewJSONHandler(f.log, nil)),
 		Keys: func(context.Context) ([]*clerk.JSONWebKey, error) {
 			f.fetches++
 			return []*clerk.JSONWebKey{f.signer.jwk()}, nil
@@ -270,6 +274,8 @@ func TestAuthorizationMatrix(t *testing.T) {
 	routes["/api/customer/health"] = customerRoute(`"name":"acme-dual-role-0"`, `"underReplicatedPartitions":0`, `"name":"globex-dual-role-0"`)
 	routes["/api/customer/topics"] = customerRoute(`"name":"acme-orders"`, `"tiered":true`, `"name":"globex-orders"`)
 	routes["/api/customer/throughput"] = customerRoute(`"bytesIn":[{`, `"range":"1h"`, `"stepSeconds":60`)
+	routes["/api/customer/topic-policy"] = customerRoute(`"max":12`, `"replicationFactor":1`, `"maxNameLength":200`)
+	routes["/api/customer/topics/acme-orders/consumer-groups"] = customerRoute(`{"groups":[]}`, `{"groups":[]}`, `{"groups":[]}`)
 	// Only an organization's admins may download its credentials.
 	clientProperties := customerRoute("", "sasl.jaas.config=", "")
 	clientProperties["acme member"] = want{403, "Admins only"}
@@ -500,9 +506,46 @@ func TestWebApp(t *testing.T) {
 type fakeClusters struct {
 	// notReady lists customers whose credentials and topics are not there yet.
 	notReady map[string]bool
+	// topics holds the topics created by the tests, by customer.
+	topics map[string][]topics.Topic
+	// groups are the consumer groups reading each topic.
+	groups map[string][]string
+	// deleted records the topics deleted by the tests, as customer/topic.
+	deleted []string
 }
 
-func newFakeClusters() *fakeClusters { return &fakeClusters{notReady: map[string]bool{}} }
+func newFakeClusters() *fakeClusters {
+	return &fakeClusters{notReady: map[string]bool{}, topics: map[string][]topics.Topic{}, groups: map[string][]string{}}
+}
+
+func (f *fakeClusters) Load(_ context.Context, id string) (topics.Cluster, error) {
+	if f.notReady[id] {
+		return topics.Cluster{}, fmt.Errorf("no certificate yet: %w", clusters.ErrNotReady)
+	}
+	load := topics.Cluster{Topics: []string{"__consumer_offsets", id + "-orders", id + ".events"}, Replicas: 52, Brokers: 1}
+	for _, t := range f.topics[id] {
+		load.Topics = append(load.Topics, t.Name)
+		load.Replicas += int(t.Partitions) * int(t.ReplicationFactor)
+	}
+	return load, nil
+}
+
+func (f *fakeClusters) CreateTopic(_ context.Context, id string, topic topics.Topic) error {
+	f.topics[id] = append(f.topics[id], topic)
+	return nil
+}
+
+func (f *fakeClusters) DeleteTopic(_ context.Context, id, name string) error {
+	if name != id+"-orders" {
+		return ErrNoSuchTopic
+	}
+	f.deleted = append(f.deleted, id+"/"+name)
+	return nil
+}
+
+func (f *fakeClusters) TopicConsumerGroups(_ context.Context, _, topic string) ([]string, error) {
+	return append([]string{}, f.groups[topic]...), nil
+}
 
 func (f *fakeClusters) Brokers(_ context.Context, id string) ([]Broker, error) {
 	return []Broker{{Name: id + "-dual-role-0", Ready: true, Zone: "zone-a"}}, nil
@@ -606,5 +649,106 @@ func TestThroughput(t *testing.T) {
 	}
 	if status, _, _ := get(t, f.handler, "/api/customer/throughput?range=1y", member); status != 400 {
 		t.Errorf("GET throughput for a year = %d, want 400", status)
+	}
+}
+
+// send makes a request with a method and a JSON body, if any.
+func send(t *testing.T, handler http.Handler, method, path, token, body string) (int, string) {
+	t.Helper()
+	var reader io.Reader = http.NoBody
+	if body != "" {
+		reader = strings.NewReader(body)
+	}
+	request := httptest.NewRequestWithContext(t.Context(), method, path, reader)
+	request.Header.Set("Authorization", "Bearer "+token)
+	if body != "" {
+		request.Header.Set("Content-Type", "application/json")
+	}
+	recorder := httptest.NewRecorder()
+	handler.ServeHTTP(recorder, request)
+	return recorder.Code, recorder.Body.String()
+}
+
+const newTopic = `{"name":"invoices","partitions":3,"retentionMs":3600000,"cleanupPolicy":"delete"}`
+
+func TestOnlyAdminsChangeTopics(t *testing.T) {
+	f := newFixture(t)
+	member := f.signer.token(t, session{user: "user_2", org: "org_acme", role: "member"})
+	staff := f.signer.token(t, session{user: "user_6", org: staffOrg, role: "admin"})
+	for name, token := range map[string]string{"a member": member, "staff": staff} {
+		if status, body := send(t, f.handler, http.MethodPost, "/api/customer/topics", token, newTopic); status != 403 {
+			t.Errorf("%s creating a topic = %d %s, want 403", name, status, body)
+		}
+		if status, body := send(t, f.handler, http.MethodDelete, "/api/customer/topics/acme-orders", token, ""); status != 403 {
+			t.Errorf("%s deleting a topic = %d %s, want 403", name, status, body)
+		}
+	}
+	if len(f.clusters.topics) != 0 || len(f.clusters.deleted) != 0 {
+		t.Errorf("refused requests changed topics: created %v, deleted %v", f.clusters.topics, f.clusters.deleted)
+	}
+}
+
+func TestAdminsCreateTopicsWithinTheGuardrails(t *testing.T) {
+	f := newFixture(t)
+	admin := f.signer.token(t, session{user: "user_3", org: "org_acme", role: "admin"})
+	status, body := send(t, f.handler, http.MethodPost, "/api/customer/topics", admin, newTopic)
+	if status != 201 || !strings.Contains(body, `"tiered":true`) || !strings.Contains(body, `"retentionMs":3600000`) {
+		t.Fatalf("creating a topic = %d %s", status, body)
+	}
+	created := f.clusters.topics["acme"]
+	if len(created) != 1 || created[0].Configs["local.retention.ms"] != "3600000" || created[0].ReplicationFactor != 1 {
+		t.Errorf("created %+v, want one tiered topic keeping an hour locally", created)
+	}
+	if !strings.Contains(f.log.String(), `"msg":"topic created","audit":true,"tenant":"acme","user":"user_3"`) {
+		t.Errorf("no audit line for the creation in %s", f.log.String())
+	}
+
+	tests := []struct {
+		name, body, field string
+		status            int
+	}{
+		{"a reserved name", `{"name":"_secret","partitions":1,"retentionMs":3600000,"cleanupPolicy":"delete"}`, "name", 400},
+		{"a taken name", newTopic, "name", 409},
+		{"a colliding name", `{"name":"acme_events","partitions":1,"retentionMs":3600000,"cleanupPolicy":"delete"}`, "name", 409},
+		{"too many partitions", `{"name":"big","partitions":13,"retentionMs":3600000,"cleanupPolicy":"delete"}`, "partitions", 400},
+		{"a retention that is no preset", `{"name":"odd","partitions":1,"retentionMs":1234,"cleanupPolicy":"delete"}`, "retention", 400},
+		{"another cleanup policy", `{"name":"odd","partitions":1,"retentionMs":3600000,"cleanupPolicy":"compact,delete"}`, "", 400},
+	}
+	for _, tt := range tests {
+		status, body := send(t, f.handler, http.MethodPost, "/api/customer/topics", admin, tt.body)
+		if status != tt.status || (tt.field != "" && !strings.Contains(body, `"field":"`+tt.field+`"`)) {
+			t.Errorf("creating a topic with %s = %d %s, want %d about %q", tt.name, status, body, tt.status, tt.field)
+		}
+	}
+	if len(f.clusters.topics["acme"]) != 1 {
+		t.Errorf("refused topics were created: %+v", f.clusters.topics["acme"])
+	}
+}
+
+func TestAdminsDeleteOnlyTheirOwnTopics(t *testing.T) {
+	f := newFixture(t)
+	admin := f.signer.token(t, session{user: "user_3", org: "org_acme", role: "admin"})
+	for _, name := range []string{"__consumer_offsets", "changeport-audit", "unknown"} {
+		if status, body := send(t, f.handler, http.MethodDelete, "/api/customer/topics/"+name, admin, ""); status != 404 {
+			t.Errorf("deleting %s = %d %s, want 404", name, status, body)
+		}
+	}
+	if status, body := send(t, f.handler, http.MethodDelete, "/api/customer/topics/acme-orders", admin, ""); status != 204 {
+		t.Fatalf("deleting acme-orders = %d %s, want 204", status, body)
+	}
+	if strings.Join(f.clusters.deleted, ",") != "acme/acme-orders" {
+		t.Errorf("deleted %v, want acme/acme-orders", f.clusters.deleted)
+	}
+	if !strings.Contains(f.log.String(), `"msg":"topic deleted","audit":true,"tenant":"acme","user":"user_3","organization":"org_acme","topic":"acme-orders"`) {
+		t.Errorf("no audit line for the deletion in %s", f.log.String())
+	}
+}
+
+func TestTopicConsumerGroups(t *testing.T) {
+	f := newFixture(t)
+	f.clusters.groups["acme-orders"] = []string{"billing", "search"}
+	member := f.signer.token(t, session{user: "user_2", org: "org_acme", role: "member"})
+	if status, body := send(t, f.handler, http.MethodGet, "/api/customer/topics/acme-orders/consumer-groups", member, ""); status != 200 || body != `{"groups":["billing","search"]}`+"\n" {
+		t.Errorf("consumer groups = %d %q", status, body)
 	}
 }

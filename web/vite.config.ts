@@ -11,6 +11,22 @@ export default defineConfig({
   resolve: {
     alias: { "@": path.resolve(import.meta.dirname, "src") },
   },
+  build: {
+    rolldownOptions: {
+      output: {
+        // Libraries change less often than the app, so they get chunks of
+        // their own that browsers keep across releases.
+        codeSplitting: {
+          groups: [
+            { name: "react", test: /node_modules[\\/](react|react-dom|scheduler)[\\/]/ },
+            { name: "clerk", test: /node_modules[\\/]@clerk[\\/]/ },
+            { name: "charts", test: /node_modules[\\/](recharts|d3-[^\\/]+|victory-vendor)[\\/]/ },
+            { name: "vendor", test: /node_modules[\\/]/ },
+          ],
+        },
+      },
+    },
+  },
   server: {
     port: 5173,
     strictPort: true,
