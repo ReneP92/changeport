@@ -9,6 +9,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"time"
@@ -37,6 +38,36 @@ func (e ConditionType) Valid() bool {
 	case Ready:
 		return true
 	case UsersReady:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for ConnectionSaslMechanism.
+const (
+	SCRAMSHA512 ConnectionSaslMechanism = "SCRAM-SHA-512"
+)
+
+// Valid indicates whether the value is a known member of the ConnectionSaslMechanism enum.
+func (e ConnectionSaslMechanism) Valid() bool {
+	switch e {
+	case SCRAMSHA512:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for ConnectionSecurityProtocol.
+const (
+	SASLSSL ConnectionSecurityProtocol = "SASL_SSL"
+)
+
+// Valid indicates whether the value is a known member of the ConnectionSecurityProtocol enum.
+func (e ConnectionSecurityProtocol) Valid() bool {
+	switch e {
+	case SASLSSL:
 		return true
 	default:
 		return false
@@ -85,6 +116,38 @@ func (e MeAccess) Valid() bool {
 	}
 }
 
+// Defines values for GetThroughputParamsRange.
+const (
+	N1h  GetThroughputParamsRange = "1h"
+	N24h GetThroughputParamsRange = "24h"
+	N6h  GetThroughputParamsRange = "6h"
+	N7d  GetThroughputParamsRange = "7d"
+)
+
+// Valid indicates whether the value is a known member of the GetThroughputParamsRange enum.
+func (e GetThroughputParamsRange) Valid() bool {
+	switch e {
+	case N1h:
+		return true
+	case N24h:
+		return true
+	case N6h:
+		return true
+	case N7d:
+		return true
+	default:
+		return false
+	}
+}
+
+// Broker defines model for Broker.
+type Broker struct {
+	Name     string  `json:"name"`
+	Ready    bool    `json:"ready"`
+	Restarts int     `json:"restarts"`
+	Zone     *string `json:"zone,omitempty"`
+}
+
 // Condition defines model for Condition.
 type Condition struct {
 	Message string        `json:"message"`
@@ -102,6 +165,25 @@ type Config struct {
 	// ClerkPublishableKey The Clerk publishable key the web app signs in with
 	ClerkPublishableKey string `json:"clerkPublishableKey"`
 }
+
+// Connection defines model for Connection.
+type Connection struct {
+	// BootstrapAddress Where clients bootstrap from, once the cluster has it
+	BootstrapAddress *string `json:"bootstrapAddress,omitempty"`
+
+	// CaCertificate The PEM certificate of the CA that issued the listener's
+	// certificate, when clients do not trust it by default
+	CaCertificate    *string                    `json:"caCertificate,omitempty"`
+	SaslMechanism    ConnectionSaslMechanism    `json:"saslMechanism"`
+	SecurityProtocol ConnectionSecurityProtocol `json:"securityProtocol"`
+	Username         string                     `json:"username"`
+}
+
+// ConnectionSaslMechanism defines model for Connection.SaslMechanism.
+type ConnectionSaslMechanism string
+
+// ConnectionSecurityProtocol defines model for Connection.SecurityProtocol.
+type ConnectionSecurityProtocol string
 
 // Customer defines model for Customer.
 type Customer struct {
@@ -132,6 +214,18 @@ type CustomerList struct {
 	Customers []Customer `json:"customers"`
 }
 
+// Health The brokers, and the partitions' health from the brokers' metrics,
+// which are absent until the metrics store has them
+type Health struct {
+	ActiveBrokers             *int     `json:"activeBrokers,omitempty"`
+	ActiveControllers         *int     `json:"activeControllers,omitempty"`
+	Brokers                   []Broker `json:"brokers"`
+	FencedBrokers             *int     `json:"fencedBrokers,omitempty"`
+	OfflinePartitions         *int     `json:"offlinePartitions,omitempty"`
+	UnderMinIsrPartitions     *int     `json:"underMinIsrPartitions,omitempty"`
+	UnderReplicatedPartitions *int     `json:"underReplicatedPartitions,omitempty"`
+}
+
 // Me defines model for Me.
 type Me struct {
 	// Access What the user may see: their organization's customer, every
@@ -155,6 +249,12 @@ type Me struct {
 // organization that is a customer.
 type MeAccess string
 
+// Point defines model for Point.
+type Point struct {
+	Time  time.Time `json:"time"`
+	Value float32   `json:"value"`
+}
+
 // Problem An error, after RFC 9457
 type Problem struct {
 	Detail *string `json:"detail,omitempty"`
@@ -168,8 +268,46 @@ type Status struct {
 	Reason  string `json:"reason"`
 }
 
+// Throughput defines model for Throughput.
+type Throughput struct {
+	BytesIn     []Point `json:"bytesIn"`
+	BytesOut    []Point `json:"bytesOut"`
+	Range       string  `json:"range"`
+	StepSeconds int     `json:"stepSeconds"`
+}
+
+// Topic defines model for Topic.
+type Topic struct {
+	BytesInPerSecond  *float32 `json:"bytesInPerSecond,omitempty"`
+	BytesOutPerSecond *float32 `json:"bytesOutPerSecond,omitempty"`
+	CleanupPolicy     string   `json:"cleanupPolicy"`
+
+	// LocalBytes Bytes on the brokers' disks, once, not counting replicas
+	LocalBytes *float32 `json:"localBytes,omitempty"`
+	Name       string   `json:"name"`
+	Partitions int      `json:"partitions"`
+
+	// RemoteBytes Bytes in tiered storage
+	RemoteBytes       *float32 `json:"remoteBytes,omitempty"`
+	ReplicationFactor int      `json:"replicationFactor"`
+
+	// RetentionMs How long the topic keeps messages; absent for no limit
+	RetentionMs *int64 `json:"retentionMs,omitempty"`
+
+	// Tiered Whether the topic offloads its history to tiered storage
+	Tiered bool `json:"tiered"`
+}
+
+// TopicList defines model for TopicList.
+type TopicList struct {
+	Topics []Topic `json:"topics"`
+}
+
 // CustomerID defines model for CustomerID.
 type CustomerID = string
+
+// BadRequest An error, after RFC 9457
+type BadRequest = Problem
 
 // Forbidden An error, after RFC 9457
 type Forbidden = Problem
@@ -180,8 +318,20 @@ type NotConfigured = Problem
 // NotFound An error, after RFC 9457
 type NotFound = Problem
 
+// NotReady An error, after RFC 9457
+type NotReady = Problem
+
 // Unauthorized An error, after RFC 9457
 type Unauthorized = Problem
+
+// GetThroughputParams defines parameters for GetThroughput.
+type GetThroughputParams struct {
+	// Range How far back to look
+	Range *GetThroughputParamsRange `form:"range,omitempty" json:"range,omitempty"`
+}
+
+// GetThroughputParamsRange defines parameters for GetThroughput.
+type GetThroughputParamsRange string
 
 // ServerInterface represents all server handlers.
 type ServerInterface interface {
@@ -191,6 +341,21 @@ type ServerInterface interface {
 	// GetCustomer The customer of the active organization and its Kafka cluster
 	// (GET /api/customer)
 	GetCustomer(w http.ResponseWriter, r *http.Request)
+	// GetClientProperties A client.properties with the admin user's credentials, for organization admins
+	// (GET /api/customer/client-properties)
+	GetClientProperties(w http.ResponseWriter, r *http.Request)
+	// GetConnection How the customer's clients connect, without the password
+	// (GET /api/customer/connection)
+	GetConnection(w http.ResponseWriter, r *http.Request)
+	// GetHealth The brokers and the partitions' health
+	// (GET /api/customer/health)
+	GetHealth(w http.ResponseWriter, r *http.Request)
+	// GetThroughput Bytes in and out per second over the whole cluster
+	// (GET /api/customer/throughput)
+	GetThroughput(w http.ResponseWriter, r *http.Request, params GetThroughputParams)
+	// ListTopics The customer's topics, with their settings, size and throughput
+	// (GET /api/customer/topics)
+	ListTopics(w http.ResponseWriter, r *http.Request)
 	// GetMe Who is signed in, and what they may see
 	// (GET /api/me)
 	GetMe(w http.ResponseWriter, r *http.Request)
@@ -230,6 +395,95 @@ func (siw *ServerInterfaceWrapper) GetCustomer(w http.ResponseWriter, r *http.Re
 
 	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		siw.Handler.GetCustomer(w, r)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// GetClientProperties operation middleware
+func (siw *ServerInterfaceWrapper) GetClientProperties(w http.ResponseWriter, r *http.Request) {
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.GetClientProperties(w, r)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// GetConnection operation middleware
+func (siw *ServerInterfaceWrapper) GetConnection(w http.ResponseWriter, r *http.Request) {
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.GetConnection(w, r)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// GetHealth operation middleware
+func (siw *ServerInterfaceWrapper) GetHealth(w http.ResponseWriter, r *http.Request) {
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.GetHealth(w, r)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// GetThroughput operation middleware
+func (siw *ServerInterfaceWrapper) GetThroughput(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params GetThroughputParams
+
+	// ------------- Optional query parameter "range" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "range", r.URL.Query(), &params.Range, runtime.BindQueryParameterOptions{Type: "string", Format: ""})
+	if err != nil {
+		var requiredError *runtime.RequiredParameterError
+		if errors.As(err, &requiredError) {
+			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "range"})
+		} else {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "range", Err: err})
+		}
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.GetThroughput(w, r, params)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// ListTopics operation middleware
+func (siw *ServerInterfaceWrapper) ListTopics(w http.ResponseWriter, r *http.Request) {
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.ListTopics(w, r)
 	}))
 
 	for _, middleware := range siw.HandlerMiddlewares {
@@ -416,17 +670,26 @@ func HandlerWithOptions(si ServerInterface, options StdHTTPServerOptions) http.H
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/config", wrapper.GetConfig)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/me", wrapper.GetMe)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/customer", wrapper.GetCustomer)
+	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/customer/connection", wrapper.GetConnection)
+	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/customer/client-properties", wrapper.GetClientProperties)
+	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/customer/health", wrapper.GetHealth)
+	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/customer/topics", wrapper.ListTopics)
+	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/customer/throughput", wrapper.GetThroughput)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/operator/customers", wrapper.ListCustomers)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/operator/customers/{customerID}", wrapper.GetOperatorCustomer)
 
 	return m
 }
 
+type BadRequestJSONResponse Problem
+
 type ForbiddenJSONResponse Problem
 
 type NotConfiguredJSONResponse Problem
 
 type NotFoundJSONResponse Problem
+
+type NotReadyJSONResponse Problem
 
 type UnauthorizedJSONResponse Problem
 
@@ -531,6 +794,431 @@ func (response GetCustomer404JSONResponse) VisitGetCustomerResponse(w http.Respo
 type GetCustomer503JSONResponse struct{ NotConfiguredJSONResponse }
 
 func (response GetCustomer503JSONResponse) VisitGetCustomerResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(503)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GetClientPropertiesRequestObject struct {
+}
+
+type GetClientPropertiesResponseObject interface {
+	VisitGetClientPropertiesResponse(w http.ResponseWriter) error
+}
+
+type GetClientProperties200TextResponse string
+
+func (response GetClientProperties200TextResponse) VisitGetClientPropertiesResponse(w http.ResponseWriter) error {
+
+	w.Header().Set("Content-Type", "text/plain")
+	w.WriteHeader(200)
+
+	_, err := w.Write([]byte(fmt.Sprint(response)))
+	return err
+}
+
+type GetClientProperties401JSONResponse struct{ UnauthorizedJSONResponse }
+
+func (response GetClientProperties401JSONResponse) VisitGetClientPropertiesResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(401)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GetClientProperties403JSONResponse struct{ ForbiddenJSONResponse }
+
+func (response GetClientProperties403JSONResponse) VisitGetClientPropertiesResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(403)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GetClientProperties404JSONResponse struct{ NotFoundJSONResponse }
+
+func (response GetClientProperties404JSONResponse) VisitGetClientPropertiesResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(404)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GetClientProperties409JSONResponse struct{ NotReadyJSONResponse }
+
+func (response GetClientProperties409JSONResponse) VisitGetClientPropertiesResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(409)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GetClientProperties503JSONResponse struct{ NotConfiguredJSONResponse }
+
+func (response GetClientProperties503JSONResponse) VisitGetClientPropertiesResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(503)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GetConnectionRequestObject struct {
+}
+
+type GetConnectionResponseObject interface {
+	VisitGetConnectionResponse(w http.ResponseWriter) error
+}
+
+type GetConnection200JSONResponse Connection
+
+func (response GetConnection200JSONResponse) VisitGetConnectionResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GetConnection401JSONResponse struct{ UnauthorizedJSONResponse }
+
+func (response GetConnection401JSONResponse) VisitGetConnectionResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(401)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GetConnection403JSONResponse struct{ ForbiddenJSONResponse }
+
+func (response GetConnection403JSONResponse) VisitGetConnectionResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(403)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GetConnection404JSONResponse struct{ NotFoundJSONResponse }
+
+func (response GetConnection404JSONResponse) VisitGetConnectionResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(404)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GetConnection503JSONResponse struct{ NotConfiguredJSONResponse }
+
+func (response GetConnection503JSONResponse) VisitGetConnectionResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(503)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GetHealthRequestObject struct {
+}
+
+type GetHealthResponseObject interface {
+	VisitGetHealthResponse(w http.ResponseWriter) error
+}
+
+type GetHealth200JSONResponse Health
+
+func (response GetHealth200JSONResponse) VisitGetHealthResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GetHealth401JSONResponse struct{ UnauthorizedJSONResponse }
+
+func (response GetHealth401JSONResponse) VisitGetHealthResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(401)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GetHealth403JSONResponse struct{ ForbiddenJSONResponse }
+
+func (response GetHealth403JSONResponse) VisitGetHealthResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(403)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GetHealth404JSONResponse struct{ NotFoundJSONResponse }
+
+func (response GetHealth404JSONResponse) VisitGetHealthResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(404)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GetHealth503JSONResponse struct{ NotConfiguredJSONResponse }
+
+func (response GetHealth503JSONResponse) VisitGetHealthResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(503)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GetThroughputRequestObject struct {
+	Params GetThroughputParams
+}
+
+type GetThroughputResponseObject interface {
+	VisitGetThroughputResponse(w http.ResponseWriter) error
+}
+
+type GetThroughput200JSONResponse Throughput
+
+func (response GetThroughput200JSONResponse) VisitGetThroughputResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GetThroughput400JSONResponse struct{ BadRequestJSONResponse }
+
+func (response GetThroughput400JSONResponse) VisitGetThroughputResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(400)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GetThroughput401JSONResponse struct{ UnauthorizedJSONResponse }
+
+func (response GetThroughput401JSONResponse) VisitGetThroughputResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(401)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GetThroughput403JSONResponse struct{ ForbiddenJSONResponse }
+
+func (response GetThroughput403JSONResponse) VisitGetThroughputResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(403)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GetThroughput404JSONResponse struct{ NotFoundJSONResponse }
+
+func (response GetThroughput404JSONResponse) VisitGetThroughputResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(404)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GetThroughput503JSONResponse struct{ NotConfiguredJSONResponse }
+
+func (response GetThroughput503JSONResponse) VisitGetThroughputResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(503)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ListTopicsRequestObject struct {
+}
+
+type ListTopicsResponseObject interface {
+	VisitListTopicsResponse(w http.ResponseWriter) error
+}
+
+type ListTopics200JSONResponse TopicList
+
+func (response ListTopics200JSONResponse) VisitListTopicsResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ListTopics401JSONResponse struct{ UnauthorizedJSONResponse }
+
+func (response ListTopics401JSONResponse) VisitListTopicsResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(401)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ListTopics403JSONResponse struct{ ForbiddenJSONResponse }
+
+func (response ListTopics403JSONResponse) VisitListTopicsResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(403)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ListTopics404JSONResponse struct{ NotFoundJSONResponse }
+
+func (response ListTopics404JSONResponse) VisitListTopicsResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(404)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ListTopics409JSONResponse struct{ NotReadyJSONResponse }
+
+func (response ListTopics409JSONResponse) VisitListTopicsResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(409)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ListTopics503JSONResponse struct{ NotConfiguredJSONResponse }
+
+func (response ListTopics503JSONResponse) VisitListTopicsResponse(w http.ResponseWriter) error {
 
 	var buf bytes.Buffer
 	if err := json.NewEncoder(&buf).Encode(response); err != nil {
@@ -740,6 +1428,21 @@ type StrictServerInterface interface {
 	// GetCustomer The customer of the active organization and its Kafka cluster
 	// (GET /api/customer)
 	GetCustomer(ctx context.Context, request GetCustomerRequestObject) (GetCustomerResponseObject, error)
+	// GetClientProperties A client.properties with the admin user's credentials, for organization admins
+	// (GET /api/customer/client-properties)
+	GetClientProperties(ctx context.Context, request GetClientPropertiesRequestObject) (GetClientPropertiesResponseObject, error)
+	// GetConnection How the customer's clients connect, without the password
+	// (GET /api/customer/connection)
+	GetConnection(ctx context.Context, request GetConnectionRequestObject) (GetConnectionResponseObject, error)
+	// GetHealth The brokers and the partitions' health
+	// (GET /api/customer/health)
+	GetHealth(ctx context.Context, request GetHealthRequestObject) (GetHealthResponseObject, error)
+	// GetThroughput Bytes in and out per second over the whole cluster
+	// (GET /api/customer/throughput)
+	GetThroughput(ctx context.Context, request GetThroughputRequestObject) (GetThroughputResponseObject, error)
+	// ListTopics The customer's topics, with their settings, size and throughput
+	// (GET /api/customer/topics)
+	ListTopics(ctx context.Context, request ListTopicsRequestObject) (ListTopicsResponseObject, error)
 	// GetMe Who is signed in, and what they may see
 	// (GET /api/me)
 	GetMe(ctx context.Context, request GetMeRequestObject) (GetMeResponseObject, error)
@@ -831,6 +1534,128 @@ func (sh *strictHandler) GetCustomer(w http.ResponseWriter, r *http.Request) {
 		sh.options.ResponseErrorHandlerFunc(w, r, err)
 	} else if validResponse, ok := response.(GetCustomerResponseObject); ok {
 		if err := validResponse.VisitGetCustomerResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// GetClientProperties operation middleware
+func (sh *strictHandler) GetClientProperties(w http.ResponseWriter, r *http.Request) {
+	var request GetClientPropertiesRequestObject
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.GetClientProperties(ctx, request.(GetClientPropertiesRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "GetClientProperties")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(GetClientPropertiesResponseObject); ok {
+		if err := validResponse.VisitGetClientPropertiesResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// GetConnection operation middleware
+func (sh *strictHandler) GetConnection(w http.ResponseWriter, r *http.Request) {
+	var request GetConnectionRequestObject
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.GetConnection(ctx, request.(GetConnectionRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "GetConnection")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(GetConnectionResponseObject); ok {
+		if err := validResponse.VisitGetConnectionResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// GetHealth operation middleware
+func (sh *strictHandler) GetHealth(w http.ResponseWriter, r *http.Request) {
+	var request GetHealthRequestObject
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.GetHealth(ctx, request.(GetHealthRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "GetHealth")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(GetHealthResponseObject); ok {
+		if err := validResponse.VisitGetHealthResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// GetThroughput operation middleware
+func (sh *strictHandler) GetThroughput(w http.ResponseWriter, r *http.Request, params GetThroughputParams) {
+	var request GetThroughputRequestObject
+
+	request.Params = params
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.GetThroughput(ctx, request.(GetThroughputRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "GetThroughput")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(GetThroughputResponseObject); ok {
+		if err := validResponse.VisitGetThroughputResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// ListTopics operation middleware
+func (sh *strictHandler) ListTopics(w http.ResponseWriter, r *http.Request) {
+	var request ListTopicsRequestObject
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.ListTopics(ctx, request.(ListTopicsRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "ListTopics")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(ListTopicsResponseObject); ok {
+		if err := validResponse.VisitListTopicsResponse(w); err != nil {
 			sh.options.ResponseErrorHandlerFunc(w, r, err)
 		}
 	} else if response != nil {

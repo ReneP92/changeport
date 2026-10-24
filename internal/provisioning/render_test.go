@@ -162,7 +162,7 @@ func TestRenderPlatformUsersCannotTouchMessages(t *testing.T) {
 	}
 }
 
-// The console may read exactly the Secrets it needs, by name.
+// The console may read exactly the Secrets it needs, by name, and the pods.
 func TestRenderConsoleSecretAccess(t *testing.T) {
 	spec := Spec{CustomerID: "acme", Profile: DevProfile, Platform: KindPlatform}
 	objects, err := Render(spec)
@@ -173,16 +173,21 @@ func TestRenderConsoleSecretAccess(t *testing.T) {
 		switch obj.GetKind() {
 		case "Role":
 			rules, _, _ := unstructured.NestedSlice(obj.Object, "rules")
-			if len(rules) != 1 {
-				t.Fatalf("Role %s has %d rules, want 1", obj.GetName(), len(rules))
+			if len(rules) != 2 {
+				t.Fatalf("Role %s has %d rules, want 2", obj.GetName(), len(rules))
 			}
-			rule, _ := rules[0].(map[string]any)
-			resources, _, _ := unstructured.NestedStringSlice(rule, "resources")
-			names, _, _ := unstructured.NestedStringSlice(rule, "resourceNames")
-			verbs, _, _ := unstructured.NestedStringSlice(rule, "verbs")
-			want := []string{"changeport-console", "acme-cluster-ca-cert", "admin", "external-listener-tls"}
-			if strings.Join(resources, ",") != "secrets" || strings.Join(verbs, ",") != "get" || strings.Join(names, ",") != strings.Join(want, ",") {
-				t.Errorf("Role %s allows %v on %v named %v, want get on secrets named %v", obj.GetName(), verbs, resources, names, want)
+			rule := func(i int) (resources, names, verbs string) {
+				r, _ := rules[i].(map[string]any)
+				res, _, _ := unstructured.NestedStringSlice(r, "resources")
+				n, _, _ := unstructured.NestedStringSlice(r, "resourceNames")
+				v, _, _ := unstructured.NestedStringSlice(r, "verbs")
+				return strings.Join(res, ","), strings.Join(n, ","), strings.Join(v, ",")
+			}
+			if res, names, verbs := rule(0); res != "secrets" || verbs != "get" || names != "changeport-console,acme-cluster-ca-cert,admin,external-listener-tls" {
+				t.Errorf("Role %s allows %s on %s named %s, want get on the console's secrets by name", obj.GetName(), verbs, res, names)
+			}
+			if res, names, verbs := rule(1); res != "pods" || verbs != "get,list" || names != "" {
+				t.Errorf("Role %s allows %s on %s named %q, want get and list on pods", obj.GetName(), verbs, res, names)
 			}
 		case "RoleBinding":
 			subjects, _, _ := unstructured.NestedSlice(obj.Object, "subjects")

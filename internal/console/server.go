@@ -22,7 +22,9 @@ import (
 	"k8s.io/utils/ptr"
 
 	"github.com/ReneP92/changeport/api/v1alpha1"
+	"github.com/ReneP92/changeport/internal/clusters"
 	"github.com/ReneP92/changeport/internal/console/api"
+	"github.com/ReneP92/changeport/internal/metrics"
 	"github.com/ReneP92/changeport/internal/provisioning"
 )
 
@@ -62,6 +64,8 @@ type Server struct {
 	config    Config
 	auth      *authenticator
 	customers Customers
+	clusters  Clusters
+	metrics   Metrics
 	ui        fs.FS
 	logger    *slog.Logger
 	// csp is the Content-Security-Policy of the web app's pages.
@@ -71,6 +75,9 @@ type Server struct {
 // Options holds what New needs besides the configuration.
 type Options struct {
 	Customers Customers
+	// Clusters and Metrics read the customers' clusters and their metrics.
+	Clusters Clusters
+	Metrics  Metrics
 	// UI is the built web app, with index.html at its root.
 	UI     fs.FS
 	Logger *slog.Logger
@@ -84,7 +91,14 @@ type Options struct {
 // New returns a console server. An incomplete configuration is not an
 // error: the console then serves the web app and refuses every API call.
 func New(config Config, options Options) (*Server, error) {
-	s := &Server{config: config, customers: options.Customers, ui: options.UI, logger: options.Logger}
+	s := &Server{
+		config:    config,
+		customers: options.Customers,
+		clusters:  options.Clusters,
+		metrics:   options.Metrics,
+		ui:        options.UI,
+		logger:    options.Logger,
+	}
 	if missing := config.missing(); len(missing) > 0 {
 		s.logger.Warn("the console is not configured and refuses every API call", "missing", strings.Join(missing, ", "))
 		s.csp = contentSecurityPolicy("")
@@ -99,13 +113,21 @@ func New(config Config, options Options) (*Server, error) {
 		keys = clerkKeys(config.SecretKey)
 	}
 	s.auth = &authenticator{
-		keys:    &keySet{fetch: keys, now: time.Now},
+		keys:    &keySet{fetch: keys, now: time.Now, logger: options.Logger},
 		issuer:  "https://" + frontendAPI,
 		origins: config.Origins,
 		clock:   options.Clock,
 	}
 	s.csp = contentSecurityPolicy(frontendAPI)
 	return s, nil
+}
+
+// WarmUp fetches Clerk's signing keys before the first request needs them,
+// retrying until it has them or ctx is done.
+func (s *Server) WarmUp(ctx context.Context) {
+	if s.auth != nil {
+		s.auth.keys.warm(ctx)
+	}
 }
 
 // clerkKeys fetches the signing keys from Clerk's Backend API.
@@ -160,6 +182,11 @@ func (s *Server) Handler() http.Handler {
 			writeProblem(w, http.StatusBadRequest, "Bad request", err.Error())
 		},
 		ResponseErrorHandlerFunc: func(w http.ResponseWriter, r *http.Request, err error) {
+			if r.Context().Err() != nil {
+				// The client went away; there is nobody to answer.
+				s.logger.Debug("API request abandoned", "method", r.Method, "path", r.URL.Path, "error", err)
+				return
+			}
 			s.logger.Error("API request failed", "method", r.Method, "path", r.URL.Path, "error", err)
 			writeProblem(w, http.StatusInternalServerError, "Something went wrong", "")
 		},
@@ -424,4 +451,283 @@ func toAPI(c *v1alpha1.Customer) api.Customer {
 		}
 	}
 	return out
+}
+
+// customerOf returns the customer of the principal's active organization
+// for the customer routes, or the problem why there is none to act on.
+func (s *Server) customerOf(ctx context.Context) (*v1alpha1.Customer, Principal, *api.Problem, error) {
+	principal, err := mustPrincipal(ctx)
+	if err != nil {
+		return nil, principal, nil, err
+	}
+	switch {
+	case principal.OrganizationID == "":
+		p := problem(http.StatusForbidden, "Choose an organization", "Customers are Clerk organizations; switch to yours to see its cluster.")
+		return nil, principal, &p, nil
+	case s.operator(principal):
+		p := problem(http.StatusForbidden, "The staff organization is not a customer", "Operators see customers in the operator console.")
+		return nil, principal, &p, nil
+	}
+	customer, err := s.customers.ByOrganization(ctx, principal.OrganizationID)
+	if err != nil {
+		return nil, principal, nil, err
+	}
+	if customer == nil {
+		p := problem(http.StatusNotFound, "No Kafka cluster yet", "Your organization has no Changeport cluster yet.")
+		return nil, principal, &p, nil
+	}
+	return customer, principal, nil, nil
+}
+
+// GetConnection implements api.StrictServerInterface.
+func (s *Server) GetConnection(ctx context.Context, _ api.GetConnectionRequestObject) (api.GetConnectionResponseObject, error) {
+	customer, _, refused, err := s.customerOf(ctx)
+	switch {
+	case err != nil:
+		return nil, err
+	case refused != nil && refused.Status == http.StatusNotFound:
+		return api.GetConnection404JSONResponse{NotFoundJSONResponse: api.NotFoundJSONResponse(*refused)}, nil
+	case refused != nil:
+		return api.GetConnection403JSONResponse{ForbiddenJSONResponse: api.ForbiddenJSONResponse(*refused)}, nil
+	}
+	connection := api.GetConnection200JSONResponse{
+		Username:         provisioning.AdminUser,
+		SecurityProtocol: api.SASLSSL,
+		SaslMechanism:    api.SCRAMSHA512,
+	}
+	if customer.Status.BootstrapAddress != "" {
+		connection.BootstrapAddress = ptr.To(customer.Status.BootstrapAddress)
+	}
+	ca, err := s.clusters.ListenerCA(ctx, customer.Name)
+	if err != nil {
+		return nil, err
+	}
+	if ca != "" {
+		connection.CaCertificate = ptr.To(ca)
+	}
+	return connection, nil
+}
+
+// clientPropertiesDownload is a client.properties sent as a file to save.
+type clientPropertiesDownload struct {
+	customerID string
+	content    string
+}
+
+// VisitGetClientPropertiesResponse implements api.GetClientPropertiesResponseObject.
+func (d clientPropertiesDownload) VisitGetClientPropertiesResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+	w.Header().Set("Content-Disposition", fmt.Sprintf(`attachment; filename="%s-client.properties"`, d.customerID))
+	// The file holds the admin user's password.
+	w.Header().Set("Cache-Control", "no-store")
+	w.WriteHeader(http.StatusOK)
+	_, err := w.Write([]byte(d.content))
+	return err
+}
+
+// GetClientProperties implements api.StrictServerInterface. Only the
+// organization's admins may download the admin user's credentials.
+func (s *Server) GetClientProperties(ctx context.Context, _ api.GetClientPropertiesRequestObject) (api.GetClientPropertiesResponseObject, error) {
+	customer, principal, refused, err := s.customerOf(ctx)
+	switch {
+	case err != nil:
+		return nil, err
+	case refused != nil && refused.Status == http.StatusNotFound:
+		return api.GetClientProperties404JSONResponse{NotFoundJSONResponse: api.NotFoundJSONResponse(*refused)}, nil
+	case refused != nil:
+		return api.GetClientProperties403JSONResponse{ForbiddenJSONResponse: api.ForbiddenJSONResponse(*refused)}, nil
+	case !principal.Admin():
+		return api.GetClientProperties403JSONResponse{ForbiddenJSONResponse: api.ForbiddenJSONResponse(problem(http.StatusForbidden,
+			"Admins only", "Ask an admin of your organization for the cluster's credentials."))}, nil
+	case customer.Status.BootstrapAddress == "":
+		return api.GetClientProperties409JSONResponse{NotReadyJSONResponse: api.NotReadyJSONResponse(notReadyYet)}, nil
+	}
+	jaas, err := s.clusters.AdminCredentials(ctx, customer.Name)
+	if errors.Is(err, clusters.ErrNotReady) {
+		return api.GetClientProperties409JSONResponse{NotReadyJSONResponse: api.NotReadyJSONResponse(notReadyYet)}, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	ca, err := s.clusters.ListenerCA(ctx, customer.Name)
+	if err != nil {
+		return nil, err
+	}
+	s.logger.Info("credentials downloaded", "tenant", customer.Name, "user", principal.UserID, "organization", principal.OrganizationID)
+	return clientPropertiesDownload{
+		customerID: customer.Name,
+		content:    provisioning.ClientPropertiesFile(customer.Name, customer.Status.BootstrapAddress, jaas, ca),
+	}, nil
+}
+
+var notReadyYet = problem(http.StatusConflict, "The cluster is not ready yet", "Try again once it is ready.")
+
+// GetHealth implements api.StrictServerInterface. The partitions' health
+// comes from the metrics store and is left out while it has none.
+func (s *Server) GetHealth(ctx context.Context, _ api.GetHealthRequestObject) (api.GetHealthResponseObject, error) {
+	customer, _, refused, err := s.customerOf(ctx)
+	switch {
+	case err != nil:
+		return nil, err
+	case refused != nil && refused.Status == http.StatusNotFound:
+		return api.GetHealth404JSONResponse{NotFoundJSONResponse: api.NotFoundJSONResponse(*refused)}, nil
+	case refused != nil:
+		return api.GetHealth403JSONResponse{ForbiddenJSONResponse: api.ForbiddenJSONResponse(*refused)}, nil
+	}
+	brokers, err := s.clusters.Brokers(ctx, customer.Name)
+	if err != nil {
+		return nil, err
+	}
+	health := api.GetHealth200JSONResponse{Brokers: make([]api.Broker, 0, len(brokers))}
+	for _, b := range brokers {
+		broker := api.Broker{Name: b.Name, Ready: b.Ready, Restarts: b.Restarts}
+		if b.Zone != "" {
+			broker.Zone = ptr.To(b.Zone)
+		}
+		health.Brokers = append(health.Brokers, broker)
+	}
+	now := time.Now()
+	for q, field := range map[metrics.Query]**int{
+		metrics.UnderReplicated:   &health.UnderReplicatedPartitions,
+		metrics.UnderMinISR:       &health.UnderMinIsrPartitions,
+		metrics.OfflinePartitions: &health.OfflinePartitions,
+		metrics.ActiveControllers: &health.ActiveControllers,
+		metrics.ActiveBrokers:     &health.ActiveBrokers,
+		metrics.FencedBrokers:     &health.FencedBrokers,
+	} {
+		series, err := s.metrics.Instant(ctx, customer.Name, q, metrics.Filter{}, now)
+		if err != nil {
+			s.logger.Warn("the metrics store did not answer", "query", q, "tenant", customer.Name, "error", err)
+			continue
+		}
+		if len(series) == 1 && len(series[0].Points) == 1 {
+			*field = ptr.To(int(series[0].Points[0].Value))
+		}
+	}
+	return health, nil
+}
+
+// ListTopics implements api.StrictServerInterface. Sizes and throughput
+// come from the metrics store and are left out while it has none.
+func (s *Server) ListTopics(ctx context.Context, _ api.ListTopicsRequestObject) (api.ListTopicsResponseObject, error) {
+	customer, _, refused, err := s.customerOf(ctx)
+	switch {
+	case err != nil:
+		return nil, err
+	case refused != nil && refused.Status == http.StatusNotFound:
+		return api.ListTopics404JSONResponse{NotFoundJSONResponse: api.NotFoundJSONResponse(*refused)}, nil
+	case refused != nil:
+		return api.ListTopics403JSONResponse{ForbiddenJSONResponse: api.ForbiddenJSONResponse(*refused)}, nil
+	}
+	settings, err := s.clusters.Topics(ctx, customer.Name)
+	if errors.Is(err, clusters.ErrNotReady) {
+		return api.ListTopics409JSONResponse{NotReadyJSONResponse: api.NotReadyJSONResponse(notReadyYet)}, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	now := time.Now()
+	perTopic := map[metrics.Query]map[string]float64{}
+	for _, q := range []metrics.Query{metrics.LocalSize, metrics.RemoteSize, metrics.BytesIn, metrics.BytesOut} {
+		series, err := s.metrics.Instant(ctx, customer.Name, q, metrics.Filter{}, now)
+		if err != nil {
+			s.logger.Warn("the metrics store did not answer", "query", q, "tenant", customer.Name, "error", err)
+			continue
+		}
+		perTopic[q] = map[string]float64{}
+		for _, one := range series {
+			if len(one.Points) == 1 {
+				perTopic[q][one.Labels["topic"]] = one.Points[0].Value
+			}
+		}
+	}
+	value := func(q metrics.Query, topic string) *float32 {
+		if v, ok := perTopic[q][topic]; ok {
+			return ptr.To(float32(v))
+		}
+		return nil
+	}
+	list := api.ListTopics200JSONResponse{Topics: make([]api.Topic, 0, len(settings))}
+	for _, t := range settings {
+		list.Topics = append(list.Topics, api.Topic{
+			Name:              t.Name,
+			Partitions:        t.Partitions,
+			ReplicationFactor: t.ReplicationFactor,
+			Tiered:            t.Tiered,
+			CleanupPolicy:     t.CleanupPolicy,
+			RetentionMs:       t.RetentionMs,
+			LocalBytes:        value(metrics.LocalSize, t.Name),
+			RemoteBytes:       value(metrics.RemoteSize, t.Name),
+			BytesInPerSecond:  value(metrics.BytesIn, t.Name),
+			BytesOutPerSecond: value(metrics.BytesOut, t.Name),
+		})
+	}
+	return list, nil
+}
+
+// throughputRanges are the ranges the throughput chart offers, each with a
+// step that keeps it to a few hundred points.
+var throughputRanges = map[api.GetThroughputParamsRange]time.Duration{
+	api.N1h:  time.Minute,
+	api.N6h:  5 * time.Minute,
+	api.N24h: 15 * time.Minute,
+	api.N7d:  time.Hour,
+}
+
+var rangeDurations = map[api.GetThroughputParamsRange]time.Duration{
+	api.N1h:  time.Hour,
+	api.N6h:  6 * time.Hour,
+	api.N24h: 24 * time.Hour,
+	api.N7d:  7 * 24 * time.Hour,
+}
+
+// GetThroughput implements api.StrictServerInterface: the bytes in and out
+// per second over all topics.
+func (s *Server) GetThroughput(ctx context.Context, request api.GetThroughputRequestObject) (api.GetThroughputResponseObject, error) {
+	window := api.N1h
+	if request.Params.Range != nil {
+		window = *request.Params.Range
+	}
+	step, ok := throughputRanges[window]
+	if !ok {
+		return api.GetThroughput400JSONResponse{BadRequestJSONResponse: api.BadRequestJSONResponse(problem(http.StatusBadRequest,
+			"Unknown range", "Choose 1h, 6h, 24h or 7d."))}, nil
+	}
+	customer, _, refused, err := s.customerOf(ctx)
+	switch {
+	case err != nil:
+		return nil, err
+	case refused != nil && refused.Status == http.StatusNotFound:
+		return api.GetThroughput404JSONResponse{NotFoundJSONResponse: api.NotFoundJSONResponse(*refused)}, nil
+	case refused != nil:
+		return api.GetThroughput403JSONResponse{ForbiddenJSONResponse: api.ForbiddenJSONResponse(*refused)}, nil
+	}
+	end := time.Now().Truncate(step)
+	start := end.Add(-rangeDurations[window])
+	throughput := api.GetThroughput200JSONResponse{Range: string(window), StepSeconds: int(step.Seconds())}
+	for q, field := range map[metrics.Query]*[]api.Point{metrics.BytesIn: &throughput.BytesIn, metrics.BytesOut: &throughput.BytesOut} {
+		series, err := s.metrics.Range(ctx, customer.Name, q, metrics.Filter{}, start, end, step)
+		if err != nil {
+			return nil, err
+		}
+		*field = sumSeries(series)
+	}
+	return throughput, nil
+}
+
+// sumSeries adds up per-topic series point by point, into one series in
+// time order.
+func sumSeries(series []metrics.Series) []api.Point {
+	totals := map[time.Time]float64{}
+	for _, one := range series {
+		for _, point := range one.Points {
+			totals[point.Time] += point.Value
+		}
+	}
+	points := make([]api.Point, 0, len(totals))
+	for t, v := range totals {
+		points = append(points, api.Point{Time: t.UTC(), Value: float32(v)})
+	}
+	slices.SortFunc(points, func(a, b api.Point) int { return a.Time.Compare(b.Time) })
+	return points
 }

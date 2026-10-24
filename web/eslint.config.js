@@ -29,8 +29,18 @@ export default tseslint.config(
     },
   },
   {
-    // shadcn/ui components export their variant helpers next to the component.
+    // shadcn/ui components stay as shadcn publishes them, so that updates
+    // apply cleanly: they export their variant helpers next to the component,
+    // and the chart wraps Recharts' loosely typed props. Our code stays strict.
     files: ["src/components/ui/**/*.tsx"],
-    rules: { "react-refresh/only-export-components": "off" },
+    rules: {
+      "react-refresh/only-export-components": "off",
+      "@typescript-eslint/no-unsafe-argument": "off",
+      "@typescript-eslint/no-unsafe-assignment": "off",
+      "@typescript-eslint/no-unsafe-member-access": "off",
+      "@typescript-eslint/no-unnecessary-condition": "off",
+      "@typescript-eslint/no-unnecessary-type-assertion": "off",
+      "@typescript-eslint/restrict-template-expressions": "off",
+    },
   },
 );

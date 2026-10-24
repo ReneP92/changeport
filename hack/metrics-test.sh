@@ -43,6 +43,6 @@ bytes_in=$(metrics_query 'sum(kafka_server_brokertopicmetrics_bytesinpersec_tota
 largest=$(metrics_query 'max(scrape_samples_post_metric_relabeling{job="kafka"})')
 [[ ${largest%.*} -le $series_budget ]] || die "a broker sends $largest series, over the budget of $series_budget"
 for tenant in $tenants; do
-  check_named_queries "$tenant" bytes_in,messages_in,local_size
+  check_named_queries "$tenant" bytes_in,messages_in,local_size,under_replicated,active_controllers,active_brokers
 done
 log "Metrics test passed: at most $largest series per broker, within the budget of $series_budget"

@@ -1,4 +1,11 @@
-import { OrganizationSwitcher, Show, SignIn, UserButton } from "@clerk/react";
+import {
+  ClerkFailed,
+  ClerkLoading,
+  OrganizationSwitcher,
+  Show,
+  SignIn,
+  UserButton,
+} from "@clerk/react";
 import { Link, Route, Routes } from "react-router";
 import { ApiProvider } from "@/api/ApiProvider";
 import { Notice } from "@/components/Notice";
@@ -9,6 +16,16 @@ import { OperatorCustomers } from "@/pages/OperatorCustomers";
 export function Console() {
   return (
     <>
+      <ClerkLoading>
+        <Notice title="Changeport" busy />
+      </ClerkLoading>
+      {/* Clerk's script comes from Clerk; without it nobody can sign in. */}
+      <ClerkFailed>
+        <Notice title="Sign-in could not load">
+          The console could not reach its sign-in service. Check your connection and reload the
+          page.
+        </Notice>
+      </ClerkFailed>
       <Show when="signed-out">
         <main className="flex min-h-svh flex-col items-center justify-center gap-8 p-8">
           <h1 className="text-2xl font-semibold tracking-tight">Changeport</h1>
@@ -29,11 +46,12 @@ function SignedIn() {
     <div className="min-h-svh">
       <header className="border-b">
         <div className="mx-auto flex max-w-5xl items-center gap-4 px-6 py-3">
-          <Link to="/" className="flex items-center gap-2 font-semibold tracking-tight">
+          <Link to="/" className="flex shrink-0 items-center gap-2 font-semibold tracking-tight">
             <img src="/favicon.svg" alt="" className="size-6" />
-            Changeport
+            {/* On phones the mark alone leaves room for the organization's name. */}
+            <span className="max-sm:sr-only">Changeport</span>
           </Link>
-          <div className="ml-auto flex items-center gap-3">
+          <div className="ml-auto flex min-w-0 items-center gap-3">
             <OrganizationSwitcher
               hidePersonal
               afterSelectOrganizationUrl="/"

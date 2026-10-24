@@ -55,6 +55,91 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/customer/connection": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** How the customer's clients connect, without the password */
+        get: operations["getConnection"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/customer/client-properties": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** A client.properties with the admin user's credentials, for organization admins */
+        get: operations["getClientProperties"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/customer/health": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** The brokers and the partitions' health */
+        get: operations["getHealth"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/customer/topics": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** The customer's topics, with their settings, size and throughput */
+        get: operations["listTopics"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/customer/throughput": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Bytes in and out per second over the whole cluster */
+        get: operations["getThroughput"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/operator/customers": {
         parameters: {
             query?: never;
@@ -119,6 +204,72 @@ export interface components {
             /** @description The customer of the active organization, if any */
             customerID?: string;
         };
+        Connection: {
+            /** @description Where clients bootstrap from, once the cluster has it */
+            bootstrapAddress?: string;
+            username: string;
+            /** @enum {string} */
+            securityProtocol: "SASL_SSL";
+            /** @enum {string} */
+            saslMechanism: "SCRAM-SHA-512";
+            /**
+             * @description The PEM certificate of the CA that issued the listener's
+             *     certificate, when clients do not trust it by default
+             */
+            caCertificate?: string;
+        };
+        /**
+         * @description The brokers, and the partitions' health from the brokers' metrics,
+         *     which are absent until the metrics store has them
+         */
+        Health: {
+            brokers: components["schemas"]["Broker"][];
+            underReplicatedPartitions?: number;
+            underMinIsrPartitions?: number;
+            offlinePartitions?: number;
+            activeControllers?: number;
+            activeBrokers?: number;
+            fencedBrokers?: number;
+        };
+        Broker: {
+            name: string;
+            ready: boolean;
+            zone?: string;
+            restarts: number;
+        };
+        TopicList: {
+            topics: components["schemas"]["Topic"][];
+        };
+        Topic: {
+            name: string;
+            partitions: number;
+            replicationFactor: number;
+            /** @description Whether the topic offloads its history to tiered storage */
+            tiered: boolean;
+            cleanupPolicy: string;
+            /**
+             * Format: int64
+             * @description How long the topic keeps messages; absent for no limit
+             */
+            retentionMs?: number;
+            /** @description Bytes on the brokers' disks, once, not counting replicas */
+            localBytes?: number;
+            /** @description Bytes in tiered storage */
+            remoteBytes?: number;
+            bytesInPerSecond?: number;
+            bytesOutPerSecond?: number;
+        };
+        Throughput: {
+            range: string;
+            stepSeconds: number;
+            bytesIn: components["schemas"]["Point"][];
+            bytesOut: components["schemas"]["Point"][];
+        };
+        Point: {
+            /** Format: date-time */
+            time: string;
+            value: number;
+        };
         CustomerList: {
             customers: components["schemas"]["Customer"][];
         };
@@ -175,6 +326,24 @@ export interface components {
         };
         /** @description There is no such customer */
         NotFound: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/json": components["schemas"]["Problem"];
+            };
+        };
+        /** @description The cluster is not ready for this yet */
+        NotReady: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/json": components["schemas"]["Problem"];
+            };
+        };
+        /** @description The request is malformed */
+        BadRequest: {
             headers: {
                 [name: string]: unknown;
             };
@@ -263,6 +432,132 @@ export interface operations {
                     "application/json": components["schemas"]["Customer"];
                 };
             };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            503: components["responses"]["NotConfigured"];
+        };
+    };
+    getConnection: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The connection details */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Connection"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            503: components["responses"]["NotConfigured"];
+        };
+    };
+    getClientProperties: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description A Java client.properties */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "text/plain": string;
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["NotReady"];
+            503: components["responses"]["NotConfigured"];
+        };
+    };
+    getHealth: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The cluster's health */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Health"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            503: components["responses"]["NotConfigured"];
+        };
+    };
+    listTopics: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The topics, by name */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TopicList"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["NotReady"];
+            503: components["responses"]["NotConfigured"];
+        };
+    };
+    getThroughput: {
+        parameters: {
+            query?: {
+                /** @description How far back to look */
+                range?: "1h" | "6h" | "24h" | "7d";
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The throughput */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Throughput"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
             401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
             404: components["responses"]["NotFound"];

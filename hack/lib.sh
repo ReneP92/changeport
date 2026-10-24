@@ -82,6 +82,17 @@ content_tag() {
   echo "${1%:*}:${id:0:12}"
 }
 
+# Tags image with its content tag and removes the content tags of its earlier
+# builds, so that rebuilds do not fill Docker's disk. Usage: tag_content <image>
+tag_content() {
+  local image=$1 current old
+  current=$(content_tag "$image")
+  docker tag "$image" "$current"
+  while read -r old; do
+    [[ $old == "$current" || $old == "$image" ]] || docker rmi "$old" >/dev/null 2>&1 || true
+  done < <(docker images --format '{{.Repository}}:{{.Tag}}' "${image%:*}")
+}
+
 sha256_of() {
   if command -v sha256sum >/dev/null; then sha256sum "$1" | cut -d' ' -f1; else shasum -a 256 "$1" | cut -d' ' -f1; fi
 }
@@ -187,25 +198,25 @@ check_docker_disk() {
 build_kafka_image() {
   log "Building $KAFKA_IMAGE"
   docker buildx build --load --quiet -t "$KAFKA_IMAGE" images/kafka >/dev/null
-  docker tag "$KAFKA_IMAGE" "$(content_tag "$KAFKA_IMAGE")"
+  tag_content "$KAFKA_IMAGE"
 }
 
 build_agent_image() {
   log "Building $AGENT_IMAGE"
   docker buildx build --load --quiet -t "$AGENT_IMAGE" -f images/agent/Dockerfile . >/dev/null
-  docker tag "$AGENT_IMAGE" "$(content_tag "$AGENT_IMAGE")"
+  tag_content "$AGENT_IMAGE"
 }
 
 build_provisioner_image() {
   log "Building $PROVISIONER_IMAGE"
   docker buildx build --load --quiet -t "$PROVISIONER_IMAGE" -f images/provisioner/Dockerfile . >/dev/null
-  docker tag "$PROVISIONER_IMAGE" "$(content_tag "$PROVISIONER_IMAGE")"
+  tag_content "$PROVISIONER_IMAGE"
 }
 
 build_console_image() {
   log "Building $CONSOLE_IMAGE"
   docker buildx build --load --quiet -t "$CONSOLE_IMAGE" -f images/console/Dockerfile . >/dev/null
-  docker tag "$CONSOLE_IMAGE" "$(content_tag "$CONSOLE_IMAGE")"
+  tag_content "$CONSOLE_IMAGE"
 }
 
 # The git-ignored overlay kind_local_overlay writes.
@@ -280,7 +291,22 @@ ensure_kind_cluster() {
   for image in "$KAFKA_IMAGE" "$AGENT_IMAGE" "$PROVISIONER_IMAGE" "$CONSOLE_IMAGE"; do
     if docker image inspect "$image" >/dev/null 2>&1; then
       kind load docker-image --name "$CLUSTER_NAME" --nodes "$workers" "$(content_tag "$image")" >/dev/null 2>&1
+      prune_node_images "$image" "$workers"
     fi
+  done
+}
+
+# Removes the content tags of image's earlier builds from the kind workers,
+# where kind load leaves them, unless a container still runs them.
+# Usage: prune_node_images <image> <comma-separated workers>
+prune_node_images() {
+  local image=$1 workers=$2 current node old
+  current=docker.io/$(content_tag "$image")
+  for node in ${workers//,/ }; do
+    while read -r old; do
+      [[ $old == "$current" || $old == "docker.io/$image" ]] && continue
+      docker exec "$node" crictl rmi "$old" >/dev/null 2>&1 || true
+    done < <(docker exec "$node" crictl images | awk -v repo="docker.io/${image%:*}" '$1 == repo { print $1 ":" $2 }')
   done
 }
 
@@ -307,8 +333,16 @@ public_addresses() {
 # docker run arguments that resolve the public names to the load balancers on
 # the kind network. Usage: prepare_kafka_client <customer> <dir>
 prepare_kafka_client() {
+  provisioner credentials -customer "$1" >"$2/client.properties"
+  kafka_client_container "$1" "$2"
+}
+
+# Sets KAFKA_CLIENT, the docker run arguments of a Kafka client container on
+# the kind network that mounts dir at /config and resolves the customer's
+# public names to their load balancers.
+# Usage: kafka_client_container <customer> <dir>
+kafka_client_container() {
   local customer=$1 dir=$2 name address hosts=0
-  provisioner credentials -customer "$customer" >"$dir/client.properties"
   KAFKA_CLIENT=(--rm --network kind -e LOG_DIR=/tmp/kafka-logs -v "$dir:/config:ro")
   while read -r name address; do
     [[ -n "$name" && -n "$address" ]] || die "a load balancer of customer $customer has no public name or address yet"

@@ -4,6 +4,7 @@ import { ApiError } from "@/api/client";
 import { useCustomer, useMe } from "@/api/queries";
 import { CustomerSummary } from "@/components/CustomerSummary";
 import { Notice } from "@/components/Notice";
+import { Overview } from "@/pages/overview/Overview";
 
 /** Where a signed-in user lands: their customer, or the operator console. */
 export function Home() {
@@ -18,7 +19,7 @@ export function Home() {
     case "operator":
       return <Navigate to="/operator" replace />;
     case "customer":
-      return <CustomerHome />;
+      return <CustomerHome admin={me.data.admin ?? false} />;
     default:
       return (
         <main className="mx-auto flex max-w-xl flex-col gap-4 p-8">
@@ -33,7 +34,7 @@ export function Home() {
   }
 }
 
-function CustomerHome() {
+function CustomerHome({ admin }: { admin: boolean }) {
   const customer = useCustomer();
   if (customer.isPending) {
     return <Notice title="Loading" busy />;
@@ -45,6 +46,9 @@ function CustomerHome() {
         {missing ? "Your organization has no Changeport cluster yet." : customer.error.message}
       </Notice>
     );
+  }
+  if (customer.data.ready) {
+    return <Overview customer={customer.data} admin={admin} />;
   }
   return (
     <main className="mx-auto max-w-5xl p-6">

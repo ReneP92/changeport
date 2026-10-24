@@ -67,8 +67,9 @@
   --border: oklch(0.922 0 0);
   --input: oklch(0.922 0 0);
   --ring: oklch(0.708 0 0);
-  --chart-1: oklch(0.87 0 0);
-  --chart-2: oklch(0.556 0 0);
+  /* The brand's teal accent and ink (docs/brand), for bytes in and out. */
+  --chart-1: oklch(0.6 0.104 185);
+  --chart-2: oklch(0.24 0.05 250);
   --chart-3: oklch(0.439 0 0);
   --chart-4: oklch(0.371 0 0);
   --chart-5: oklch(0.269 0 0);
@@ -102,8 +103,9 @@
   --border: oklch(1 0 0 / 10%);
   --input: oklch(1 0 0 / 15%);
   --ring: oklch(0.556 0 0);
-  --chart-1: oklch(0.87 0 0);
-  --chart-2: oklch(0.556 0 0);
+  /* Lighter teal and ink, which show on the dark background. */
+  --chart-1: oklch(0.72 0.12 185);
+  --chart-2: oklch(0.8 0.03 250);
   --chart-3: oklch(0.439 0 0);
   --chart-4: oklch(0.371 0 0);
   --chart-5: oklch(0.269 0 0);

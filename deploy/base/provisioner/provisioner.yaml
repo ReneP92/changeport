@@ -35,6 +35,10 @@ rules:
   - apiGroups: [""]
     resources: [secrets]
     verbs: [get, create, patch]
+  # Only to grant the console's Role, which reads the brokers' pods.
+  - apiGroups: [""]
+    resources: [pods]
+    verbs: [get, list]
   - apiGroups: [apps]
     resources: [deployments]
     verbs: [get, create, patch]

@@ -58,6 +58,8 @@ spec:
             # must name; overlays set them.
             - name: CHANGEPORT_CONSOLE_ORIGINS
               value: ""
+            - name: CHANGEPORT_METRICS_URL
+              value: http://victoria-metrics.metrics.svc:8428
           envFrom:
             # The Clerk keys and the staff organization. Without them the
             # console starts, and refuses every API call.

@@ -296,6 +296,22 @@ make web-dev
 make console-reload
 ```
 
+A customer whose cluster is ready sees its overview: how to connect, with a
+`client.properties` download for the organization's admins (it holds the
+admin user's password), the brokers' health and the partitions' from the
+metrics store, the cluster's throughput over the last hour to week, and the
+topics with their retention, tiering, size and throughput. The console reads
+the topics as the `changeport-console` Kafka user, which cannot read or write
+messages.
+
+To act as a customer's own client with a `client.properties` from the
+console, run the Kafka tools from the kind network with it:
+
+```bash
+hack/kafka-with.sh acme acme-client.properties kafka-topics.sh --list \
+  --bootstrap-server bootstrap.acme.kafka.changeport.test:9094 --command-config /config/client.properties
+```
+
 The console test checks it as a browser reaches it: the web app and its
 Content Security Policy, an API that refuses requests without a valid
 session, and in Chromium either the "not configured" page or Clerk's sign-in
@@ -309,7 +325,9 @@ The signed-in tests use the Clerk instance of `.env`. A setup creates this
 run's throwaway `+clerk_test` users, two customer organizations with a
 customer each, and a staff member; the tests sign in through the form and
 with Clerk's testing helpers, and check in the browser and the API that a
-customer sees only their own cluster and never the operator console. A
+customer sees only their own cluster and never the operator console. On the
+overview, an admin downloads `client.properties` and produces with it from
+the kind network, and a member sees how to connect but not the password. A
 teardown removes the run's users, organizations and customers, and the next
 run removes what a crashed run left behind after an hour:
 
