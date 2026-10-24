@@ -68,10 +68,12 @@ test("the overview says how far behind a lagging consumer group is", async ({ pa
   const cells = (group: string) => row(group).getByRole("cell");
 
   // Once measured, the lagging group is 100 messages behind and, as the
-  // messages age, minutes behind; the other is caught up.
+  // messages age, minutes behind; the other is caught up. The agent may
+  // measure one group before the other has committed, so each gets the
+  // time of a measurement and a scrape.
   await expect(cells(lagging).nth(3)).toHaveText("100", { timeout: 150_000 });
   await expect(cells(lagging).nth(1)).toHaveText(topic);
-  await expect(cells(current).nth(2)).toHaveText("Caught up");
+  await expect(cells(current).nth(2)).toHaveText("Caught up", { timeout: 150_000 });
   await expect(cells(current).nth(3)).toHaveText("0");
   await expect(cells(lagging).nth(2)).toHaveText(/^\d+ minutes? behind$/, { timeout: 150_000 });
   // The most behind come first.

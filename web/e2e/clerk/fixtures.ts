@@ -91,3 +91,25 @@ export function kubectl(args: string[], input?: string): string {
     stdio: ["pipe", "pipe", "inherit"],
   });
 }
+
+/**
+ * Every customer of any test run: those the setup creates, which carry the
+ * run label, and those the tests provision through the operator console,
+ * which are named like the runs' organizations.
+ */
+export function testCustomers(): {
+  metadata: { name: string; creationTimestamp: string };
+  spec: { displayName: string };
+}[] {
+  const customers = JSON.parse(kubectl(["get", "customers", "-o", "json"])) as {
+    items: {
+      metadata: { name: string; creationTimestamp: string; labels?: Record<string, string> };
+      spec: { displayName: string };
+    }[];
+  };
+  return customers.items.filter(
+    (c) =>
+      c.metadata.labels?.[runLabel] !== undefined ||
+      testOrganizationPattern.test(c.spec.displayName),
+  );
+}

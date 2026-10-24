@@ -219,7 +219,11 @@ export interface paths {
         /** Every customer, for operators */
         get: operations["listCustomers"];
         put?: never;
-        post?: never;
+        /**
+         * Provision a customer, for operators
+         * @description Creates a Clerk organization for the customer, invites its first admin if asked, and creates the customer with a new opaque ID, such as c-7f3k2q. The provisioning controller then creates its cluster, which the customer's conditions follow.
+         */
+        post: operations["provisionCustomer"];
         delete?: never;
         options?: never;
         head?: never;
@@ -237,7 +241,11 @@ export interface paths {
         get: operations["getOperatorCustomer"];
         put?: never;
         post?: never;
-        delete?: never;
+        /**
+         * Deprovision a customer, for operators
+         * @description Deletes the customer, whose cluster the provisioning controller then deletes. A customer under deletion protection is refused. The customer's Clerk organization is kept, no longer linked to a cluster.
+         */
+        delete: operations["deprovisionCustomer"];
         options?: never;
         head?: never;
         patch?: never;
@@ -401,6 +409,16 @@ export interface components {
         CustomerList: {
             customers: components["schemas"]["Customer"][];
         };
+        NewCustomer: {
+            /** @description The customer's name, which also names its Clerk organization */
+            displayName: string;
+            /** @enum {string} */
+            profile: "dev" | "dev-ha" | "production";
+            /** @description Whether deprovisioning is refused until it is turned off */
+            deletionProtection: boolean;
+            /** @description Who to invite as the organization's first admin, if anyone */
+            inviteEmail?: string;
+        };
         Customer: {
             id: string;
             displayName: string;
@@ -413,6 +431,8 @@ export interface components {
             status: components["schemas"]["Status"];
             conditions: components["schemas"]["Condition"][];
             deletionProtection: boolean;
+            /** @description The Clerk organization whose members sign in as the customer, if any */
+            organizationID?: string;
             /** @description Whether the customer is being deleted */
             deleting?: boolean;
             /** Format: date-time */
@@ -858,6 +878,34 @@ export interface operations {
             503: components["responses"]["NotConfigured"];
         };
     };
+    provisionCustomer: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["NewCustomer"];
+            };
+        };
+        responses: {
+            /** @description The customer, whose cluster is being created */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Customer"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            503: components["responses"]["NotConfigured"];
+        };
+    };
     getOperatorCustomer: {
         parameters: {
             query?: never;
@@ -882,6 +930,32 @@ export interface operations {
             401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
             404: components["responses"]["NotFound"];
+            503: components["responses"]["NotConfigured"];
+        };
+    };
+    deprovisionCustomer: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The customer ID, such as acme */
+                customerID: components["parameters"]["CustomerID"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The customer is being deprovisioned */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
             503: components["responses"]["NotConfigured"];
         };
     };
