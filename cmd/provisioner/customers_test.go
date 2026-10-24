@@ -45,15 +45,63 @@ func getCustomer(t *testing.T, c client.Client) *v1alpha1.Customer {
 
 func TestApplyCustomerCreatesAndUpdates(t *testing.T) {
 	c := fakeClient(t)
-	if err := applyCustomer(t.Context(), c, "acme", "acme", "dev"); err != nil {
+	if err := applyCustomer(t.Context(), c, "acme", "acme", "dev", nil); err != nil {
 		t.Fatal(err)
 	}
-	if err := applyCustomer(t.Context(), c, "acme", "Acme Corp", "dev"); err != nil {
+	if err := applyCustomer(t.Context(), c, "acme", "Acme Corp", "dev", nil); err != nil {
 		t.Fatal(err)
 	}
 	spec := getCustomer(t, c).Spec
 	if spec.DisplayName != "Acme Corp" || spec.Profile != "dev" {
 		t.Errorf("spec = %+v, want display name Acme Corp and profile dev", spec)
+	}
+}
+
+func TestNewProductionCustomersAreProtected(t *testing.T) {
+	off, on := false, true
+	tests := []struct {
+		name, profile string
+		protection    *bool
+		want          bool
+	}{
+		{"dev by default", "dev", nil, false},
+		{"production by default", "production", nil, true},
+		{"production unprotected", "production", &off, false},
+		{"dev protected", "dev", &on, true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			c := fakeClient(t)
+			if err := applyCustomer(t.Context(), c, "acme", "Acme Corp", tt.profile, tt.protection); err != nil {
+				t.Fatal(err)
+			}
+			if got := getCustomer(t, c).Spec.DeletionProtection; got != tt.want {
+				t.Errorf("deletion protection = %t, want %t", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestReprovisioningKeepsProtectionAsItIs(t *testing.T) {
+	c := fakeClient(t)
+	if err := applyCustomer(t.Context(), c, "acme", "Acme Corp", "production", nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := setProtection(t.Context(), c, "acme", false); err != nil {
+		t.Fatal(err)
+	}
+	// Applying again, as dev-up does, leaves protection off.
+	if err := applyCustomer(t.Context(), c, "acme", "Acme Corp", "production", nil); err != nil {
+		t.Fatal(err)
+	}
+	if getCustomer(t, c).Spec.DeletionProtection {
+		t.Error("applying an unprotected production Customer again protected it")
+	}
+	if err := setProtection(t.Context(), c, "acme", true); err != nil {
+		t.Fatal(err)
+	}
+	if !getCustomer(t, c).Spec.DeletionProtection {
+		t.Error("protect left protection off")
 	}
 }
 

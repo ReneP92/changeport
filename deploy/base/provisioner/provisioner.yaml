@@ -35,6 +35,15 @@ rules:
   - apiGroups: [""]
     resources: [secrets]
     verbs: [get, create, patch]
+  # Before deleting a customer's namespace, the controller marks the volumes
+  # of its claims with when the customer was deprovisioned, for the purge
+  # after 30 days (docs/runbook.md).
+  - apiGroups: [""]
+    resources: [persistentvolumeclaims]
+    verbs: [list]
+  - apiGroups: [""]
+    resources: [persistentvolumes]
+    verbs: [get, patch]
   # Only to grant the console's Role, which reads the brokers' pods.
   - apiGroups: [""]
     resources: [pods]

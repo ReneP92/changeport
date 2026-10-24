@@ -172,7 +172,10 @@ func (r *CustomerReconciler) spec(customer *v1alpha1.Customer) (provisioning.Spe
 	if err != nil {
 		return provisioning.Spec{}, err
 	}
-	spec := provisioning.Spec{CustomerID: customer.Name, Profile: profile, Platform: r.Platform}
+	spec := provisioning.Spec{
+		CustomerID: customer.Name, Profile: profile, Platform: r.Platform,
+		DeletionProtection: customer.Spec.DeletionProtection,
+	}
 	return spec, spec.Validate()
 }
 

@@ -167,6 +167,10 @@ tiered-storage-test: CUSTOMER ?= demo
 tiered-storage-test: ## Offload a topic of CUSTOMER (default demo) to the object store and read it back from offset 0
 	hack/tiered-storage-test.sh $(CUSTOMER)
 
+.PHONY: deletion-protection-test
+deletion-protection-test: ## Check that a protected CUSTOMER cannot be deleted, then deprovision it and purge its data
+	hack/deletion-protection-test.sh $(CUSTOMER)
+
 .PHONY: failover-test
 failover-test: ## Freeze a zone and drain a broker of a three-zone customer under load; no message may be lost
 	hack/failover-test.sh

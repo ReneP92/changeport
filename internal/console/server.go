@@ -497,7 +497,7 @@ func (s *Server) DeprovisionCustomer(ctx context.Context, request api.Deprovisio
 	}
 	if customer.Spec.DeletionProtection {
 		return api.DeprovisionCustomer409JSONResponse{ConflictJSONResponse: api.ConflictJSONResponse(problem(http.StatusConflict,
-			"Deletion protection is on", fmt.Sprintf("Customer %s is protected; turn deletion protection off first.", customer.Name)))}, nil
+			"Deletion protection is on", fmt.Sprintf("Customer %[1]s is protected; an operator turns protection off first with provisioner unprotect -customer %[1]s -confirm %[1]s.", customer.Name)))}, nil
 	}
 	id, organizationID := customer.Name, customer.Spec.ClerkOrganizationID
 	err = s.customers.Delete(ctx, id)

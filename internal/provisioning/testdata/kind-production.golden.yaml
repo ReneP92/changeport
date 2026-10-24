@@ -5,6 +5,9 @@ metadata:
   labels:
     app.kubernetes.io/managed-by: changeport-provisioner
     changeport.io/tenant: "acme"
+    # The admission policy refuses deleting the namespace of a protected
+    # customer, with everything in it.
+    changeport.io/deletion-protection: "true"
 ---
 # The keys of the local object store, for the brokers' tiered storage.
 apiVersion: v1

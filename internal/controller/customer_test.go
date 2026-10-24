@@ -37,15 +37,19 @@ type fakeProvisioner struct {
 	deleted      bool
 	left         string
 	calls        []string
+	// last is the spec of the last call.
+	last provisioning.Spec
 }
 
 func (f *fakeProvisioner) Reconcile(_ context.Context, spec provisioning.Spec) (provisioning.Progress, error) {
 	f.calls = append(f.calls, "reconcile "+spec.CustomerID+" "+spec.Profile.Name+" "+spec.Platform.Name)
+	f.last = spec
 	return f.progress, f.reconcileErr
 }
 
 func (f *fakeProvisioner) Deprovision(_ context.Context, spec provisioning.Spec) error {
 	f.calls = append(f.calls, "deprovision "+spec.CustomerID)
+	f.last = spec
 	return nil
 }
 
@@ -313,6 +317,10 @@ func TestReconcileKeepsAProtectedClusterUntilProtectionIsOff(t *testing.T) {
 	if _, err := reconcile(t, r, "acme"); err != nil {
 		t.Fatal(err)
 	}
+	// The cluster is provisioned protected, which labels its namespace.
+	if !provisioner.last.DeletionProtection {
+		t.Error("a protected Customer was reconciled without deletion protection")
+	}
 	deleting(t, c, "acme")
 	if _, err := reconcile(t, r, "acme"); err != nil {
 		t.Fatal(err)
@@ -332,8 +340,8 @@ func TestReconcileKeepsAProtectedClusterUntilProtectionIsOff(t *testing.T) {
 	if _, err := reconcile(t, r, "acme"); err != nil {
 		t.Fatal(err)
 	}
-	if got := provisioner.calls[len(provisioner.calls)-1]; got != "deprovision acme" {
-		t.Errorf("last provisioner call = %s, want the deprovisioning once protection is off", got)
+	if got := provisioner.calls[len(provisioner.calls)-1]; got != "deprovision acme" || provisioner.last.DeletionProtection {
+		t.Errorf("last provisioner call = %s with protection %t, want the deprovisioning once protection is off", got, provisioner.last.DeletionProtection)
 	}
 }
 

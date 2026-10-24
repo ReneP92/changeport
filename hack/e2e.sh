@@ -1,16 +1,19 @@
 #!/usr/bin/env bash
 # Proves the per-customer approach end to end on kind: the provisioning service
 # creates a second customer's namespace and Kafka cluster from the same
-# template as the demo cluster, both clusters pass the smoke test side by side,
-# the metrics test checks that both customers' brokers are scraped with their
-# tenant, and the second customer is deprovisioned again. Then the agent test
-# checks that the Kafka agent tiers new topics, the lag test checks its
-# consumer lag in seconds, the console access test checks what the console
-# may read and do on a customer's cluster, the console test opens the console
-# as a browser does, the tiered storage test offloads a topic of the demo
-# customer to the object store and reads it back, and the failover test
-# freezes a zone and drains a broker of a three-zone customer under load. Set
-# KEEP=1 to keep the customers. Run make dev-up first.
+# template as the demo cluster, protected from deletion; both clusters pass
+# the smoke test side by side, and the metrics test checks that both
+# customers' brokers are scraped with their tenant. The deletion protection
+# test checks that the second customer cannot be deleted until protection is
+# turned off, deprovisions it, and checks that its tiered storage outlives it
+# until the purge. Then the agent test checks that the Kafka agent tiers new
+# topics, the lag test checks its consumer lag in seconds, the console access
+# test checks what the console may read and do on a customer's cluster, the
+# console test opens the console as a browser does, the tiered storage test
+# offloads a topic of the demo customer to the object store and reads it
+# back, and the failover test freezes a zone and drains a broker of a
+# three-zone customer under load. Set KEEP=1 to keep the customers. Run make
+# dev-up first.
 # shellcheck source=lib.sh
 source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 
@@ -22,7 +25,7 @@ ensure_kubectl
 cluster_exists || die "kind cluster $CLUSTER_NAME does not exist; run make dev-up first"
 
 log "Provisioning customer $customer"
-provisioner provision -customer "$customer" -wait -timeout 10m
+provisioner provision -customer "$customer" -deletion-protection -wait -timeout 10m
 
 "$ROOT/hack/smoke-test.sh" "$customer"
 "$ROOT/hack/smoke-test.sh" "$DEMO_CUSTOMER"
@@ -44,8 +47,7 @@ missing=$(kubectl get pods -A -o jsonpath='{range .items[*]}{.metadata.namespace
 [[ -z "$missing" ]] || die "pods run images that are not built or preloaded by hack/lib.sh:"$'\n'"$missing"
 
 if [[ ${KEEP:-0} != 1 ]]; then
-  log "Deprovisioning customer $customer"
-  provisioner deprovision -customer "$customer" -wait -timeout 5m
+  "$ROOT/hack/deletion-protection-test.sh" "$customer"
 fi
 
 "$ROOT/hack/agent-test.sh" "$DEMO_CUSTOMER"

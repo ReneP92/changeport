@@ -43,10 +43,9 @@ done
 
 prefix="/buckets/$(kubectl -n "customer-$customer" get kafka "$customer" \
   -o jsonpath='{.spec.kafka.tieredStorage.remoteStorageManager.config.storage\.s3\.bucket\.name}')/customer-$customer"
-weed_ls() { kubectl -n object-store exec deploy/seaweedfs -- sh -c "echo 'fs.ls $1' | weed shell 2>/dev/null"; }
-topic_dir=$(weed_ls "$prefix/" | grep -E "^$topic-" || true)
+topic_dir=$(object_store_ls "$prefix/" | grep -E "^$topic-" || true)
 [[ -n "$topic_dir" ]] || die "the object store has nothing for $topic under $prefix"
-segments=$(weed_ls "$prefix/$topic_dir/0/" | grep -c '\.log$' || true)
+segments=$(object_store_ls "$prefix/$topic_dir/0/" | grep -c '\.log$' || true)
 [[ $segments -ge 2 ]] || die "the object store holds $segments segments of $topic under $prefix/$topic_dir, want at least 2"
 log "$segments segments, up to offset $tiered, are in the object store under $prefix"
 

@@ -5,6 +5,9 @@ metadata:
   labels:
     app.kubernetes.io/managed-by: changeport-provisioner
     changeport.io/tenant: "acme"
+    # The admission policy refuses deleting the namespace of a protected
+    # customer, with everything in it.
+    changeport.io/deletion-protection: "true"
 ---
 # The customer's own nodes: EKS Auto Mode launches them for this NodePool
 # only, labelled and tainted with the tenant so that no other pods run there.

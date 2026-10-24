@@ -1,0 +1,64 @@
+# Deletion protection: the API server refuses deleting a Customer whose
+# spec.deletionProtection is on, and deleting a namespace labelled
+# changeport.io/deletion-protection, which the template puts on a protected
+# customer's namespace. Deleting a namespace deletes the customer's Kafka
+# cluster and its volumes, whatever the storage class keeps, so a protected
+# customer's data can only go once an operator has turned protection off
+# (provisioner unprotect), which takes the label off again. Nobody is exempt.
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: changeport-customer-deletion-protection
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    resourceRules:
+      - apiGroups: [changeport.io]
+        apiVersions: ["*"]
+        operations: [DELETE]
+        resources: [customers]
+  validations:
+    - expression: "!has(oldObject.spec.deletionProtection) || !oldObject.spec.deletionProtection"
+      messageExpression: >-
+        'customer ' + oldObject.metadata.name + ' has deletion protection; turn it off first with
+        provisioner unprotect -customer ' + oldObject.metadata.name + ' -confirm ' + oldObject.metadata.name
+      reason: Forbidden
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: changeport-customer-deletion-protection
+spec:
+  policyName: changeport-customer-deletion-protection
+  validationActions: [Deny]
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: changeport-namespace-deletion-protection
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    resourceRules:
+      - apiGroups: [""]
+        apiVersions: [v1]
+        operations: [DELETE]
+        resources: [namespaces]
+    # On deletion, the selector matches the namespace as it is.
+    objectSelector:
+      matchLabels:
+        changeport.io/deletion-protection: "true"
+  validations:
+    - expression: "false"
+      messageExpression: >-
+        'namespace ' + oldObject.metadata.name + ' belongs to a customer with deletion protection;
+        turn it off first with provisioner unprotect'
+      reason: Forbidden
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: changeport-namespace-deletion-protection
+spec:
+  policyName: changeport-namespace-deletion-protection
+  validationActions: [Deny]

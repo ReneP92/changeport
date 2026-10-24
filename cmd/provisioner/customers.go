@@ -16,6 +16,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 
 	"github.com/ReneP92/changeport/api/v1alpha1"
+	"github.com/ReneP92/changeport/internal/provisioning"
 )
 
 // pollInterval is how often -wait looks at a Customer.
@@ -40,11 +41,21 @@ func newCustomerClient(kubeContext string) (client.Client, error) {
 }
 
 // applyCustomer creates the Customer id, or updates its display name and
-// profile; the controller provisions its cluster.
-func applyCustomer(ctx context.Context, c client.Client, id, displayName, profile string) error {
+// profile; the controller provisions its cluster. A new Customer gets
+// deletion protection when protection says so, or else when it is a
+// production one; an existing one keeps its protection unless protection
+// says otherwise.
+func applyCustomer(ctx context.Context, c client.Client, id, displayName, profile string, protection *bool) error {
 	customer := &v1alpha1.Customer{}
 	customer.Name = id
 	_, err := controllerutil.CreateOrPatch(ctx, c, customer, func() error {
+		// Only a Customer not created yet has no resource version.
+		if customer.ResourceVersion == "" {
+			customer.Spec.DeletionProtection = profile == provisioning.ProductionProfile.Name
+		}
+		if protection != nil {
+			customer.Spec.DeletionProtection = *protection
+		}
 		customer.Spec.DisplayName = displayName
 		customer.Spec.Profile = profile
 		return nil
@@ -86,7 +97,25 @@ func waitReady(ctx context.Context, c client.Client, id string, logger *slog.Log
 }
 
 // errProtected is returned for deleting a Customer with deletion protection.
-var errProtected = errors.New("has deletion protection; turn it off first (kubectl patch customer <id> --type merge -p '{\"spec\":{\"deletionProtection\":false}}')")
+var errProtected = errors.New("has deletion protection; turn it off first with provisioner unprotect")
+
+// errNotConfirmed is returned for turning protection off without the
+// customer ID typed again.
+var errNotConfirmed = errors.New("turning deletion protection off takes the customer ID typed again with -confirm")
+
+// setProtection turns the deletion protection of the Customer id on or off.
+func setProtection(ctx context.Context, c client.Client, id string, on bool) error {
+	var customer v1alpha1.Customer
+	if err := c.Get(ctx, types.NamespacedName{Name: id}, &customer); err != nil {
+		return fmt.Errorf("get Customer %s: %w", id, err)
+	}
+	patch := client.MergeFrom(customer.DeepCopy())
+	customer.Spec.DeletionProtection = on
+	if err := c.Patch(ctx, &customer, patch); err != nil {
+		return fmt.Errorf("set the deletion protection of Customer %s: %w", id, err)
+	}
+	return nil
+}
 
 // deleteCustomer deletes the Customer id, which makes the controller delete
 // its cluster. Deleting a missing Customer is not an error.

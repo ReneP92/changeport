@@ -23,6 +23,11 @@ metadata:
   name: {{ .Namespace }}
   labels:
 {{- template "labels" . }}
+{{- if .DeletionProtection }}
+    # The admission policy refuses deleting the namespace of a protected
+    # customer, with everything in it.
+    {{ .DeletionProtectionLabel }}: "true"
+{{- end }}
 {{- with .Platform.DedicatedNodes }}
 ---
 # The customer's own nodes: EKS Auto Mode launches them for this NodePool

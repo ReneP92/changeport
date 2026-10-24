@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"slices"
 	"strings"
+	"time"
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -19,6 +20,17 @@ var (
 	certificateGVK = schema.GroupVersionKind{Group: "cert-manager.io", Version: "v1", Kind: "Certificate"}
 	nodeClaimGVK   = schema.GroupVersionKind{Group: "karpenter.sh", Version: "v1", Kind: "NodeClaim"}
 	deploymentGVK  = schema.GroupVersionKind{Group: "apps", Version: "v1", Kind: "Deployment"}
+	pvcGVK         = schema.GroupVersionKind{Version: "v1", Kind: "PersistentVolumeClaim"}
+	pvGVK          = schema.GroupVersionKind{Version: "v1", Kind: "PersistentVolume"}
+)
+
+// The marks Deprovision leaves on a customer's volumes. Where the storage
+// class retains volumes, as in production, they outlive the namespace, and
+// the purge in docs/runbook.md finds them by these after 30 days.
+const (
+	// DeprovisionedAtAnnotation holds when the customer was deprovisioned,
+	// in RFC 3339.
+	DeprovisionedAtAnnotation = "changeport.io/deprovisioned-at"
 )
 
 // Cluster is the part of the Kubernetes API the provisioner uses.
@@ -43,11 +55,13 @@ type Provisioner struct {
 	// storage credentials from EKS Pod Identity.
 	PodIdentities PodIdentities
 	Logger        *slog.Logger
+	// Now is the time Deprovision marks volumes with.
+	Now func() time.Time
 }
 
 // New returns a Provisioner.
 func New(cluster Cluster, logger *slog.Logger) *Provisioner {
-	return &Provisioner{Cluster: cluster, Logger: logger}
+	return &Provisioner{Cluster: cluster, Logger: logger, Now: time.Now}
 }
 
 // Readiness is how far one part of a customer's cluster is.
@@ -180,8 +194,14 @@ func (p *Provisioner) observe(ctx context.Context, objects []*unstructured.Unstr
 // the customer: the namespace, which removes the Kafka cluster and everything
 // else in it, and on platforms with dedicated nodes the NodePool and
 // NodeClass, which removes the nodes. It is idempotent, and does not wait;
-// Deleted reports when everything is gone.
+// Deleted reports when everything is gone. It refuses a spec with deletion
+// protection, and before deleting the namespace it takes the namespace's
+// protection label off and marks the customer's volumes with when it was
+// deprovisioned.
 func (p *Provisioner) Deprovision(ctx context.Context, spec Spec) error {
+	if spec.DeletionProtection {
+		return fmt.Errorf("customer %s has deletion protection", spec.CustomerID)
+	}
 	objects, err := clusterScoped(spec)
 	if err != nil {
 		return err
@@ -198,6 +218,11 @@ func (p *Provisioner) Deprovision(ctx context.Context, spec Spec) error {
 		if current.GetDeletionTimestamp() != nil {
 			continue
 		}
+		if obj.GetKind() == "Namespace" {
+			if err := p.releaseNamespace(ctx, spec, obj, current); err != nil {
+				return err
+			}
+		}
 		if err := p.Cluster.Delete(ctx, obj.GroupVersionKind(), "", obj.GetName()); err != nil {
 			return fmt.Errorf("delete %s %s: %w", obj.GetKind(), obj.GetName(), err)
 		}
@@ -211,6 +236,39 @@ func (p *Provisioner) Deprovision(ctx context.Context, spec Spec) error {
 			return err
 		}
 		p.Logger.Info("disassociated", "serviceaccount", spec.Namespace()+"/"+spec.BrokerServiceAccount(), "tenant", spec.CustomerID)
+	}
+	return nil
+}
+
+// releaseNamespace readies the customer's namespace for deletion: it takes
+// the protection label off, which the admission policy would refuse the
+// deletion for, by applying the namespace as rendered for the unprotected
+// spec, and it marks the volumes of the namespace's claims.
+func (p *Provisioner) releaseNamespace(ctx context.Context, spec Spec, rendered, current *unstructured.Unstructured) error {
+	if _, ok := current.GetLabels()[DeletionProtectionLabel]; ok {
+		if err := p.Cluster.Apply(ctx, rendered); err != nil {
+			return fmt.Errorf("take the deletion protection label off namespace %s: %w", spec.Namespace(), err)
+		}
+		p.Logger.Info("took off the deletion protection label", "namespace", spec.Namespace(), "tenant", spec.CustomerID)
+	}
+	claims, err := p.Cluster.List(ctx, pvcGVK, spec.Namespace(), "")
+	if err != nil {
+		return fmt.Errorf("list the volume claims of namespace %s: %w", spec.Namespace(), err)
+	}
+	now := p.Now().UTC().Format(time.RFC3339)
+	for _, claim := range claims {
+		volume, _, _ := unstructured.NestedString(claim.Object, "spec", "volumeName")
+		if volume == "" {
+			continue
+		}
+		mark := &unstructured.Unstructured{}
+		mark.SetGroupVersionKind(pvGVK)
+		mark.SetName(volume)
+		mark.SetLabels(map[string]string{TenantLabel: spec.CustomerID})
+		mark.SetAnnotations(map[string]string{DeprovisionedAtAnnotation: now})
+		if err := p.Cluster.Apply(ctx, mark); err != nil {
+			return fmt.Errorf("mark volume %s of customer %s: %w", volume, spec.CustomerID, err)
+		}
 	}
 	return nil
 }

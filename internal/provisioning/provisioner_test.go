@@ -19,16 +19,18 @@ import (
 // fakeCluster is an in-memory Cluster. Like cert-manager, it issues every
 // Certificate as it is first applied unless holdCertificates is set.
 type fakeCluster struct {
-	mu               sync.Mutex
-	objects          map[string]*unstructured.Unstructured
-	applied          []string
-	deleted          []string
+	mu      sync.Mutex
+	objects map[string]*unstructured.Unstructured
+	applied []string
+	deleted []string
+	// gone holds each deleted object as it was when deleted.
+	gone             map[string]*unstructured.Unstructured
 	applyErr         error
 	holdCertificates bool
 }
 
 func newFakeCluster() *fakeCluster {
-	return &fakeCluster{objects: map[string]*unstructured.Unstructured{}}
+	return &fakeCluster{objects: map[string]*unstructured.Unstructured{}, gone: map[string]*unstructured.Unstructured{}}
 }
 
 // setStatus gives a stored object conditions, observed for its current
@@ -95,6 +97,9 @@ func (f *fakeCluster) Delete(_ context.Context, gvk schema.GroupVersionKind, nam
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	key := fakeKey(gvk, namespace, name)
+	if obj, ok := f.objects[key]; ok {
+		f.gone[key] = obj
+	}
 	delete(f.objects, key)
 	f.deleted = append(f.deleted, key)
 	return nil
@@ -316,6 +321,57 @@ func TestDeprovisionDeletesTheNamespace(t *testing.T) {
 	}
 	if got := strings.Join(cluster.deleted, ","); got != "Namespace:/customer-acme" {
 		t.Errorf("deleted %s, want only the namespace on kind", got)
+	}
+}
+
+func TestDeprovisionRefusesProtectedCustomers(t *testing.T) {
+	cluster := newFakeCluster()
+	p := testProvisioner(cluster)
+	protected := acme
+	protected.DeletionProtection = true
+	provision(t, p, protected)
+	if err := p.Deprovision(t.Context(), protected); err == nil || len(cluster.deleted) != 0 {
+		t.Errorf("Deprovision() of a protected customer = %v, deleted %v; want an error and nothing deleted", err, cluster.deleted)
+	}
+}
+
+func TestDeprovisionReleasesTheNamespace(t *testing.T) {
+	cluster := newFakeCluster()
+	p := testProvisioner(cluster)
+	p.Now = func() time.Time { return time.Date(2026, 10, 24, 12, 0, 0, 0, time.UTC) }
+	protected := acme
+	protected.DeletionProtection = true
+	provision(t, p, protected)
+	namespace := fakeKey(schema.GroupVersionKind{Version: "v1", Kind: "Namespace"}, "", "customer-acme")
+	if cluster.objects[namespace].GetLabels()[DeletionProtectionLabel] != "true" {
+		t.Fatalf("the protected customer's namespace has labels %v", cluster.objects[namespace].GetLabels())
+	}
+	// A broker's volume claim, bound to a volume.
+	claim := &unstructured.Unstructured{Object: map[string]any{"spec": map[string]any{"volumeName": "pvc-1a2b"}}}
+	claim.SetGroupVersionKind(pvcGVK)
+	claim.SetNamespace("customer-acme")
+	claim.SetName("data-0-acme-dual-role-0")
+	cluster.objects[fakeKey(pvcGVK, "customer-acme", claim.GetName())] = claim
+	pending := &unstructured.Unstructured{Object: map[string]any{"spec": map[string]any{}}}
+	pending.SetGroupVersionKind(pvcGVK)
+	pending.SetNamespace("customer-acme")
+	pending.SetName("unbound")
+	cluster.objects[fakeKey(pvcGVK, "customer-acme", pending.GetName())] = pending
+
+	// Turned off, protection lets the namespace go, without its label.
+	if err := p.Deprovision(t.Context(), acme); err != nil {
+		t.Fatal(err)
+	}
+	gone := cluster.gone[namespace]
+	if gone == nil {
+		t.Fatal("the namespace was not deleted")
+	}
+	if _, ok := gone.GetLabels()[DeletionProtectionLabel]; ok {
+		t.Errorf("the namespace was deleted with labels %v, want the protection label off", gone.GetLabels())
+	}
+	volume := cluster.objects[fakeKey(pvGVK, "", "pvc-1a2b")]
+	if volume == nil || volume.GetLabels()[TenantLabel] != "acme" || volume.GetAnnotations()[DeprovisionedAtAnnotation] != "2026-10-24T12:00:00Z" {
+		t.Errorf("volume pvc-1a2b = %v, want it marked with the customer and the time", volume)
 	}
 }
 
