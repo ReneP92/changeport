@@ -65,6 +65,20 @@ BUN_BIN="$BIN_DIR/bun-$BUN_VERSION"
 log() { printf '\033[1m==> %s\033[0m\n' "$*" >&2; }
 die() { printf 'error: %s\n' "$*" >&2; exit 1; }
 
+# Runs a command that reaches a container registry up to three times, as
+# registries fail now and then (such as quay.io answering 503 for a layer).
+retry_registry() {
+  local attempt
+  for attempt in 1 2 3; do
+    "$@" && return 0
+    if [[ $attempt -lt 3 ]]; then
+      log "It failed; trying again in $((attempt * 20))s"
+      sleep $((attempt * 20))
+    fi
+  done
+  return 1
+}
+
 # kubectl always targets KUBE_CONTEXT, never the current context. It is the
 # local kind cluster unless a script sets it explicitly (hack/platform-apply.sh).
 kubectl() { "$KUBECTL_BIN" --context "$KUBE_CONTEXT" "$@"; }
@@ -197,25 +211,25 @@ check_docker_disk() {
 
 build_kafka_image() {
   log "Building $KAFKA_IMAGE"
-  docker buildx build --load --quiet -t "$KAFKA_IMAGE" images/kafka >/dev/null
+  retry_registry docker buildx build --load --quiet -t "$KAFKA_IMAGE" images/kafka >/dev/null
   tag_content "$KAFKA_IMAGE"
 }
 
 build_agent_image() {
   log "Building $AGENT_IMAGE"
-  docker buildx build --load --quiet -t "$AGENT_IMAGE" -f images/agent/Dockerfile . >/dev/null
+  retry_registry docker buildx build --load --quiet -t "$AGENT_IMAGE" -f images/agent/Dockerfile . >/dev/null
   tag_content "$AGENT_IMAGE"
 }
 
 build_provisioner_image() {
   log "Building $PROVISIONER_IMAGE"
-  docker buildx build --load --quiet -t "$PROVISIONER_IMAGE" -f images/provisioner/Dockerfile . >/dev/null
+  retry_registry docker buildx build --load --quiet -t "$PROVISIONER_IMAGE" -f images/provisioner/Dockerfile . >/dev/null
   tag_content "$PROVISIONER_IMAGE"
 }
 
 build_console_image() {
   log "Building $CONSOLE_IMAGE"
-  docker buildx build --load --quiet -t "$CONSOLE_IMAGE" -f images/console/Dockerfile . >/dev/null
+  retry_registry docker buildx build --load --quiet -t "$CONSOLE_IMAGE" -f images/console/Dockerfile . >/dev/null
   tag_content "$CONSOLE_IMAGE"
 }
 
@@ -279,7 +293,7 @@ ensure_kind_cluster() {
   for image in "${KIND_PRELOAD_IMAGES[@]}"; do
     docker image inspect "$image" >/dev/null 2>&1 && continue
     log "Pulling $image"
-    docker pull --quiet "$image" >/dev/null
+    retry_registry docker pull --quiet "$image" >/dev/null
   done
   # Only the workers run these pods; the control plane is tainted, and every
   # node keeps its own copy of each image.
