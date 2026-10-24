@@ -232,6 +232,28 @@ type ConnectionSaslMechanism string
 // ConnectionSecurityProtocol defines model for Connection.SecurityProtocol.
 type ConnectionSecurityProtocol string
 
+// ConsumerGroupLag How far a consumer group is behind on one topic, as the agent measures it every 30 seconds without reading any message.
+type ConsumerGroupLag struct {
+	// Capped True when the lag is older than the oldest time the agent looks up (23 hours), so lagSeconds is a lower bound.
+	Capped bool   `json:"capped"`
+	Group  string `json:"group"`
+
+	// History The lag in seconds over the last hour, a point a minute.
+	History []Point `json:"history"`
+
+	// LagMessages The messages the group has not consumed yet, over the topic's partitions.
+	LagMessages int64 `json:"lagMessages"`
+
+	// LagSeconds The age of the oldest message the group has not consumed yet, the highest over the topic's partitions; 0 when it has consumed every message.
+	LagSeconds float32 `json:"lagSeconds"`
+	Topic      string  `json:"topic"`
+}
+
+// ConsumerGroupLagList defines model for ConsumerGroupLagList.
+type ConsumerGroupLagList struct {
+	Groups []ConsumerGroupLag `json:"groups"`
+}
+
 // ConsumerGroupList defines model for ConsumerGroupList.
 type ConsumerGroupList struct {
 	Groups []string `json:"groups"`
@@ -448,6 +470,9 @@ type ServerInterface interface {
 	// GetConnection How the customer's clients connect, without the password
 	// (GET /api/customer/connection)
 	GetConnection(w http.ResponseWriter, r *http.Request)
+	// ListConsumerGroups The consumer groups' lag per topic, with the last hour of it
+	// (GET /api/customer/consumer-groups)
+	ListConsumerGroups(w http.ResponseWriter, r *http.Request)
 	// GetHealth The brokers and the partitions' health
 	// (GET /api/customer/health)
 	GetHealth(w http.ResponseWriter, r *http.Request)
@@ -536,6 +561,20 @@ func (siw *ServerInterfaceWrapper) GetConnection(w http.ResponseWriter, r *http.
 
 	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		siw.Handler.GetConnection(w, r)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// ListConsumerGroups operation middleware
+func (siw *ServerInterfaceWrapper) ListConsumerGroups(w http.ResponseWriter, r *http.Request) {
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.ListConsumerGroups(w, r)
 	}))
 
 	for _, middleware := range siw.HandlerMiddlewares {
@@ -872,6 +911,7 @@ func HandlerWithOptions(si ServerInterface, options StdHTTPServerOptions) http.H
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/customer/topics", wrapper.ListTopics)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/customer/topics", wrapper.CreateTopic)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/customer/throughput", wrapper.GetThroughput)
+	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/customer/consumer-groups", wrapper.ListConsumerGroups)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/operator/customers", wrapper.ListCustomers)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/operator/customers/{customerID}", wrapper.GetOperatorCustomer)
 
@@ -1158,6 +1198,83 @@ func (response GetConnection404JSONResponse) VisitGetConnectionResponse(w http.R
 type GetConnection503JSONResponse struct{ NotConfiguredJSONResponse }
 
 func (response GetConnection503JSONResponse) VisitGetConnectionResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(503)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ListConsumerGroupsRequestObject struct {
+}
+
+type ListConsumerGroupsResponseObject interface {
+	VisitListConsumerGroupsResponse(w http.ResponseWriter) error
+}
+
+type ListConsumerGroups200JSONResponse ConsumerGroupLagList
+
+func (response ListConsumerGroups200JSONResponse) VisitListConsumerGroupsResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ListConsumerGroups401JSONResponse struct{ UnauthorizedJSONResponse }
+
+func (response ListConsumerGroups401JSONResponse) VisitListConsumerGroupsResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(401)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ListConsumerGroups403JSONResponse struct{ ForbiddenJSONResponse }
+
+func (response ListConsumerGroups403JSONResponse) VisitListConsumerGroupsResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(403)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ListConsumerGroups404JSONResponse struct{ NotFoundJSONResponse }
+
+func (response ListConsumerGroups404JSONResponse) VisitListConsumerGroupsResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(404)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ListConsumerGroups503JSONResponse struct{ NotConfiguredJSONResponse }
+
+func (response ListConsumerGroups503JSONResponse) VisitListConsumerGroupsResponse(w http.ResponseWriter) error {
 
 	var buf bytes.Buffer
 	if err := json.NewEncoder(&buf).Encode(response); err != nil {
@@ -1994,6 +2111,9 @@ type StrictServerInterface interface {
 	// GetConnection How the customer's clients connect, without the password
 	// (GET /api/customer/connection)
 	GetConnection(ctx context.Context, request GetConnectionRequestObject) (GetConnectionResponseObject, error)
+	// ListConsumerGroups The consumer groups' lag per topic, with the last hour of it
+	// (GET /api/customer/consumer-groups)
+	ListConsumerGroups(ctx context.Context, request ListConsumerGroupsRequestObject) (ListConsumerGroupsResponseObject, error)
 	// GetHealth The brokers and the partitions' health
 	// (GET /api/customer/health)
 	GetHealth(ctx context.Context, request GetHealthRequestObject) (GetHealthResponseObject, error)
@@ -2154,6 +2274,30 @@ func (sh *strictHandler) GetConnection(w http.ResponseWriter, r *http.Request) {
 		sh.options.ResponseErrorHandlerFunc(w, r, err)
 	} else if validResponse, ok := response.(GetConnectionResponseObject); ok {
 		if err := validResponse.VisitGetConnectionResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// ListConsumerGroups operation middleware
+func (sh *strictHandler) ListConsumerGroups(w http.ResponseWriter, r *http.Request) {
+	var request ListConsumerGroupsRequestObject
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.ListConsumerGroups(ctx, request.(ListConsumerGroupsRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "ListConsumerGroups")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(ListConsumerGroupsResponseObject); ok {
+		if err := validResponse.VisitListConsumerGroupsResponse(w); err != nil {
 			sh.options.ResponseErrorHandlerFunc(w, r, err)
 		}
 	} else if response != nil {

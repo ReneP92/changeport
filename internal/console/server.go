@@ -733,6 +733,91 @@ func sumSeries(series []metrics.Series) []api.Point {
 	return points
 }
 
+// lagHistory is how far back the consumer groups' lag charts go, and their
+// step.
+const (
+	lagHistory     = time.Hour
+	lagHistoryStep = time.Minute
+)
+
+// groupTopic is a consumer group reading a topic: one row of lag.
+type groupTopic struct{ group, topic string }
+
+func groupTopicOf(series metrics.Series) groupTopic {
+	return groupTopic{group: series.Labels["consumer_group"], topic: series.Labels["topic"]}
+}
+
+// ListConsumerGroups implements api.StrictServerInterface.
+func (s *Server) ListConsumerGroups(ctx context.Context, _ api.ListConsumerGroupsRequestObject) (api.ListConsumerGroupsResponseObject, error) {
+	customer, _, refused, err := s.customerOf(ctx)
+	switch {
+	case err != nil:
+		return nil, err
+	case refused != nil && refused.Status == http.StatusNotFound:
+		return api.ListConsumerGroups404JSONResponse{NotFoundJSONResponse: api.NotFoundJSONResponse(*refused)}, nil
+	case refused != nil:
+		return api.ListConsumerGroups403JSONResponse{ForbiddenJSONResponse: api.ForbiddenJSONResponse(*refused)}, nil
+	}
+	now := time.Now()
+	latest := map[metrics.Query]map[groupTopic]float64{}
+	for _, q := range []metrics.Query{metrics.LagSeconds, metrics.LagMessages, metrics.LagCapped} {
+		series, err := s.metrics.Instant(ctx, customer.Name, q, metrics.Filter{}, now)
+		if err != nil {
+			return nil, err
+		}
+		latest[q] = map[groupTopic]float64{}
+		for _, one := range series {
+			if len(one.Points) == 1 {
+				latest[q][groupTopicOf(one)] = one.Points[0].Value
+			}
+		}
+	}
+	end := now.Truncate(lagHistoryStep)
+	history, err := s.metrics.Range(ctx, customer.Name, metrics.LagSeconds, metrics.Filter{}, end.Add(-lagHistory), end, lagHistoryStep)
+	if err != nil {
+		return nil, err
+	}
+	histories := map[groupTopic][]api.Point{}
+	for _, one := range history {
+		points := make([]api.Point, 0, len(one.Points))
+		for _, point := range one.Points {
+			points = append(points, api.Point{Time: point.Time.UTC(), Value: float32(point.Value)})
+		}
+		histories[groupTopicOf(one)] = points
+	}
+
+	// A row for every group and topic the agent measures now; the history
+	// of groups that are gone is left out.
+	list := api.ListConsumerGroups200JSONResponse{Groups: []api.ConsumerGroupLag{}}
+	for key, seconds := range latest[metrics.LagSeconds] {
+		messages, ok := latest[metrics.LagMessages][key]
+		if !ok {
+			continue
+		}
+		points := histories[key]
+		if points == nil {
+			points = []api.Point{}
+		}
+		list.Groups = append(list.Groups, api.ConsumerGroupLag{
+			Group:       key.group,
+			Topic:       key.topic,
+			LagSeconds:  float32(seconds),
+			LagMessages: int64(messages),
+			Capped:      latest[metrics.LagCapped][key] == 1,
+			History:     points,
+		})
+	}
+	slices.SortFunc(list.Groups, func(a, b api.ConsumerGroupLag) int {
+		return cmp.Or(
+			cmp.Compare(b.LagSeconds, a.LagSeconds),
+			cmp.Compare(b.LagMessages, a.LagMessages),
+			strings.Compare(a.Group, b.Group),
+			strings.Compare(a.Topic, b.Topic),
+		)
+	})
+	return list, nil
+}
+
 // topicPolicy returns the topic guardrails of a customer's cluster.
 func topicPolicy(customer *v1alpha1.Customer) (topics.Policy, error) {
 	profile, err := provisioning.ProfileByName(customer.Spec.Profile)

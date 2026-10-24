@@ -192,6 +192,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/customer/consumer-groups": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** The consumer groups' lag per topic, with the last hour of it */
+        get: operations["listConsumerGroups"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/operator/customers": {
         parameters: {
             query?: never;
@@ -350,6 +367,25 @@ export interface components {
         };
         ConsumerGroupList: {
             groups: string[];
+        };
+        ConsumerGroupLagList: {
+            groups: components["schemas"]["ConsumerGroupLag"][];
+        };
+        /** @description How far a consumer group is behind on one topic, as the agent measures it every 30 seconds without reading any message. */
+        ConsumerGroupLag: {
+            group: string;
+            topic: string;
+            /** @description The age of the oldest message the group has not consumed yet, the highest over the topic's partitions; 0 when it has consumed every message. */
+            lagSeconds: number;
+            /**
+             * Format: int64
+             * @description The messages the group has not consumed yet, over the topic's partitions.
+             */
+            lagMessages: number;
+            /** @description True when the lag is older than the oldest time the agent looks up (23 hours), so lagSeconds is a lower bound. */
+            capped: boolean;
+            /** @description The lag in seconds over the last hour, a point a minute. */
+            history: components["schemas"]["Point"][];
         };
         Throughput: {
             range: string;
@@ -769,6 +805,30 @@ export interface operations {
                 };
             };
             400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            503: components["responses"]["NotConfigured"];
+        };
+    };
+    listConsumerGroups: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The consumer groups, most behind first */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ConsumerGroupLagList"];
+                };
+            };
             401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
             404: components["responses"]["NotFound"];

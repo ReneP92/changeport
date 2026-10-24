@@ -41,6 +41,10 @@ const (
 	// LagMessages is the messages each consumer group has not consumed yet,
 	// per group and topic.
 	LagMessages Query = "lag_messages"
+	// LagCapped is 1 where a consumer group's lag is older than the agent
+	// looks up (23 hours), so LagSeconds is a lower bound, per group and
+	// topic.
+	LagCapped Query = "lag_capped"
 
 	// UnderReplicated is the partitions with fewer in-sync replicas than
 	// replicas, over all brokers.
@@ -87,6 +91,7 @@ var definitions = map[Query]definition{
 	RemoteSize:  {`sum by (topic) (kafka_server_brokertopicmetrics_remotelogsizebytes{%s})`, perTopic},
 	LagSeconds:  {`max by (consumer_group, topic) (changeport_consumergroup_lag_seconds{%s})`, perGroup},
 	LagMessages: {`sum by (consumer_group, topic) (changeport_consumergroup_lag_messages{%s})`, perGroup},
+	LagCapped:   {`max by (consumer_group, topic) (changeport_consumergroup_lag_capped{%s})`, perGroup},
 	// Every broker reports its own partitions; every controller reports the
 	// controller's counts, but only the active one knows them.
 	UnderReplicated:   {`sum(kafka_server_replicamanager_underreplicatedpartitions{%s})`, perCluster},
@@ -100,7 +105,7 @@ var definitions = map[Query]definition{
 // Queries lists every named query.
 func Queries() []Query {
 	return []Query{
-		BytesIn, BytesOut, MessagesIn, LocalSize, RemoteSize, LagSeconds, LagMessages,
+		BytesIn, BytesOut, MessagesIn, LocalSize, RemoteSize, LagSeconds, LagMessages, LagCapped,
 		UnderReplicated, UnderMinISR, OfflinePartitions, ActiveControllers, ActiveBrokers, FencedBrokers,
 	}
 }
