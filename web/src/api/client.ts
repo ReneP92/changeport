@@ -8,6 +8,8 @@ export type Connection = components["schemas"]["Connection"];
 export type Health = components["schemas"]["Health"];
 export type Topic = components["schemas"]["Topic"];
 export type Throughput = components["schemas"]["Throughput"];
+export type TopicPolicy = components["schemas"]["TopicPolicy"];
+export type NewTopic = components["schemas"]["NewTopic"];
 export type ThroughputRange = NonNullable<
   NonNullable<paths["/api/customer/throughput"]["get"]["parameters"]["query"]>["range"]
 >;

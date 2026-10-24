@@ -1,7 +1,13 @@
 import { useAuth } from "@clerk/react";
-import { useQuery } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { createContext, use } from "react";
-import { ApiError, unwrap, type ApiClient, type ThroughputRange } from "@/api/client";
+import {
+  ApiError,
+  unwrap,
+  type ApiClient,
+  type NewTopic,
+  type ThroughputRange,
+} from "@/api/client";
 
 /** The API client of the signed-in user, which ApiProvider provides. */
 export const ApiContext = createContext<ApiClient | null>(null);
@@ -118,4 +124,59 @@ export function useDownloadClientProperties() {
     link.click();
     URL.revokeObjectURL(url);
   };
+}
+
+/** The guardrails on the active organization's topics. */
+export function useTopicPolicy() {
+  const api = useApi();
+  const organization = useOrganizationKey();
+  return useQuery({
+    queryKey: ["customer", "topic-policy", organization],
+    queryFn: async () => unwrap(await api.GET("/api/customer/topic-policy")),
+    staleTime: Infinity,
+  });
+}
+
+/** The consumer groups that read a topic, while enabled. */
+export function useTopicConsumerGroups(topic: string, enabled: boolean) {
+  const api = useApi();
+  const organization = useOrganizationKey();
+  return useQuery({
+    queryKey: ["customer", "topic-consumer-groups", topic, organization],
+    queryFn: async () =>
+      unwrap(
+        await api.GET("/api/customer/topics/{topic}/consumer-groups", {
+          params: { path: { topic } },
+        }),
+      ).groups,
+    enabled,
+  });
+}
+
+/** Creates a topic, then refreshes the topics. */
+export function useCreateTopic() {
+  const api = useApi();
+  const queries = useQueryClient();
+  return useMutation({
+    mutationFn: async (topic: NewTopic) =>
+      unwrap(await api.POST("/api/customer/topics", { body: topic })),
+    onSuccess: () => queries.invalidateQueries({ queryKey: ["customer", "topics"] }),
+  });
+}
+
+/** Deletes a topic, then refreshes the topics. */
+export function useDeleteTopic() {
+  const api = useApi();
+  const queries = useQueryClient();
+  return useMutation({
+    mutationFn: async (topic: string) => {
+      const { error, response } = await api.DELETE("/api/customer/topics/{topic}", {
+        params: { path: { topic } },
+      });
+      if (!response.ok) {
+        throw new ApiError(response.status, error);
+      }
+    },
+    onSuccess: () => queries.invalidateQueries({ queryKey: ["customer", "topics"] }),
+  });
 }

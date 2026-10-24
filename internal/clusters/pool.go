@@ -18,6 +18,7 @@ import (
 
 	"github.com/twmb/franz-go/pkg/kadm"
 	"github.com/twmb/franz-go/pkg/kgo"
+	"github.com/twmb/franz-go/pkg/kmsg"
 
 	"github.com/ReneP92/changeport/internal/provisioning"
 )
@@ -86,7 +87,32 @@ func NewPool(secrets Secrets, logger *slog.Logger) *Pool {
 // Admin returns the admin client of the customer's cluster, connecting it
 // first if needed. Callers must not close it; the pool does when it has
 // been idle for IdleTimeout, so a caller should use it for one request.
+//
+// Its methods answer from metadata up to kgo.MetadataMinAge (5s) old where
+// they can; Metadata reads the cluster's current metadata instead.
 func (p *Pool) Admin(ctx context.Context, customerID string) (*kadm.Client, error) {
+	entry, err := p.entry(ctx, customerID)
+	if err != nil {
+		return nil, err
+	}
+	return entry.admin, nil
+}
+
+// Metadata asks the customer's cluster for its brokers and all its topics,
+// bypassing the client's metadata cache, which can miss a topic created a
+// moment ago or still hold one just deleted.
+func (p *Pool) Metadata(ctx context.Context, customerID string) (*kmsg.MetadataResponse, error) {
+	entry, err := p.entry(ctx, customerID)
+	if err != nil {
+		return nil, err
+	}
+	// Nil topics ask for all of them.
+	return kmsg.NewPtrMetadataRequest().RequestWith(ctx, entry.client)
+}
+
+// entry returns the customer's pooled client, connecting it first if
+// needed.
+func (p *Pool) entry(ctx context.Context, customerID string) (*pooled, error) {
 	if err := provisioning.ValidateCustomerID(customerID); err != nil {
 		return nil, err
 	}
@@ -99,7 +125,7 @@ func (p *Pool) Admin(ctx context.Context, customerID string) (*kadm.Client, erro
 	entry, ok := p.clients[customerID]
 	if ok && now.Sub(entry.checked) < p.RefreshInterval {
 		entry.used = now
-		return entry.admin, nil
+		return entry, nil
 	}
 	config, versions, err := p.loadTLS(ctx, spec)
 	if err != nil {
@@ -112,7 +138,7 @@ func (p *Pool) Admin(ctx context.Context, customerID string) (*kadm.Client, erro
 			p.logger.Info("reloaded the console's certificates", "tenant", customerID)
 		}
 		entry.checked, entry.used = now, now
-		return entry.admin, nil
+		return entry, nil
 	}
 
 	entry = &pooled{versions: versions, checked: now, used: now}
@@ -127,7 +153,7 @@ func (p *Pool) Admin(ctx context.Context, customerID string) (*kadm.Client, erro
 	}
 	entry.client, entry.admin = client, kadm.NewClient(client)
 	p.clients[customerID] = entry
-	return entry.admin, nil
+	return entry, nil
 }
 
 // dial opens a TLS connection with the latest certificates.

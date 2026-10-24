@@ -14,6 +14,7 @@ import (
 	"log/slog"
 	"math/big"
 	"net"
+	"slices"
 	"strconv"
 	"sync"
 	"testing"
@@ -225,6 +226,36 @@ func TestAdminConnectsWithTheConsoleCertificate(t *testing.T) {
 	}
 	if again != admin {
 		t.Error("a second Admin call made a new client")
+	}
+}
+
+func TestMetadataSeesTopicsAtOnce(t *testing.T) {
+	f := newFixture(t)
+	admin, err := f.pool.Admin(t.Context(), "acme")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Listing fills the client's metadata cache, which would hide a topic
+	// created next for up to kgo.MetadataMinAge.
+	if _, err := admin.ListTopics(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := admin.CreateTopic(t.Context(), 1, 1, nil, "invoices"); err != nil {
+		t.Fatal(err)
+	}
+	metadata, err := f.pool.Metadata(t.Context(), "acme")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var names []string
+	for _, topic := range metadata.Topics {
+		names = append(names, *topic.Topic)
+	}
+	if !slices.Contains(names, "invoices") || !slices.Contains(names, "orders") {
+		t.Errorf("Metadata() topics = %v, want invoices and orders", names)
+	}
+	if len(metadata.Brokers) != 1 {
+		t.Errorf("Metadata() brokers = %d, want 1", len(metadata.Brokers))
 	}
 }
 

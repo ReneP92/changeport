@@ -26,6 +26,7 @@ import (
 	"github.com/ReneP92/changeport/internal/console/api"
 	"github.com/ReneP92/changeport/internal/metrics"
 	"github.com/ReneP92/changeport/internal/provisioning"
+	"github.com/ReneP92/changeport/internal/topics"
 )
 
 // Config is the console's Clerk configuration. Without all of it the
@@ -553,7 +554,7 @@ func (s *Server) GetClientProperties(ctx context.Context, _ api.GetClientPropert
 	if err != nil {
 		return nil, err
 	}
-	s.logger.Info("credentials downloaded", "tenant", customer.Name, "user", principal.UserID, "organization", principal.OrganizationID)
+	s.audit(ctx, principal, customer.Name, "credentials downloaded")
 	return clientPropertiesDownload{
 		customerID: customer.Name,
 		content:    provisioning.ClientPropertiesFile(customer.Name, customer.Status.BootstrapAddress, jaas, ca),
@@ -730,4 +731,178 @@ func sumSeries(series []metrics.Series) []api.Point {
 	}
 	slices.SortFunc(points, func(a, b api.Point) int { return a.Time.Compare(b.Time) })
 	return points
+}
+
+// topicPolicy returns the topic guardrails of a customer's cluster.
+func topicPolicy(customer *v1alpha1.Customer) (topics.Policy, error) {
+	profile, err := provisioning.ProfileByName(customer.Spec.Profile)
+	if err != nil {
+		return topics.Policy{}, err
+	}
+	return topics.ForProfile(profile)
+}
+
+// GetTopicPolicy implements api.StrictServerInterface.
+func (s *Server) GetTopicPolicy(ctx context.Context, _ api.GetTopicPolicyRequestObject) (api.GetTopicPolicyResponseObject, error) {
+	customer, _, refused, err := s.customerOf(ctx)
+	switch {
+	case err != nil:
+		return nil, err
+	case refused != nil && refused.Status == http.StatusNotFound:
+		return api.GetTopicPolicy404JSONResponse{NotFoundJSONResponse: api.NotFoundJSONResponse(*refused)}, nil
+	case refused != nil:
+		return api.GetTopicPolicy403JSONResponse{ForbiddenJSONResponse: api.ForbiddenJSONResponse(*refused)}, nil
+	}
+	policy, err := topicPolicy(customer)
+	if err != nil {
+		return nil, err
+	}
+	response := api.GetTopicPolicy200JSONResponse{
+		MaxNameLength:      topics.MaxNameLength,
+		ReservedPrefixes:   topics.ReservedPrefixes,
+		Partitions:         api.PartitionRange{Min: 1, Max: policy.MaxPartitions, Default: topics.DefaultPartitions},
+		ReplicationFactor:  policy.ReplicationFactor,
+		DefaultRetentionMs: topics.DefaultRetention.Milliseconds(),
+		CleanupPolicies: []api.CleanupPolicyOption{
+			{Name: api.CleanupPolicyOptionNameDelete, Tiered: true},
+			{Name: api.CleanupPolicyOptionNameCompact, Tiered: false},
+		},
+	}
+	for _, preset := range topics.RetentionPresets {
+		response.RetentionPresets = append(response.RetentionPresets, api.RetentionPreset{Label: preset.Label, Ms: preset.Duration.Milliseconds()})
+	}
+	return response, nil
+}
+
+var adminsOnly = problem(http.StatusForbidden, "Admins only", "Ask an admin of your organization to change topics.")
+
+// CreateTopic implements api.StrictServerInterface: organization admins
+// create topics within the guardrails, and every creation is audited.
+func (s *Server) CreateTopic(ctx context.Context, request api.CreateTopicRequestObject) (api.CreateTopicResponseObject, error) {
+	customer, principal, refused, err := s.customerOf(ctx)
+	switch {
+	case err != nil:
+		return nil, err
+	case refused != nil && refused.Status == http.StatusNotFound:
+		return api.CreateTopic404JSONResponse{NotFoundJSONResponse: api.NotFoundJSONResponse(*refused)}, nil
+	case refused != nil:
+		return api.CreateTopic403JSONResponse{ForbiddenJSONResponse: api.ForbiddenJSONResponse(*refused)}, nil
+	case !principal.Admin():
+		return api.CreateTopic403JSONResponse{ForbiddenJSONResponse: api.ForbiddenJSONResponse(adminsOnly)}, nil
+	case request.Body == nil:
+		return api.CreateTopic400JSONResponse{BadRequestJSONResponse: api.BadRequestJSONResponse(problem(http.StatusBadRequest, "Describe the topic", ""))}, nil
+	}
+	policy, err := topicPolicy(customer)
+	if err != nil {
+		return nil, err
+	}
+	load, err := s.clusters.Load(ctx, customer.Name)
+	if errors.Is(err, clusters.ErrNotReady) {
+		return api.CreateTopic409JSONResponse{ConflictJSONResponse: api.ConflictJSONResponse(notReadyYet)}, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	body := *request.Body
+	topic, err := policy.Check(topics.Request{
+		Name:          body.Name,
+		Partitions:    body.Partitions,
+		Retention:     time.Duration(body.RetentionMs) * time.Millisecond,
+		CleanupPolicy: string(body.CleanupPolicy),
+	}, load)
+	var fieldErr *topics.FieldError
+	if errors.As(err, &fieldErr) {
+		p := problem(http.StatusBadRequest, "The topic breaks a guardrail", fieldErr.Message)
+		p.Field = ptr.To(fieldErr.Field)
+		if errors.Is(err, topics.ErrConflict) {
+			p.Status, p.Title = http.StatusConflict, "The name is taken"
+			return api.CreateTopic409JSONResponse{ConflictJSONResponse: api.ConflictJSONResponse(p)}, nil
+		}
+		return api.CreateTopic400JSONResponse{BadRequestJSONResponse: api.BadRequestJSONResponse(p)}, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	if err := s.clusters.CreateTopic(ctx, customer.Name, topic); errors.Is(err, ErrTopicExists) {
+		p := problem(http.StatusConflict, "The name is taken", fmt.Sprintf("topic %s exists", topic.Name))
+		p.Field = ptr.To("name")
+		return api.CreateTopic409JSONResponse{ConflictJSONResponse: api.ConflictJSONResponse(p)}, nil
+	} else if err != nil {
+		return nil, err
+	}
+	s.audit(ctx, principal, customer.Name, "topic created", "topic", topic.Name,
+		"partitions", topic.Partitions, "retention_ms", body.RetentionMs, "cleanup_policy", body.CleanupPolicy)
+	created := api.CreateTopic201JSONResponse{
+		Name:              topic.Name,
+		Partitions:        int(topic.Partitions),
+		ReplicationFactor: int(topic.ReplicationFactor),
+		Tiered:            topic.Configs["remote.storage.enable"] == "true",
+		CleanupPolicy:     topic.Configs["cleanup.policy"],
+		RetentionMs:       ptr.To(body.RetentionMs),
+	}
+	return created, nil
+}
+
+// DeleteTopic implements api.StrictServerInterface: organization admins
+// delete their own topics, never Kafka's or the platform's, and every
+// deletion is audited.
+func (s *Server) DeleteTopic(ctx context.Context, request api.DeleteTopicRequestObject) (api.DeleteTopicResponseObject, error) {
+	customer, principal, refused, err := s.customerOf(ctx)
+	switch {
+	case err != nil:
+		return nil, err
+	case refused != nil && refused.Status == http.StatusNotFound:
+		return api.DeleteTopic404JSONResponse{NotFoundJSONResponse: api.NotFoundJSONResponse(*refused)}, nil
+	case refused != nil:
+		return api.DeleteTopic403JSONResponse{ForbiddenJSONResponse: api.ForbiddenJSONResponse(*refused)}, nil
+	case !principal.Admin():
+		return api.DeleteTopic403JSONResponse{ForbiddenJSONResponse: api.ForbiddenJSONResponse(adminsOnly)}, nil
+	case topics.Reserved(request.Topic):
+		return api.DeleteTopic404JSONResponse{NotFoundJSONResponse: api.NotFoundJSONResponse(noSuchTopic(request.Topic))}, nil
+	}
+	err = s.clusters.DeleteTopic(ctx, customer.Name, request.Topic)
+	switch {
+	case errors.Is(err, ErrNoSuchTopic):
+		return api.DeleteTopic404JSONResponse{NotFoundJSONResponse: api.NotFoundJSONResponse(noSuchTopic(request.Topic))}, nil
+	case errors.Is(err, clusters.ErrNotReady):
+		return api.DeleteTopic409JSONResponse{NotReadyJSONResponse: api.NotReadyJSONResponse(notReadyYet)}, nil
+	case err != nil:
+		return nil, err
+	}
+	s.audit(ctx, principal, customer.Name, "topic deleted", "topic", request.Topic)
+	return api.DeleteTopic204Response{}, nil
+}
+
+func noSuchTopic(name string) api.Problem {
+	return problem(http.StatusNotFound, "No such topic", fmt.Sprintf("There is no topic %s.", name))
+}
+
+// ListTopicConsumerGroups implements api.StrictServerInterface.
+func (s *Server) ListTopicConsumerGroups(ctx context.Context, request api.ListTopicConsumerGroupsRequestObject) (api.ListTopicConsumerGroupsResponseObject, error) {
+	customer, _, refused, err := s.customerOf(ctx)
+	switch {
+	case err != nil:
+		return nil, err
+	case refused != nil && refused.Status == http.StatusNotFound:
+		return api.ListTopicConsumerGroups404JSONResponse{NotFoundJSONResponse: api.NotFoundJSONResponse(*refused)}, nil
+	case refused != nil:
+		return api.ListTopicConsumerGroups403JSONResponse{ForbiddenJSONResponse: api.ForbiddenJSONResponse(*refused)}, nil
+	case topics.Reserved(request.Topic):
+		return api.ListTopicConsumerGroups404JSONResponse{NotFoundJSONResponse: api.NotFoundJSONResponse(noSuchTopic(request.Topic))}, nil
+	}
+	groups, err := s.clusters.TopicConsumerGroups(ctx, customer.Name, request.Topic)
+	if errors.Is(err, clusters.ErrNotReady) {
+		return api.ListTopicConsumerGroups409JSONResponse{NotReadyJSONResponse: api.NotReadyJSONResponse(notReadyYet)}, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return api.ListTopicConsumerGroups200JSONResponse{Groups: groups}, nil
+}
+
+// audit logs a change a user made to a customer's cluster, with who made it.
+func (s *Server) audit(ctx context.Context, principal Principal, tenant, change string, attributes ...any) {
+	s.logger.InfoContext(ctx, change, append([]any{
+		"audit", true, "tenant", tenant, "user", principal.UserID, "organization", principal.OrganizationID,
+	}, attributes...)...)
 }

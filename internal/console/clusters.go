@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/twmb/franz-go/pkg/kerr"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/types"
@@ -17,6 +18,7 @@ import (
 	"github.com/ReneP92/changeport/internal/clusters"
 	"github.com/ReneP92/changeport/internal/metrics"
 	"github.com/ReneP92/changeport/internal/provisioning"
+	"github.com/ReneP92/changeport/internal/topics"
 )
 
 // Clusters reads what the console shows of a customer's Kafka cluster.
@@ -33,7 +35,24 @@ type Clusters interface {
 	// listener's certificate, or "" when clients trust it by default or it
 	// is not issued yet.
 	ListenerCA(ctx context.Context, customerID string) (string, error)
+	// Load returns what the topic policy needs to know of the cluster: every
+	// topic's name, internal ones included, the partition replicas, and the
+	// brokers.
+	Load(ctx context.Context, customerID string) (topics.Cluster, error)
+	// CreateTopic creates topic, or returns ErrTopicExists.
+	CreateTopic(ctx context.Context, customerID string, topic topics.Topic) error
+	// DeleteTopic deletes a topic, or returns ErrNoSuchTopic.
+	DeleteTopic(ctx context.Context, customerID, name string) error
+	// TopicConsumerGroups returns the consumer groups with committed offsets
+	// on a topic, by name.
+	TopicConsumerGroups(ctx context.Context, customerID, topic string) ([]string, error)
 }
+
+// ErrTopicExists means a topic of that name exists already.
+var ErrTopicExists = errors.New("the topic exists")
+
+// ErrNoSuchTopic means there is no topic of that name.
+var ErrNoSuchTopic = errors.New("no such topic")
 
 // Metrics reads the console's named queries.
 type Metrics interface {
@@ -100,27 +119,30 @@ func (k KubeClusters) Brokers(ctx context.Context, customerID string) ([]Broker,
 // Topics implements Clusters. Internal topics, whose names start with two
 // underscores, are Kafka's own.
 func (k KubeClusters) Topics(ctx context.Context, customerID string) ([]TopicSettings, error) {
-	admin, err := k.Kafka.Admin(ctx, customerID)
-	if err != nil {
-		return nil, err
-	}
-	listed, err := admin.ListTopics(ctx)
+	// Current metadata, so that a topic shows as soon as it is created and
+	// goes as soon as it is deleted.
+	metadata, err := k.Kafka.Metadata(ctx, customerID)
 	if err != nil {
 		return nil, fmt.Errorf("list the topics of customer %s: %w", customerID, err)
 	}
 	var topics []TopicSettings
-	for _, detail := range listed.Sorted() {
-		if detail.Err != nil || strings.HasPrefix(detail.Topic, "__") {
+	for _, topic := range metadata.Topics {
+		if topic.Topic == nil || topic.ErrorCode != 0 || strings.HasPrefix(*topic.Topic, "__") {
 			continue
 		}
-		topics = append(topics, TopicSettings{
-			Name:              detail.Topic,
-			Partitions:        len(detail.Partitions),
-			ReplicationFactor: detail.Partitions.NumReplicas(),
-		})
+		settings := TopicSettings{Name: *topic.Topic, Partitions: len(topic.Partitions)}
+		for _, partition := range topic.Partitions {
+			settings.ReplicationFactor = max(settings.ReplicationFactor, len(partition.Replicas))
+		}
+		topics = append(topics, settings)
 	}
 	if len(topics) == 0 {
 		return topics, nil
+	}
+	slices.SortFunc(topics, func(a, b TopicSettings) int { return strings.Compare(a.Name, b.Name) })
+	admin, err := k.Kafka.Admin(ctx, customerID)
+	if err != nil {
+		return nil, err
 	}
 	names := make([]string, len(topics))
 	for i, topic := range topics {
@@ -206,4 +228,95 @@ func (k KubeSecrets) Get(ctx context.Context, namespace, name string) (map[strin
 		return nil, "", fmt.Errorf("get secret %s/%s: %w", namespace, name, err)
 	}
 	return secret.Data, secret.ResourceVersion, nil
+}
+
+// Load implements Clusters.
+func (k KubeClusters) Load(ctx context.Context, customerID string) (topics.Cluster, error) {
+	// Current metadata, so that the guardrails see the topics created a
+	// moment ago.
+	metadata, err := k.Kafka.Metadata(ctx, customerID)
+	if err != nil {
+		return topics.Cluster{}, fmt.Errorf("read the metadata of customer %s: %w", customerID, err)
+	}
+	load := topics.Cluster{Brokers: len(metadata.Brokers)}
+	for _, topic := range metadata.Topics {
+		if topic.Topic == nil || topic.ErrorCode != 0 {
+			continue
+		}
+		load.Topics = append(load.Topics, *topic.Topic)
+		for _, partition := range topic.Partitions {
+			load.Replicas += len(partition.Replicas)
+		}
+	}
+	return load, nil
+}
+
+// CreateTopic implements Clusters.
+func (k KubeClusters) CreateTopic(ctx context.Context, customerID string, topic topics.Topic) error {
+	admin, err := k.Kafka.Admin(ctx, customerID)
+	if err != nil {
+		return err
+	}
+	configs := make(map[string]*string, len(topic.Configs))
+	for key, value := range topic.Configs {
+		configs[key] = &value
+	}
+	created, err := admin.CreateTopic(ctx, topic.Partitions, topic.ReplicationFactor, configs, topic.Name)
+	if err == nil {
+		err = created.Err
+	}
+	switch {
+	case errors.Is(err, kerr.TopicAlreadyExists):
+		return fmt.Errorf("topic %s: %w", topic.Name, ErrTopicExists)
+	case err != nil:
+		return fmt.Errorf("create topic %s of customer %s: %w (%s)", topic.Name, customerID, err, created.ErrMessage)
+	}
+	return nil
+}
+
+// DeleteTopic implements Clusters.
+func (k KubeClusters) DeleteTopic(ctx context.Context, customerID, name string) error {
+	admin, err := k.Kafka.Admin(ctx, customerID)
+	if err != nil {
+		return err
+	}
+	deleted, err := admin.DeleteTopic(ctx, name)
+	if err == nil {
+		err = deleted.Err
+	}
+	switch {
+	case errors.Is(err, kerr.UnknownTopicOrPartition):
+		return fmt.Errorf("topic %s: %w", name, ErrNoSuchTopic)
+	case err != nil:
+		return fmt.Errorf("delete topic %s of customer %s: %w (%s)", name, customerID, err, deleted.ErrMessage)
+	}
+	return nil
+}
+
+// consumerGroupTypes are the groups that commit offsets: classic consumer
+// groups and KIP-848 ones.
+var consumerGroupTypes = []string{"classic", "consumer"}
+
+// TopicConsumerGroups implements Clusters.
+func (k KubeClusters) TopicConsumerGroups(ctx context.Context, customerID, topic string) ([]string, error) {
+	admin, err := k.Kafka.Admin(ctx, customerID)
+	if err != nil {
+		return nil, err
+	}
+	listed, err := admin.ListGroupsByType(ctx, consumerGroupTypes)
+	if err != nil {
+		return nil, fmt.Errorf("list the consumer groups of customer %s: %w", customerID, err)
+	}
+	if len(listed) == 0 {
+		return []string{}, nil
+	}
+	offsets := admin.FetchManyOffsets(ctx, listed.Groups()...)
+	groups := []string{}
+	for group, fetched := range offsets {
+		if fetched.Err == nil && len(fetched.Fetched[topic]) > 0 {
+			groups = append(groups, group)
+		}
+	}
+	slices.Sort(groups)
+	return groups, nil
 }

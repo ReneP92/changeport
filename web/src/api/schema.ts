@@ -106,6 +106,57 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/customer/topic-policy": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** The guardrails on the customer's topics, for the create dialog */
+        get: operations["getTopicPolicy"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/customer/topics/{topic}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /** Deletes a topic and its messages, for organization admins */
+        delete: operations["deleteTopic"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/customer/topics/{topic}/consumer-groups": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** The consumer groups with committed offsets on a topic */
+        get: operations["listTopicConsumerGroups"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/customer/topics": {
         parameters: {
             query?: never;
@@ -116,7 +167,8 @@ export interface paths {
         /** The customer's topics, with their settings, size and throughput */
         get: operations["listTopics"];
         put?: never;
-        post?: never;
+        /** Creates a topic within the guardrails, for organization admins */
+        post: operations["createTopic"];
         delete?: never;
         options?: never;
         head?: never;
@@ -183,6 +235,8 @@ export interface components {
             status: number;
             title: string;
             detail?: string;
+            /** @description The request field the problem is about, if one */
+            field?: string;
         };
         Config: {
             /** @description The Clerk publishable key the web app signs in with */
@@ -259,6 +313,44 @@ export interface components {
             bytesInPerSecond?: number;
             bytesOutPerSecond?: number;
         };
+        TopicPolicy: {
+            maxNameLength: number;
+            reservedPrefixes: string[];
+            partitions: components["schemas"]["PartitionRange"];
+            /** @description Fixed by the cluster's profile */
+            replicationFactor: number;
+            retentionPresets: components["schemas"]["RetentionPreset"][];
+            /** Format: int64 */
+            defaultRetentionMs: number;
+            cleanupPolicies: components["schemas"]["CleanupPolicyOption"][];
+        };
+        PartitionRange: {
+            min: number;
+            max: number;
+            default: number;
+        };
+        RetentionPreset: {
+            label: string;
+            /** Format: int64 */
+            ms: number;
+        };
+        CleanupPolicyOption: {
+            /** @enum {string} */
+            name: "delete" | "compact";
+            /** @description Whether topics of this policy offload history to tiered storage */
+            tiered: boolean;
+        };
+        NewTopic: {
+            name: string;
+            partitions: number;
+            /** Format: int64 */
+            retentionMs: number;
+            /** @enum {string} */
+            cleanupPolicy: "delete" | "compact";
+        };
+        ConsumerGroupList: {
+            groups: string[];
+        };
         Throughput: {
             range: string;
             stepSeconds: number;
@@ -333,6 +425,15 @@ export interface components {
                 "application/json": components["schemas"]["Problem"];
             };
         };
+        /** @description The request conflicts with what exists, or the cluster is not ready for it */
+        Conflict: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/json": components["schemas"]["Problem"];
+            };
+        };
         /** @description The cluster is not ready for this yet */
         NotReady: {
             headers: {
@@ -362,6 +463,8 @@ export interface components {
         };
     };
     parameters: {
+        /** @description The topic's name */
+        TopicName: string;
         /** @description The customer ID, such as acme */
         CustomerID: string;
     };
@@ -511,6 +614,84 @@ export interface operations {
             503: components["responses"]["NotConfigured"];
         };
     };
+    getTopicPolicy: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The topic policy */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TopicPolicy"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            503: components["responses"]["NotConfigured"];
+        };
+    };
+    deleteTopic: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The topic's name */
+                topic: components["parameters"]["TopicName"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The topic is deleted */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["NotReady"];
+            503: components["responses"]["NotConfigured"];
+        };
+    };
+    listTopicConsumerGroups: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The topic's name */
+                topic: components["parameters"]["TopicName"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The groups, by name */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ConsumerGroupList"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["NotReady"];
+            503: components["responses"]["NotConfigured"];
+        };
+    };
     listTopics: {
         parameters: {
             query?: never;
@@ -533,6 +714,36 @@ export interface operations {
             403: components["responses"]["Forbidden"];
             404: components["responses"]["NotFound"];
             409: components["responses"]["NotReady"];
+            503: components["responses"]["NotConfigured"];
+        };
+    };
+    createTopic: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["NewTopic"];
+            };
+        };
+        responses: {
+            /** @description The topic is created */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Topic"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
             503: components["responses"]["NotConfigured"];
         };
     };

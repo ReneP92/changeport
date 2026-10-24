@@ -21,7 +21,7 @@ export function Overview({ customer, admin }: { customer: Customer; admin: boole
       <ConnectionCard admin={admin} />
       <HealthCard />
       <ThroughputCard />
-      <TopicsCard />
+      <TopicsCard admin={admin} />
     </main>
   );
 }

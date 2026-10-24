@@ -124,7 +124,96 @@ paths:
           $ref: "#/components/responses/NotFound"
         "503":
           $ref: "#/components/responses/NotConfigured"
+  /api/customer/topic-policy:
+    get:
+      operationId: getTopicPolicy
+      summary: The guardrails on the customer's topics, for the create dialog
+      responses:
+        "200":
+          description: The topic policy
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TopicPolicy"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "503":
+          $ref: "#/components/responses/NotConfigured"
+  /api/customer/topics/{topic}:
+    delete:
+      operationId: deleteTopic
+      summary: Deletes a topic and its messages, for organization admins
+      parameters:
+        - $ref: "#/components/parameters/TopicName"
+      responses:
+        "204":
+          description: The topic is deleted
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/NotReady"
+        "503":
+          $ref: "#/components/responses/NotConfigured"
+  /api/customer/topics/{topic}/consumer-groups:
+    get:
+      operationId: listTopicConsumerGroups
+      summary: The consumer groups with committed offsets on a topic
+      parameters:
+        - $ref: "#/components/parameters/TopicName"
+      responses:
+        "200":
+          description: The groups, by name
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ConsumerGroupList"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/NotReady"
+        "503":
+          $ref: "#/components/responses/NotConfigured"
   /api/customer/topics:
+    post:
+      operationId: createTopic
+      summary: Creates a topic within the guardrails, for organization admins
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/NewTopic"
+      responses:
+        "201":
+          description: The topic is created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Topic"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "503":
+          $ref: "#/components/responses/NotConfigured"
     get:
       operationId: listTopics
       summary: The customer's topics, with their settings, size and throughput
@@ -221,6 +310,15 @@ components:
       bearerFormat: JWT
       description: A Clerk session token for the console's origin.
   parameters:
+    TopicName:
+      name: topic
+      in: path
+      required: true
+      description: The topic's name
+      schema:
+        type: string
+        pattern: "^[a-zA-Z0-9._-]+$"
+        maxLength: 249
     CustomerID:
       name: customerID
       in: path
@@ -245,6 +343,12 @@ components:
             $ref: "#/components/schemas/Problem"
     NotFound:
       description: There is no such customer
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Problem"
+    Conflict:
+      description: The request conflicts with what exists, or the cluster is not ready for it
       content:
         application/json:
           schema:
@@ -279,6 +383,9 @@ components:
           type: string
         detail:
           type: string
+        field:
+          type: string
+          description: The request field the problem is about, if one
     Config:
       type: object
       required: [clerkPublishableKey]
@@ -400,6 +507,83 @@ components:
           type: number
         bytesOutPerSecond:
           type: number
+    TopicPolicy:
+      type: object
+      required: [maxNameLength, reservedPrefixes, partitions, replicationFactor, retentionPresets, defaultRetentionMs, cleanupPolicies]
+      properties:
+        maxNameLength:
+          type: integer
+        reservedPrefixes:
+          type: array
+          items:
+            type: string
+        partitions:
+          $ref: "#/components/schemas/PartitionRange"
+        replicationFactor:
+          type: integer
+          description: Fixed by the cluster's profile
+        retentionPresets:
+          type: array
+          items:
+            $ref: "#/components/schemas/RetentionPreset"
+        defaultRetentionMs:
+          type: integer
+          format: int64
+        cleanupPolicies:
+          type: array
+          items:
+            $ref: "#/components/schemas/CleanupPolicyOption"
+    PartitionRange:
+      type: object
+      required: [min, max, default]
+      properties:
+        min:
+          type: integer
+        max:
+          type: integer
+        default:
+          type: integer
+    RetentionPreset:
+      type: object
+      required: [label, ms]
+      properties:
+        label:
+          type: string
+        ms:
+          type: integer
+          format: int64
+    CleanupPolicyOption:
+      type: object
+      required: [name, tiered]
+      properties:
+        name:
+          type: string
+          enum: [delete, compact]
+        tiered:
+          type: boolean
+          description: Whether topics of this policy offload history to tiered storage
+    NewTopic:
+      type: object
+      required: [name, partitions, retentionMs, cleanupPolicy]
+      properties:
+        name:
+          type: string
+        partitions:
+          type: integer
+        retentionMs:
+          type: integer
+          format: int64
+        cleanupPolicy:
+          type: string
+          enum: [delete, compact]
+    ConsumerGroupList:
+      type: object
+      required: [groups]
+      properties:
+        groups:
+          type: array
+          items:
+            type: string
     Throughput:
       type: object
       required: [range, stepSeconds, bytesIn, bytesOut]

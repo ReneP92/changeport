@@ -1,8 +1,6 @@
-import { execFileSync } from "node:child_process";
-import path from "node:path";
-import { clerk } from "@clerk/testing/playwright";
-import { expect, test, type Page } from "@playwright/test";
-import { env, readFixtures, type UserFixture } from "./fixtures";
+import { expect, test } from "@playwright/test";
+import { readFixtures } from "./fixtures";
+import { connect, kafka, openOverview } from "./helpers";
 
 // The overview of customer A's cluster, which the setup waits to be ready.
 
@@ -10,29 +8,6 @@ let fixtures: ReturnType<typeof readFixtures>;
 test.beforeAll(() => {
   fixtures = readFixtures();
 });
-
-async function openOverview(page: Page, user: UserFixture): Promise<void> {
-  await page.goto("/");
-  await clerk.signIn({ page, emailAddress: user.email });
-  await page.goto("/");
-  await expect(page.getByRole("heading", { name: "Connection" })).toBeVisible({ timeout: 20_000 });
-}
-
-/** Runs a Kafka tool as customer A's own client, with a client.properties. */
-function kafka(properties: string, tool: string, args: string[], input?: string): string {
-  const root = path.join(import.meta.dirname, "..", "..", "..");
-  return execFileSync(
-    path.join(root, "hack", "kafka-with.sh"),
-    [fixtures.customers.a.id, properties, tool, ...args],
-    {
-      cwd: root,
-      env: { ...process.env, KUBE_CONTEXT: env("KUBE_CONTEXT") },
-      input,
-      encoding: "utf8",
-      timeout: 120_000,
-    },
-  );
-}
 
 test("an admin downloads client.properties and produces with it", async ({ page }, testInfo) => {
   test.setTimeout(4 * 60_000);
@@ -52,8 +27,8 @@ test("an admin downloads client.properties and produces with it", async ({ page 
 
   // A client outside the cluster connects with nothing but the file.
   const topic = `overview-${fixtures.run}`;
-  const config = ["--bootstrap-server", bootstrap, "--command-config", "/config/client.properties"];
-  kafka(properties, "kafka-topics.sh", [
+  const config = connect(a.id);
+  kafka(a.id, properties, "kafka-topics.sh", [
     ...config,
     "--create",
     "--topic",
@@ -62,6 +37,7 @@ test("an admin downloads client.properties and produces with it", async ({ page 
     "3",
   ]);
   kafka(
+    a.id,
     properties,
     "kafka-console-producer.sh",
     [...config, "--topic", topic],
