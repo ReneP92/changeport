@@ -3,6 +3,7 @@ import { Link } from "react-router";
 import type { Customer } from "@/api/client";
 import { useCustomers, useMe } from "@/api/queries";
 import { StatusBadge } from "@/components/CustomerSummary";
+import { parts } from "@/lib/parts";
 import { Notice } from "@/components/Notice";
 import { ProvisionCustomerDialog } from "@/pages/operator/ProvisionCustomerDialog";
 
@@ -96,14 +97,6 @@ function CustomerTable() {
     </main>
   );
 }
-
-/** The parts of a cluster in the order it gets ready, before Ready itself. */
-const parts: Customer["conditions"][number]["type"][] = [
-  "CertificateIssued",
-  "KafkaReady",
-  "UsersReady",
-  "AgentAvailable",
-];
 
 /** A dot per part of the customer's cluster, filled once it is ready. */
 export function ConditionDots({ customer }: { customer: Customer }) {

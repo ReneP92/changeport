@@ -36,6 +36,7 @@ async function callAPI(page: Page, method: string, path: string): Promise<number
 
 test("an operator provisions a customer, watches it get ready, and deprovisions it", async ({
   page,
+  browser,
 }) => {
   // Creating a cluster takes a minute or two, deleting it about one.
   test.setTimeout(10 * 60_000);
@@ -98,10 +99,35 @@ test("an operator provisions a customer, watches it get ready, and deprovisions 
     `customer.changeport.io/${id}\n`,
   );
 
-  // The organization is kept, linked to no customer.
+  // The organization is kept, linked to no customer: its members are told
+  // it has no cluster.
   expect(
     (await clerkAPI.organizations.getOrganization({ organizationId: organizationID })).name,
   ).toBe(displayName);
+  const member = await clerkAPI.users.createUser({
+    emailAddress: [testEmail(fixtures.run, "kept")],
+    firstName: "E2E",
+    lastName: "kept",
+    skipPasswordRequirement: true,
+  });
+  try {
+    await clerkAPI.organizations.createOrganizationMembership({
+      organizationId: organizationID,
+      userId: member.id,
+      role: "org:member",
+    });
+    const context = await browser.newContext();
+    const memberPage = await context.newPage();
+    await memberPage.goto("/");
+    await clerk.signIn({ page: memberPage, emailAddress: testEmail(fixtures.run, "kept") });
+    await memberPage.goto("/");
+    await expect(memberPage.getByRole("heading", { name: "No Kafka cluster yet" })).toBeVisible({
+      timeout: 20_000,
+    });
+    await context.close();
+  } finally {
+    await clerkAPI.users.deleteUser(member.id);
+  }
   const audit = kubectl([
     "-n",
     "changeport",
