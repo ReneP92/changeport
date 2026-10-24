@@ -36,3 +36,43 @@ export function formatRetention(ms: number | undefined): string {
   }
   return `${String(ms)} ms`;
 }
+
+const plural = (count: number, unit: string) => `${String(count)} ${unit}${count === 1 ? "" : "s"}`;
+
+/**
+ * Formats a duration in seconds for people, to the minute once it is longer
+ * than one: 45 seconds, 3 minutes, 1 hour 20 minutes, 12 hours.
+ */
+export function formatDuration(seconds: number): string {
+  if (seconds < 60) {
+    return plural(Math.floor(seconds), "second");
+  }
+  const minutes = Math.floor(seconds / 60);
+  if (minutes < 60) {
+    return plural(minutes, "minute");
+  }
+  const hours = Math.floor(minutes / 60);
+  // Past a few hours, the minutes no longer matter.
+  if (hours >= 10 || minutes % 60 === 0) {
+    return plural(hours, "hour");
+  }
+  return `${plural(hours, "hour")} ${plural(minutes % 60, "minute")}`;
+}
+
+/**
+ * Says how far a consumer group is behind, in plain language: caught up,
+ * less than a minute behind, 3 minutes behind. capped means the lag is older
+ * than the agent looks up (23 hours), so seconds is only a lower bound.
+ */
+export function formatLag(seconds: number, messages: number, capped: boolean): string {
+  if (messages === 0) {
+    return "Caught up";
+  }
+  if (capped) {
+    return `More than ${formatDuration(seconds)} behind`;
+  }
+  if (seconds < 60) {
+    return "Less than a minute behind";
+  }
+  return `${formatDuration(seconds)} behind`;
+}

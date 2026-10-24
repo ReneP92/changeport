@@ -300,7 +300,9 @@ A customer whose cluster is ready sees its overview: how to connect, with a
 `client.properties` download for the organization's admins (it holds the
 admin user's password), the brokers' health and the partitions' from the
 metrics store, the cluster's throughput over the last hour to week, and the
-topics with their retention, tiering, size and throughput. The console reads
+topics with their retention, tiering, size and throughput, and how far
+behind each consumer group is, in plain language ("3 minutes behind"), with
+its lag over the last hour as the agent measures it. The console reads
 the topics as the `changeport-console` Kafka user, which cannot read or write
 messages.
 
@@ -344,6 +346,8 @@ the kind network, and a member sees how to connect but not the password. An
 admin creates a topic keeping an hour of messages, checks with the Kafka
 tools that it is tiered, reads it with a consumer group, and deletes it
 after the warning about that group; a member cannot change topics. A
+consumer group left 100 messages behind shows as minutes behind, with its
+lag over the last hour, next to one that is caught up. A
 teardown removes the run's users, organizations and customers, and the next
 run removes what a crashed run left behind after an hour:
 

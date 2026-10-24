@@ -104,6 +104,20 @@ export function useThroughput(range: ThroughputRange) {
   });
 }
 
+/**
+ * The consumer groups' lag per topic, most behind first, with the last hour
+ * of it. The agent measures it every 30 seconds.
+ */
+export function useConsumerGroups() {
+  const api = useApi();
+  const organization = useOrganizationKey();
+  return useQuery({
+    queryKey: ["customer", "consumer-groups", organization],
+    queryFn: async () => unwrap(await api.GET("/api/customer/consumer-groups")).groups,
+    refetchInterval: 30_000,
+  });
+}
+
 /** Downloads the admin user's client.properties as a file. */
 export function useDownloadClientProperties() {
   const api = useApi();

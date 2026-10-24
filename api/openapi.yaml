@@ -264,6 +264,25 @@ paths:
           $ref: "#/components/responses/NotFound"
         "503":
           $ref: "#/components/responses/NotConfigured"
+  /api/customer/consumer-groups:
+    get:
+      operationId: listConsumerGroups
+      summary: The consumer groups' lag per topic, with the last hour of it
+      responses:
+        "200":
+          description: The consumer groups, most behind first
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ConsumerGroupLagList"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "503":
+          $ref: "#/components/responses/NotConfigured"
   /api/operator/customers:
     get:
       operationId: listCustomers
@@ -584,6 +603,45 @@ components:
           type: array
           items:
             type: string
+    ConsumerGroupLagList:
+      type: object
+      required: [groups]
+      properties:
+        groups:
+          type: array
+          items:
+            $ref: "#/components/schemas/ConsumerGroupLag"
+    ConsumerGroupLag:
+      type: object
+      description: >-
+        How far a consumer group is behind on one topic, as the agent measures
+        it every 30 seconds without reading any message.
+      required: [group, topic, lagSeconds, lagMessages, capped, history]
+      properties:
+        group:
+          type: string
+        topic:
+          type: string
+        lagSeconds:
+          type: number
+          description: >-
+            The age of the oldest message the group has not consumed yet, the
+            highest over the topic's partitions; 0 when it has consumed every
+            message.
+        lagMessages:
+          type: integer
+          format: int64
+          description: The messages the group has not consumed yet, over the topic's partitions.
+        capped:
+          type: boolean
+          description: >-
+            True when the lag is older than the oldest time the agent looks up
+            (23 hours), so lagSeconds is a lower bound.
+        history:
+          type: array
+          description: The lag in seconds over the last hour, a point a minute.
+          items:
+            $ref: "#/components/schemas/Point"
     Throughput:
       type: object
       required: [range, stepSeconds, bytesIn, bytesOut]

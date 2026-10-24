@@ -13,6 +13,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"testing"
 	"testing/fstest"
@@ -274,6 +275,7 @@ func TestAuthorizationMatrix(t *testing.T) {
 	routes["/api/customer/health"] = customerRoute(`"name":"acme-dual-role-0"`, `"underReplicatedPartitions":0`, `"name":"globex-dual-role-0"`)
 	routes["/api/customer/topics"] = customerRoute(`"name":"acme-orders"`, `"tiered":true`, `"name":"globex-orders"`)
 	routes["/api/customer/throughput"] = customerRoute(`"bytesIn":[{`, `"range":"1h"`, `"stepSeconds":60`)
+	routes["/api/customer/consumer-groups"] = customerRoute(`"lagSeconds":82800,"topic":"acme-orders"`, `"lagMessages":42`, `"topic":"globex-orders"`)
 	routes["/api/customer/topic-policy"] = customerRoute(`"max":12`, `"replicationFactor":1`, `"maxNameLength":200`)
 	routes["/api/customer/topics/acme-orders/consumer-groups"] = customerRoute(`{"groups":[]}`, `{"groups":[]}`, `{"groups":[]}`)
 	// Only an organization's admins may download its credentials.
@@ -571,10 +573,44 @@ func (f *fakeClusters) ListenerCA(context.Context, string) (string, error) {
 }
 
 // fakeMetrics answers every query of a tenant with one point per series:
-// a topic series named after the tenant, or a cluster series of 0.
+// a topic series named after the tenant, a cluster series of 0, or the lag
+// of fakeLags.
 type fakeMetrics struct{}
 
+// fakeLag is a consumer group's lag on the tenant's orders topic.
+type fakeLag struct {
+	group             string
+	seconds, messages float64
+	capped            bool
+}
+
+// fakeLags are the consumer groups of every tenant, in no particular order.
+var fakeLags = []fakeLag{
+	{group: "billing", seconds: 180, messages: 42},
+	{group: "search"},
+	{group: "archive", seconds: 23 * 3600, messages: 9000, capped: true},
+}
+
 func (fakeMetrics) Instant(_ context.Context, tenant string, q metrics.Query, _ metrics.Filter, at time.Time) ([]metrics.Series, error) {
+	if lag, ok := map[metrics.Query]func(fakeLag) float64{
+		metrics.LagSeconds:  func(l fakeLag) float64 { return l.seconds },
+		metrics.LagMessages: func(l fakeLag) float64 { return l.messages },
+		metrics.LagCapped: func(l fakeLag) float64 {
+			if l.capped {
+				return 1
+			}
+			return 0
+		},
+	}[q]; ok {
+		var series []metrics.Series
+		for _, l := range fakeLags {
+			series = append(series, metrics.Series{
+				Labels: map[string]string{"consumer_group": l.group, "topic": tenant + "-orders"},
+				Points: []metrics.Point{{Time: at, Value: lag(l)}},
+			})
+		}
+		return series, nil
+	}
 	labels := map[string]string{"topic": tenant + "-orders"}
 	value := 1024.0
 	if expr, _ := metrics.Expr(q, tenant, metrics.Filter{}); !strings.Contains(expr, "topic") {
@@ -583,7 +619,16 @@ func (fakeMetrics) Instant(_ context.Context, tenant string, q metrics.Query, _ 
 	return []metrics.Series{{Labels: labels, Points: []metrics.Point{{Time: at, Value: value}}}}, nil
 }
 
-func (fakeMetrics) Range(_ context.Context, tenant string, _ metrics.Query, _ metrics.Filter, start, end time.Time, step time.Duration) ([]metrics.Series, error) {
+func (fakeMetrics) Range(_ context.Context, tenant string, q metrics.Query, _ metrics.Filter, start, end time.Time, step time.Duration) ([]metrics.Series, error) {
+	if q == metrics.LagSeconds {
+		// The billing group fell behind over the hour; the others have no
+		// history.
+		billing := metrics.Series{Labels: map[string]string{"consumer_group": "billing", "topic": tenant + "-orders"}}
+		for t, v := start, 0.0; !t.After(end); t, v = t.Add(step), v+3 {
+			billing.Points = append(billing.Points, metrics.Point{Time: t, Value: v})
+		}
+		return []metrics.Series{billing}, nil
+	}
 	one := metrics.Series{Labels: map[string]string{"topic": tenant + "-orders"}}
 	for t := start; !t.After(end); t = t.Add(step) {
 		one.Points = append(one.Points, metrics.Point{Time: t, Value: 10})
@@ -750,5 +795,33 @@ func TestTopicConsumerGroups(t *testing.T) {
 	member := f.signer.token(t, session{user: "user_2", org: "org_acme", role: "member"})
 	if status, body := send(t, f.handler, http.MethodGet, "/api/customer/topics/acme-orders/consumer-groups", member, ""); status != 200 || body != `{"groups":["billing","search"]}`+"\n" {
 		t.Errorf("consumer groups = %d %q", status, body)
+	}
+}
+
+func TestConsumerGroupsMostBehindFirst(t *testing.T) {
+	f := newFixture(t)
+	member := f.signer.token(t, session{user: "user_2", org: "org_acme", role: "member"})
+	status, body, _ := get(t, f.handler, "/api/customer/consumer-groups", member)
+	if status != 200 {
+		t.Fatalf("GET consumer groups = %d %s", status, body)
+	}
+	var list api.ConsumerGroupLagList
+	if err := json.Unmarshal([]byte(body), &list); err != nil {
+		t.Fatal(err)
+	}
+	var got []string
+	for _, g := range list.Groups {
+		got = append(got, fmt.Sprintf("%s/%s %gs %d capped=%t history=%d", g.Group, g.Topic, g.LagSeconds, g.LagMessages, g.Capped, len(g.History)))
+	}
+	want := []string{
+		"archive/acme-orders 82800s 9000 capped=true history=0",
+		"billing/acme-orders 180s 42 capped=false history=61",
+		"search/acme-orders 0s 0 capped=false history=0",
+	}
+	if !slices.Equal(got, want) {
+		t.Errorf("consumer groups =\n%s\nwant\n%s", strings.Join(got, "\n"), strings.Join(want, "\n"))
+	}
+	if !strings.Contains(body, `"history":[]`) {
+		t.Errorf("groups without history have no empty list: %s", body)
 	}
 }
