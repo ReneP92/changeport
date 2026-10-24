@@ -10,12 +10,31 @@ const ci = Boolean(process.env.CI);
 const signedIn = Boolean(process.env.PLAYWRIGHT_BASE_URL && process.env.CLERK_SECRET_KEY);
 const chrome = { ...devices["Desktop Chrome"] };
 
-const projects: Project[] = [{ name: "console", testMatch: "console.spec.ts", use: chrome }];
+// With CHANGEPORT_SCREENSHOTS_DIR (make ui-screenshots), the signed-in setup
+// serves a tour of every screen instead of the tests.
+const screenshots = Boolean(process.env.CHANGEPORT_SCREENSHOTS_DIR);
+
+const projects: Project[] = [];
+if (!screenshots) {
+  projects.push({ name: "console", testMatch: "console.spec.ts", use: chrome });
+}
 if (signedIn) {
   projects.push(
     { name: "clerk setup", testMatch: "clerk/clerk.setup.ts", teardown: "clerk teardown" },
     { name: "clerk teardown", testMatch: "clerk/clerk.teardown.ts" },
-    { name: "signed in", testMatch: "clerk/*.spec.ts", dependencies: ["clerk setup"], use: chrome },
+    screenshots
+      ? {
+          name: "screenshots",
+          testMatch: "screenshots/*.screens.ts",
+          dependencies: ["clerk setup"],
+          use: chrome,
+        }
+      : {
+          name: "signed in",
+          testMatch: "clerk/*.spec.ts",
+          dependencies: ["clerk setup"],
+          use: chrome,
+        },
   );
 }
 

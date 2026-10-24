@@ -109,6 +109,10 @@ console-test: ## Check the console on kind as a browser reaches it, with Playwri
 ui-e2e: ## Run the console's Playwright tests on kind, signed in as Clerk test users (needs .env)
 	hack/ui-e2e.sh
 
+.PHONY: ui-screenshots
+ui-screenshots: ## Capture every screen of the console on kind into docs/screenshots (needs .env)
+	hack/ui-screenshots.sh
+
 .PHONY: provisioner-reload
 provisioner-reload: ## Rebuild the provisioner and roll it out on kind
 	@bash -c 'source hack/lib.sh && build_provisioner_image && ensure_kind && ensure_kubectl && ensure_kind_cluster && hack/platform-apply.sh kind'

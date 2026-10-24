@@ -35,8 +35,12 @@ export function ConsumerGroupsCard() {
           <p className="text-muted-foreground">No consumer group has committed offsets yet.</p>
         )}
         {groups.data && groups.data.length > 0 && (
-          // Wide tables scroll sideways on phones instead of overflowing.
-          <div className="-mx-1 overflow-x-auto px-1">
+          // Wide tables scroll sideways on phones instead of overflowing; relative
+          // keeps what is positioned absolutely, such as screen-reader-only
+          // headers, inside the scroll area too. relative
+          // keeps what is positioned absolutely, such as screen-reader-only
+          // headers, inside the scroll area too.
+          <div className="relative -mx-1 overflow-x-auto px-1">
             <table className="w-full text-left whitespace-nowrap [&_td]:px-3 [&_td:first-child]:pl-0 [&_td:last-child]:pr-0 [&_th]:px-3 [&_th:first-child]:pl-0 [&_th:last-child]:pr-0">
               <thead className="border-b text-muted-foreground">
                 <tr>

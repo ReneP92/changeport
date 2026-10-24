@@ -198,7 +198,7 @@ Each phase is a [GitHub milestone](https://github.com/ReneP92/changeport/milesto
 
 Phase 0 and Phase 1 are broken into issues, plus the first console slice and the KIP-714 telemetry receiver in Phase 2 and the proxy decision parked in Phase 6. Later phases get issues as each one starts.
 
-The first console slice is built ahead of the roadmap, on kind, while the AWS work waits for the accounts and the domain: a customer's cluster overview, topic management with guardrails and consumer lag in seconds, plus an operator console that provisions customers. Topic management and the operator console pull work forward from Phases 3 and 5. It is tracked in [the Phase 2 milestone](https://github.com/ReneP92/changeport/milestone/3) as #46 to #58.
+The first console slice is built ahead of the roadmap, on kind, while the AWS work waits for the accounts and the domain: a customer's cluster overview, topic management with guardrails and consumer lag in seconds, plus an operator console that provisions customers. Topic management and the operator console pull work forward from Phases 3 and 5. It is tracked in [the Phase 2 milestone](https://github.com/ReneP92/changeport/milestone/3) as #46 to #58. The slice runs on kind; [docs/console.md](console.md) shows every screen, which `make ui-screenshots` captures again. Only the console on EKS (#58) is left, waiting for the AWS accounts and the domain. The wireframes of #5 gave way to building the console and refining it on the real UI; what is still to design is the [live topology map](https://github.com/ReneP92/changeport/issues/71) and the [guided first ten minutes](https://github.com/ReneP92/changeport/issues/72).
 
 ## Team, pricing and operating model
 
@@ -234,7 +234,7 @@ The biggest risk is getting stuck in stage 1: managed Kafka can absorb all avail
 Phase 0 is about finding the design partner and setting up the foundations. Each item is tracked as an issue in the [Phase 0 milestone](https://github.com/ReneP92/changeport/milestone/1).
 
 - [ ] [Set up the AWS organization, dev and prod accounts and the Terraform state backend](https://github.com/ReneP92/changeport/issues/10) (region decided: us-east-1)
-- [ ] [Wireframe onboarding, the topology map and time-based lag views](https://github.com/ReneP92/changeport/issues/5)
+- [x] [Wireframe onboarding, the topology map and time-based lag views](https://github.com/ReneP92/changeport/issues/5): the first console is built instead ([docs/console.md](console.md)), with lag in time; the [topology map](https://github.com/ReneP92/changeport/issues/71) and the [first ten minutes](https://github.com/ReneP92/changeport/issues/72) are still to design
 - [ ] [Set the trigger for starting managed Connect](https://github.com/ReneP92/changeport/issues/7)
 - [ ] [Secure a domain for Changeport](https://github.com/ReneP92/changeport/issues/8), with DNS zones for the customer endpoints
 

@@ -1,6 +1,12 @@
 import { expect, test } from "@playwright/test";
 import { readFixtures } from "./fixtures";
-import { connect, downloadClientProperties, kafka, openOverview } from "./helpers";
+import {
+  connect,
+  downloadClientProperties,
+  expectNoSidewaysScroll,
+  kafka,
+  openOverview,
+} from "./helpers";
 
 // Consumer lag on customer A's cluster, as the agent measures it every 30
 // seconds and the metrics store scrapes it every 30 seconds.
@@ -78,6 +84,7 @@ test("the overview says how far behind a lagging consumer group is", async ({ pa
   await expect(cells(lagging).nth(2)).toHaveText(/^\d+ minutes? behind$/, { timeout: 150_000 });
   // The most behind come first.
   await expect(card.getByRole("row").nth(1)).toContainText(lagging);
+  await expectNoSidewaysScroll(page);
 
   // The last hour shows the lag growing.
   await expect(

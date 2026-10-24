@@ -1,4 +1,4 @@
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawn } from "node:child_process";
 import path from "node:path";
 import { clerk } from "@clerk/testing/playwright";
 import { expect, type Page } from "@playwright/test";
@@ -52,4 +52,61 @@ export function connect(customerID: string): string[] {
     "--command-config",
     "/config/client.properties",
   ];
+}
+
+/**
+ * Starts a Kafka tool like kafka, in the background, and returns its output
+ * once it exits, or rejects when it fails.
+ */
+export function kafkaInBackground(
+  customerID: string,
+  properties: string,
+  tool: string,
+  args: string[],
+): Promise<string> {
+  const root = path.join(import.meta.dirname, "..", "..", "..");
+  return new Promise((resolve, reject) => {
+    const child = spawn(
+      path.join(root, "hack", "kafka-with.sh"),
+      [customerID, properties, tool, ...args],
+      {
+        cwd: root,
+        env: { ...process.env, KUBE_CONTEXT: env("KUBE_CONTEXT") },
+        stdio: ["ignore", "pipe", "pipe"],
+      },
+    );
+    let output = "";
+    child.stdout.on("data", (chunk: Buffer) => (output += chunk.toString()));
+    child.stderr.on("data", (chunk: Buffer) => (output += chunk.toString()));
+    child.on("error", reject);
+    child.on("close", (code) => {
+      if (code === 0) {
+        resolve(output);
+      } else {
+        reject(new Error(`${tool} exited with ${String(code)}:\n${output}`));
+      }
+    });
+  });
+}
+
+/** Checks that the page fits a phone's width, without scrolling sideways. */
+export async function expectNoSidewaysScroll(page: Page): Promise<void> {
+  const size = page.viewportSize();
+  await page.setViewportSize({ width: 390, height: 844 });
+  await expect
+    .poll(
+      () =>
+        page.evaluate(
+          () =>
+            (globalThis as unknown as { document: { documentElement: { scrollWidth: number } } })
+              .document.documentElement.scrollWidth,
+        ),
+      {
+        message: "the page is wider than a phone",
+      },
+    )
+    .toBeLessThanOrEqual(390);
+  if (size) {
+    await page.setViewportSize(size);
+  }
 }

@@ -1,6 +1,12 @@
 import { expect, test } from "@playwright/test";
 import { kubectl, readFixtures } from "./fixtures";
-import { connect, downloadClientProperties, kafka, openOverview } from "./helpers";
+import {
+  connect,
+  downloadClientProperties,
+  expectNoSidewaysScroll,
+  kafka,
+  openOverview,
+} from "./helpers";
 
 // Topic management on customer A's cluster, within the guardrails of
 // internal/topics.
@@ -31,6 +37,8 @@ test("an admin creates a tiered one-hour topic and deletes it", async ({ page },
   await expect(row.getByRole("cell").nth(1)).toHaveText("2");
   await expect(row.getByRole("cell").nth(2)).toHaveText("1 hour");
   await expect(row.getByText("Tiered")).toBeVisible();
+  // The table with its actions scrolls sideways on a phone; the page does not.
+  await expectNoSidewaysScroll(page);
 
   // Kafka has the topic tiered, keeping its hour locally.
   const properties = testInfo.outputPath("client.properties");
