@@ -10,7 +10,8 @@ import { Link, Route, Routes } from "react-router";
 import { ApiProvider } from "@/api/ApiProvider";
 import { Notice } from "@/components/Notice";
 import { Home } from "@/pages/Home";
-import { OperatorCustomers } from "@/pages/OperatorCustomers";
+import { OperatorCustomer } from "@/pages/operator/OperatorCustomer";
+import { OperatorCustomers } from "@/pages/operator/OperatorCustomers";
 
 /** The console behind Clerk sign-in. */
 export function Console() {
@@ -64,6 +65,7 @@ function SignedIn() {
       <Routes>
         <Route path="/" element={<Home />} />
         <Route path="/operator" element={<OperatorCustomers />} />
+        <Route path="/operator/customers/:customerID" element={<OperatorCustomer />} />
         <Route path="*" element={<Notice title="There is no such page" />} />
       </Routes>
     </div>

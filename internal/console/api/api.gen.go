@@ -94,19 +94,19 @@ func (e ConnectionSecurityProtocol) Valid() bool {
 
 // Defines values for CustomerProfile.
 const (
-	Dev        CustomerProfile = "dev"
-	DevHa      CustomerProfile = "dev-ha"
-	Production CustomerProfile = "production"
+	CustomerProfileDev        CustomerProfile = "dev"
+	CustomerProfileDevHa      CustomerProfile = "dev-ha"
+	CustomerProfileProduction CustomerProfile = "production"
 )
 
 // Valid indicates whether the value is a known member of the CustomerProfile enum.
 func (e CustomerProfile) Valid() bool {
 	switch e {
-	case Dev:
+	case CustomerProfileDev:
 		return true
-	case DevHa:
+	case CustomerProfileDevHa:
 		return true
-	case Production:
+	case CustomerProfileProduction:
 		return true
 	default:
 		return false
@@ -128,6 +128,27 @@ func (e MeAccess) Valid() bool {
 	case MeAccessNone:
 		return true
 	case MeAccessOperator:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for NewCustomerProfile.
+const (
+	NewCustomerProfileDev        NewCustomerProfile = "dev"
+	NewCustomerProfileDevHa      NewCustomerProfile = "dev-ha"
+	NewCustomerProfileProduction NewCustomerProfile = "production"
+)
+
+// Valid indicates whether the value is a known member of the NewCustomerProfile enum.
+func (e NewCustomerProfile) Valid() bool {
+	switch e {
+	case NewCustomerProfileDev:
+		return true
+	case NewCustomerProfileDevHa:
+		return true
+	case NewCustomerProfileProduction:
 		return true
 	default:
 		return false
@@ -267,11 +288,14 @@ type Customer struct {
 	CreatedAt        time.Time   `json:"createdAt"`
 
 	// Deleting Whether the customer is being deleted
-	Deleting           *bool           `json:"deleting,omitempty"`
-	DeletionProtection bool            `json:"deletionProtection"`
-	DisplayName        string          `json:"displayName"`
-	Id                 string          `json:"id"`
-	Profile            CustomerProfile `json:"profile"`
+	Deleting           *bool  `json:"deleting,omitempty"`
+	DeletionProtection bool   `json:"deletionProtection"`
+	DisplayName        string `json:"displayName"`
+	Id                 string `json:"id"`
+
+	// OrganizationID The Clerk organization whose members sign in as the customer, if any
+	OrganizationID *string         `json:"organizationID,omitempty"`
+	Profile        CustomerProfile `json:"profile"`
 
 	// Ready Whether clients can connect
 	Ready bool `json:"ready"`
@@ -322,6 +346,22 @@ type Me struct {
 // customer as an operator, or nothing until they choose an
 // organization that is a customer.
 type MeAccess string
+
+// NewCustomer defines model for NewCustomer.
+type NewCustomer struct {
+	// DeletionProtection Whether deprovisioning is refused until it is turned off
+	DeletionProtection bool `json:"deletionProtection"`
+
+	// DisplayName The customer's name, which also names its Clerk organization
+	DisplayName string `json:"displayName"`
+
+	// InviteEmail Who to invite as the organization's first admin, if anyone
+	InviteEmail *string            `json:"inviteEmail,omitempty"`
+	Profile     NewCustomerProfile `json:"profile"`
+}
+
+// NewCustomerProfile defines model for NewCustomer.Profile.
+type NewCustomerProfile string
 
 // NewTopic defines model for NewTopic.
 type NewTopic struct {
@@ -456,6 +496,9 @@ type GetThroughputParamsRange string
 // CreateTopicJSONRequestBody defines body for CreateTopic for application/json ContentType.
 type CreateTopicJSONRequestBody = NewTopic
 
+// ProvisionCustomerJSONRequestBody defines body for ProvisionCustomer for application/json ContentType.
+type ProvisionCustomerJSONRequestBody = NewCustomer
+
 // ServerInterface represents all server handlers.
 type ServerInterface interface {
 	// GetConfig What the web app needs before anyone signs in
@@ -500,6 +543,12 @@ type ServerInterface interface {
 	// ListCustomers Every customer, for operators
 	// (GET /api/operator/customers)
 	ListCustomers(w http.ResponseWriter, r *http.Request)
+	// ProvisionCustomer Provision a customer, for operators
+	// (POST /api/operator/customers)
+	ProvisionCustomer(w http.ResponseWriter, r *http.Request)
+	// DeprovisionCustomer Deprovision a customer, for operators
+	// (DELETE /api/operator/customers/{customerID})
+	DeprovisionCustomer(w http.ResponseWriter, r *http.Request, customerID CustomerID)
 	// GetOperatorCustomer One customer, for operators
 	// (GET /api/operator/customers/{customerID})
 	GetOperatorCustomer(w http.ResponseWriter, r *http.Request, customerID CustomerID)
@@ -753,6 +802,46 @@ func (siw *ServerInterfaceWrapper) ListCustomers(w http.ResponseWriter, r *http.
 	handler.ServeHTTP(w, r)
 }
 
+// ProvisionCustomer operation middleware
+func (siw *ServerInterfaceWrapper) ProvisionCustomer(w http.ResponseWriter, r *http.Request) {
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.ProvisionCustomer(w, r)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// DeprovisionCustomer operation middleware
+func (siw *ServerInterfaceWrapper) DeprovisionCustomer(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "customerID" -------------
+	var customerID CustomerID
+
+	err = runtime.BindStyledParameterWithOptions("simple", "customerID", r.PathValue("customerID"), &customerID, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "customerID", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.DeprovisionCustomer(w, r, customerID)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
 // GetOperatorCustomer operation middleware
 func (siw *ServerInterfaceWrapper) GetOperatorCustomer(w http.ResponseWriter, r *http.Request) {
 
@@ -913,6 +1002,8 @@ func HandlerWithOptions(si ServerInterface, options StdHTTPServerOptions) http.H
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/customer/throughput", wrapper.GetThroughput)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/customer/consumer-groups", wrapper.ListConsumerGroups)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/operator/customers", wrapper.ListCustomers)
+	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/operator/customers", wrapper.ProvisionCustomer)
+	m.HandleFunc(http.MethodDelete+" "+options.BaseURL+"/api/operator/customers/{customerID}", wrapper.DeprovisionCustomer)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/operator/customers/{customerID}", wrapper.GetOperatorCustomer)
 
 	return m
@@ -2019,6 +2110,170 @@ func (response ListCustomers503JSONResponse) VisitListCustomersResponse(w http.R
 	return err
 }
 
+type ProvisionCustomerRequestObject struct {
+	Body *ProvisionCustomerJSONRequestBody
+}
+
+type ProvisionCustomerResponseObject interface {
+	VisitProvisionCustomerResponse(w http.ResponseWriter) error
+}
+
+type ProvisionCustomer201JSONResponse Customer
+
+func (response ProvisionCustomer201JSONResponse) VisitProvisionCustomerResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(201)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ProvisionCustomer400JSONResponse struct{ BadRequestJSONResponse }
+
+func (response ProvisionCustomer400JSONResponse) VisitProvisionCustomerResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(400)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ProvisionCustomer401JSONResponse struct{ UnauthorizedJSONResponse }
+
+func (response ProvisionCustomer401JSONResponse) VisitProvisionCustomerResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(401)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ProvisionCustomer403JSONResponse struct{ ForbiddenJSONResponse }
+
+func (response ProvisionCustomer403JSONResponse) VisitProvisionCustomerResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(403)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ProvisionCustomer503JSONResponse struct{ NotConfiguredJSONResponse }
+
+func (response ProvisionCustomer503JSONResponse) VisitProvisionCustomerResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(503)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type DeprovisionCustomerRequestObject struct {
+	CustomerID CustomerID `json:"customerID"`
+}
+
+type DeprovisionCustomerResponseObject interface {
+	VisitDeprovisionCustomerResponse(w http.ResponseWriter) error
+}
+
+type DeprovisionCustomer204Response struct {
+}
+
+func (response DeprovisionCustomer204Response) VisitDeprovisionCustomerResponse(w http.ResponseWriter) error {
+	w.WriteHeader(204)
+	return nil
+}
+
+type DeprovisionCustomer401JSONResponse struct{ UnauthorizedJSONResponse }
+
+func (response DeprovisionCustomer401JSONResponse) VisitDeprovisionCustomerResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(401)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type DeprovisionCustomer403JSONResponse struct{ ForbiddenJSONResponse }
+
+func (response DeprovisionCustomer403JSONResponse) VisitDeprovisionCustomerResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(403)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type DeprovisionCustomer404JSONResponse struct{ NotFoundJSONResponse }
+
+func (response DeprovisionCustomer404JSONResponse) VisitDeprovisionCustomerResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(404)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type DeprovisionCustomer409JSONResponse struct{ ConflictJSONResponse }
+
+func (response DeprovisionCustomer409JSONResponse) VisitDeprovisionCustomerResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(409)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type DeprovisionCustomer503JSONResponse struct{ NotConfiguredJSONResponse }
+
+func (response DeprovisionCustomer503JSONResponse) VisitDeprovisionCustomerResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(503)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
 type GetOperatorCustomerRequestObject struct {
 	CustomerID CustomerID `json:"customerID"`
 }
@@ -2141,6 +2396,12 @@ type StrictServerInterface interface {
 	// ListCustomers Every customer, for operators
 	// (GET /api/operator/customers)
 	ListCustomers(ctx context.Context, request ListCustomersRequestObject) (ListCustomersResponseObject, error)
+	// ProvisionCustomer Provision a customer, for operators
+	// (POST /api/operator/customers)
+	ProvisionCustomer(ctx context.Context, request ProvisionCustomerRequestObject) (ProvisionCustomerResponseObject, error)
+	// DeprovisionCustomer Deprovision a customer, for operators
+	// (DELETE /api/operator/customers/{customerID})
+	DeprovisionCustomer(ctx context.Context, request DeprovisionCustomerRequestObject) (DeprovisionCustomerResponseObject, error)
 	// GetOperatorCustomer One customer, for operators
 	// (GET /api/operator/customers/{customerID})
 	GetOperatorCustomer(ctx context.Context, request GetOperatorCustomerRequestObject) (GetOperatorCustomerResponseObject, error)
@@ -2527,6 +2788,63 @@ func (sh *strictHandler) ListCustomers(w http.ResponseWriter, r *http.Request) {
 		sh.options.ResponseErrorHandlerFunc(w, r, err)
 	} else if validResponse, ok := response.(ListCustomersResponseObject); ok {
 		if err := validResponse.VisitListCustomersResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// ProvisionCustomer operation middleware
+func (sh *strictHandler) ProvisionCustomer(w http.ResponseWriter, r *http.Request) {
+	var request ProvisionCustomerRequestObject
+
+	var body ProvisionCustomerJSONRequestBody
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		sh.options.RequestErrorHandlerFunc(w, r, fmt.Errorf("can't decode JSON body: %w", err))
+		return
+	}
+	request.Body = &body
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.ProvisionCustomer(ctx, request.(ProvisionCustomerRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "ProvisionCustomer")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(ProvisionCustomerResponseObject); ok {
+		if err := validResponse.VisitProvisionCustomerResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// DeprovisionCustomer operation middleware
+func (sh *strictHandler) DeprovisionCustomer(w http.ResponseWriter, r *http.Request, customerID CustomerID) {
+	var request DeprovisionCustomerRequestObject
+
+	request.CustomerID = customerID
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.DeprovisionCustomer(ctx, request.(DeprovisionCustomerRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "DeprovisionCustomer")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(DeprovisionCustomerResponseObject); ok {
+		if err := validResponse.VisitDeprovisionCustomerResponse(w); err != nil {
 			sh.options.ResponseErrorHandlerFunc(w, r, err)
 		}
 	} else if response != nil {

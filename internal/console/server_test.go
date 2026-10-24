@@ -13,6 +13,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"regexp"
 	"slices"
 	"strings"
 	"testing"
@@ -23,6 +24,7 @@ import (
 	"github.com/go-jose/go-jose/v3"
 	josejwt "github.com/go-jose/go-jose/v3/jwt"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/utils/ptr"
 
 	"github.com/ReneP92/changeport/api/v1alpha1"
 	"github.com/ReneP92/changeport/internal/clusters"
@@ -43,7 +45,13 @@ var publishableKey = "pk_test_" + base64.StdEncoding.EncodeToString([]byte(front
 
 // fakeCustomers holds acme, of organization org_acme, and globex, of
 // org_globex.
-type fakeCustomers struct{ customers []v1alpha1.Customer }
+type fakeCustomers struct {
+	customers []v1alpha1.Customer
+	// collisions is how many creations yet fail as if the ID were taken.
+	collisions int
+	// deleted lists the customers deleted, by ID.
+	deleted []string
+}
 
 func newFakeCustomers() *fakeCustomers {
 	customer := func(id, org string) v1alpha1.Customer {
@@ -86,6 +94,58 @@ func (f *fakeCustomers) Get(_ context.Context, id string) (*v1alpha1.Customer, e
 		}
 	}
 	return nil, nil
+}
+
+func (f *fakeCustomers) Create(_ context.Context, customer *v1alpha1.Customer) error {
+	if existing, _ := f.Get(context.Background(), customer.Name); existing != nil || f.collisions > 0 {
+		f.collisions--
+		return ErrCustomerExists
+	}
+	customer.Generation = 1
+	customer.CreationTimestamp = metav1.NewTime(time.Date(2026, 10, 24, 0, 0, 0, 0, time.UTC))
+	f.customers = append(f.customers, *customer.DeepCopy())
+	return nil
+}
+
+func (f *fakeCustomers) Delete(_ context.Context, id string) error {
+	for i := range f.customers {
+		if f.customers[i].Name == id {
+			f.customers = slices.Delete(f.customers, i, i+1)
+			f.deleted = append(f.deleted, id)
+			return nil
+		}
+	}
+	return ErrNoSuchCustomer
+}
+
+// fakeOrganizations records what the console asks of Clerk. It refuses to
+// invite refused@example.com.
+type fakeOrganizations struct {
+	// created and deleted are the organizations by ID; names by ID.
+	created, deleted []string
+	names            map[string]string
+	// invited are the admins invited, as organization/email.
+	invited []string
+}
+
+func (f *fakeOrganizations) Create(_ context.Context, name string) (string, error) {
+	id := fmt.Sprintf("org_new%d", len(f.created)+1)
+	f.created = append(f.created, id)
+	f.names[id] = name
+	return id, nil
+}
+
+func (f *fakeOrganizations) InviteAdmin(_ context.Context, organizationID, email string) error {
+	if email == "refused@example.com" {
+		return fmt.Errorf("%w: this address is blocked", ErrInvitationRefused)
+	}
+	f.invited = append(f.invited, organizationID+"/"+email)
+	return nil
+}
+
+func (f *fakeOrganizations) Delete(_ context.Context, organizationID string) error {
+	f.deleted = append(f.deleted, organizationID)
+	return nil
 }
 
 // signer signs session tokens as the test Clerk instance.
@@ -157,6 +217,10 @@ type fixture struct {
 	handler  http.Handler
 	signer   signer
 	clusters *fakeClusters
+	// customers and organizations are what the console creates and
+	// deletes.
+	customers     *fakeCustomers
+	organizations *fakeOrganizations
 	// log is what the server logged, as JSON lines.
 	log     *bytes.Buffer
 	fetches int
@@ -170,18 +234,25 @@ var ui = fstest.MapFS{
 
 func newFixture(t *testing.T) *fixture {
 	t.Helper()
-	f := &fixture{signer: newSigner(t, "key-1"), clusters: newFakeClusters(), log: &bytes.Buffer{}}
+	f := &fixture{
+		signer:        newSigner(t, "key-1"),
+		customers:     newFakeCustomers(),
+		organizations: &fakeOrganizations{names: map[string]string{}},
+		clusters:      newFakeClusters(),
+		log:           &bytes.Buffer{},
+	}
 	server, err := New(Config{
 		PublishableKey:      publishableKey,
 		SecretKey:           "sk_test_unused",
 		StaffOrganizationID: staffOrg,
 		Origins:             []string{origin, "http://localhost:5173"},
 	}, Options{
-		Customers: newFakeCustomers(),
-		Clusters:  f.clusters,
-		Metrics:   fakeMetrics{},
-		UI:        ui,
-		Logger:    slog.New(slog.NewJSONHandler(f.log, nil)),
+		Customers:     f.customers,
+		Organizations: f.organizations,
+		Clusters:      f.clusters,
+		Metrics:       fakeMetrics{},
+		UI:            ui,
+		Logger:        slog.New(slog.NewJSONHandler(f.log, nil)),
 		Keys: func(context.Context) ([]*clerk.JSONWebKey, error) {
 			f.fetches++
 			return []*clerk.JSONWebKey{f.signer.jwk()}, nil
@@ -823,5 +894,140 @@ func TestConsumerGroupsMostBehindFirst(t *testing.T) {
 	}
 	if !strings.Contains(body, `"history":[]`) {
 		t.Errorf("groups without history have no empty list: %s", body)
+	}
+}
+
+const newCustomer = `{"displayName":"Initech","profile":"dev-ha","deletionProtection":false,"inviteEmail":"ada@initech.example"}`
+
+func TestOnlyOperatorsProvisionAndDeprovision(t *testing.T) {
+	f := newFixture(t)
+	for name, token := range map[string]string{
+		"a customer's admin": f.signer.token(t, session{user: "user_3", org: "org_acme", role: "admin"}),
+		"no organization":    f.signer.token(t, session{user: "user_1"}),
+	} {
+		if status, body := send(t, f.handler, http.MethodPost, "/api/operator/customers", token, newCustomer); status != 403 {
+			t.Errorf("%s provisioning = %d %s, want 403", name, status, body)
+		}
+		if status, body := send(t, f.handler, http.MethodDelete, "/api/operator/customers/acme", token, ""); status != 403 {
+			t.Errorf("%s deprovisioning = %d %s, want 403", name, status, body)
+		}
+	}
+	if len(f.organizations.created) != 0 || len(f.customers.deleted) != 0 || len(f.customers.customers) != 2 {
+		t.Errorf("refused requests changed something: organizations %v, deleted %v", f.organizations.created, f.customers.deleted)
+	}
+}
+
+func TestOperatorsProvisionCustomers(t *testing.T) {
+	f := newFixture(t)
+	staff := f.signer.token(t, session{user: "user_6", org: staffOrg, role: "member"})
+	f.customers.collisions = 2
+	status, body := send(t, f.handler, http.MethodPost, "/api/operator/customers", staff, newCustomer)
+	if status != 201 {
+		t.Fatalf("provisioning = %d %s", status, body)
+	}
+	var created api.Customer
+	if err := json.Unmarshal([]byte(body), &created); err != nil {
+		t.Fatal(err)
+	}
+	if !regexp.MustCompile(`^c-[a-km-z2-9]{6}$`).MatchString(created.Id) || created.DisplayName != "Initech" ||
+		created.Profile != "dev-ha" || created.Ready || ptr.Deref(created.OrganizationID, "") != "org_new1" {
+		t.Errorf("provisioned %s", body)
+	}
+	customer, _ := f.customers.Get(t.Context(), created.Id)
+	if customer == nil || customer.Labels[v1alpha1.ClerkOrganizationLabel] != "org_new1" || customer.Spec.ClerkOrganizationID != "org_new1" {
+		t.Fatalf("the customer %s is not linked to its organization: %+v", created.Id, customer)
+	}
+	if f.organizations.names["org_new1"] != "Initech" || strings.Join(f.organizations.invited, ",") != "org_new1/ada@initech.example" {
+		t.Errorf("organizations %v, invited %v", f.organizations.names, f.organizations.invited)
+	}
+	if !strings.Contains(f.log.String(), `"msg":"customer provisioned","audit":true,"tenant":"`+created.Id+`","user":"user_6"`) {
+		t.Errorf("no audit line for the provisioning in %s", f.log.String())
+	}
+
+	// Without an invitation, the organization starts without members.
+	status, body = send(t, f.handler, http.MethodPost, "/api/operator/customers", staff,
+		`{"displayName":"  Hooli  ","profile":"production","deletionProtection":true}`)
+	if status != 201 || !strings.Contains(body, `"displayName":"Hooli"`) || !strings.Contains(body, `"deletionProtection":true`) {
+		t.Errorf("provisioning without an invitation = %d %s", status, body)
+	}
+	if len(f.organizations.invited) != 1 {
+		t.Errorf("invited %v, want only the first", f.organizations.invited)
+	}
+}
+
+func TestProvisioningRefusesBadRequestsAndUndoesFailures(t *testing.T) {
+	f := newFixture(t)
+	staff := f.signer.token(t, session{user: "user_6", org: staffOrg, role: "member"})
+	tests := []struct {
+		name, body, field string
+	}{
+		{"no name", `{"displayName":" ","profile":"dev","deletionProtection":false}`, "displayName"},
+		{"a long name", `{"displayName":"` + strings.Repeat("x", 101) + `","profile":"dev","deletionProtection":false}`, "displayName"},
+		{"an unknown profile", `{"displayName":"Initech","profile":"huge","deletionProtection":false}`, "profile"},
+		{"a malformed address", `{"displayName":"Initech","profile":"dev","deletionProtection":false,"inviteEmail":"Ada <ada@initech.example>"}`, "inviteEmail"},
+		{"an address Clerk refuses", `{"displayName":"Initech","profile":"dev","deletionProtection":false,"inviteEmail":"refused@example.com"}`, "inviteEmail"},
+	}
+	for _, tt := range tests {
+		status, body := send(t, f.handler, http.MethodPost, "/api/operator/customers", staff, tt.body)
+		if status != 400 || !strings.Contains(body, `"field":"`+tt.field+`"`) {
+			t.Errorf("provisioning with %s = %d %s, want 400 about %s", tt.name, status, body, tt.field)
+		}
+	}
+	// Only the refused invitation got as far as an organization, which is
+	// gone again.
+	if !slices.Equal(f.organizations.created, f.organizations.deleted) || len(f.organizations.created) != 1 {
+		t.Errorf("organizations created %v, deleted %v", f.organizations.created, f.organizations.deleted)
+	}
+
+	// When no free ID turns up, nothing is left behind.
+	f.customers.collisions = 100
+	if status, body := send(t, f.handler, http.MethodPost, "/api/operator/customers", staff, newCustomer); status != 500 {
+		t.Errorf("provisioning without a free ID = %d %s, want 500", status, body)
+	}
+	if !slices.Equal(f.organizations.created, f.organizations.deleted) || len(f.customers.customers) != 2 {
+		t.Errorf("a failed provisioning left organizations %v (deleted %v) and customers %d", f.organizations.created, f.organizations.deleted, len(f.customers.customers))
+	}
+}
+
+func TestOperatorsDeprovisionUnprotectedCustomers(t *testing.T) {
+	f := newFixture(t)
+	staff := f.signer.token(t, session{user: "user_6", org: staffOrg, role: "member"})
+	f.customers.customers[0].Spec.DeletionProtection = true // globex
+	if status, body := send(t, f.handler, http.MethodDelete, "/api/operator/customers/globex", staff, ""); status != 409 || !strings.Contains(body, "Deletion protection is on") {
+		t.Errorf("deprovisioning a protected customer = %d %s, want 409", status, body)
+	}
+	if status, body := send(t, f.handler, http.MethodDelete, "/api/operator/customers/initech", staff, ""); status != 404 {
+		t.Errorf("deprovisioning an unknown customer = %d %s, want 404", status, body)
+	}
+	if status, body := send(t, f.handler, http.MethodDelete, "/api/operator/customers/acme", staff, ""); status != 204 {
+		t.Fatalf("deprovisioning acme = %d %s, want 204", status, body)
+	}
+	if strings.Join(f.customers.deleted, ",") != "acme" {
+		t.Errorf("deleted %v, want acme", f.customers.deleted)
+	}
+	// The organization is kept, no longer linked to a cluster.
+	if len(f.organizations.deleted) != 0 {
+		t.Errorf("deleted organizations %v", f.organizations.deleted)
+	}
+	if !strings.Contains(f.log.String(), `"msg":"customer deprovisioned","audit":true,"tenant":"acme","user":"user_6","organization":"`+staffOrg+`","customer_organization":"org_acme"`) {
+		t.Errorf("no audit line for the deprovisioning in %s", f.log.String())
+	}
+}
+
+func TestCustomersBeingDeletedSaySo(t *testing.T) {
+	customer := newFakeCustomers().customers[1] // acme, ready
+	customer.DeletionTimestamp = ptr.To(metav1.Now())
+	customer.Generation = 2
+	got := toAPI(&customer)
+	if got.Ready || !ptr.Deref(got.Deleting, false) || got.Status.Reason != v1alpha1.ReasonDeprovisioning {
+		t.Errorf("a customer just deleted = ready %t, deleting %v, status %+v", got.Ready, got.Deleting, got.Status)
+	}
+	// Once the controller has seen it, its words count.
+	customer.Status.Conditions[1] = metav1.Condition{
+		Type: v1alpha1.ConditionReady, Status: "False",
+		Reason: v1alpha1.ReasonDeletionProtected, Message: "Deletion protection keeps the cluster", ObservedGeneration: 2,
+	}
+	if got := toAPI(&customer); got.Status.Message != "Deletion protection keeps the cluster" {
+		t.Errorf("status %+v, want the controller's", got.Status)
 	}
 }

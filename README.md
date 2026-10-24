@@ -319,6 +319,17 @@ user and organization:
 kubectl -n changeport logs deployment/changeport-console | grep audit=true
 ```
 
+Operators, in the staff organization, see every customer at
+<http://localhost:8088/operator> with how far its cluster is. To provision
+one, they name it and choose a profile and whether deletion protection is
+on; the console creates a Clerk organization of that name, invites its first
+admin if asked, and creates a Customer with a new opaque ID such as
+`c-7f3k2q`, whose page then follows the cluster getting ready. Deprovisioning
+takes the customer ID typed and is refused while deletion protection is on;
+the Clerk organization is kept, no longer linked to a cluster. The console
+may create and delete Customers but not change them, so it cannot turn
+deletion protection off.
+
 To act as a customer's own client with a `client.properties` from the
 console, run the Kafka tools from the kind network with it:
 
@@ -347,7 +358,9 @@ admin creates a topic keeping an hour of messages, checks with the Kafka
 tools that it is tiered, reads it with a consumer group, and deletes it
 after the warning about that group; a member cannot change topics. A
 consumer group left 100 messages behind shows as minutes behind, with its
-lag over the last hour, next to one that is caught up. A
+lag over the last hour, next to one that is caught up. The staff member
+provisions a customer with an invitation, waits for it to get ready, and
+deprovisions it, and finds a protected customer refused. A
 teardown removes the run's users, organizations and customers, and the next
 run removes what a crashed run left behind after an hour:
 

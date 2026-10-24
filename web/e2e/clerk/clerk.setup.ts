@@ -9,6 +9,7 @@ import {
   runLabel,
   testEmail,
   testEmailPattern,
+  testCustomers,
   testOrganizationPattern,
   writeFixtures,
   type CustomerFixture,
@@ -113,10 +114,7 @@ async function removeAbandoned(): Promise<void> {
       await clerk.organizations.deleteOrganization(o.id);
     }
   }
-  const customers = JSON.parse(kubectl(["get", "customers", "-l", runLabel, "-o", "json"])) as {
-    items: { metadata: { name: string; creationTimestamp: string } }[];
-  };
-  for (const c of customers.items) {
+  for (const c of testCustomers()) {
     if (Date.parse(c.metadata.creationTimestamp) < cutoff) {
       kubectl(["delete", "customer", c.metadata.name, "--wait=false"]);
     }

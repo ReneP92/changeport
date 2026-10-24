@@ -5,6 +5,7 @@ import {
   ApiError,
   unwrap,
   type ApiClient,
+  type NewCustomer,
   type NewTopic,
   type ThroughputRange,
 } from "@/api/client";
@@ -57,6 +58,61 @@ export function useCustomers() {
     queryKey: ["operator", "customers", organization],
     queryFn: async () => unwrap(await api.GET("/api/operator/customers")).customers,
     refetchInterval: 10_000,
+  });
+}
+
+/**
+ * One customer, for operators, refreshed often while its cluster is being
+ * created or deleted. Once it is gone, the query fails with a 404.
+ */
+export function useOperatorCustomer(id: string) {
+  const api = useApi();
+  const organization = useOrganizationKey();
+  return useQuery({
+    queryKey: ["operator", "customers", organization, id],
+    queryFn: async () =>
+      unwrap(
+        await api.GET("/api/operator/customers/{customerID}", {
+          params: { path: { customerID: id } },
+        }),
+      ),
+    refetchInterval: (query) => {
+      const customer = query.state.data;
+      if (query.state.error instanceof ApiError && query.state.error.status === 404) {
+        return false;
+      }
+      return customer?.ready && !customer.deleting ? 10_000 : 2_000;
+    },
+    retry: (failures, error) =>
+      !(error instanceof ApiError && error.status === 404) && failures < 3,
+  });
+}
+
+/** Provisions a customer, then refreshes the customers. */
+export function useProvisionCustomer() {
+  const api = useApi();
+  const queries = useQueryClient();
+  return useMutation({
+    mutationFn: async (customer: NewCustomer) =>
+      unwrap(await api.POST("/api/operator/customers", { body: customer })),
+    onSuccess: () => queries.invalidateQueries({ queryKey: ["operator", "customers"] }),
+  });
+}
+
+/** Deprovisions a customer, then refreshes the customers. */
+export function useDeprovisionCustomer() {
+  const api = useApi();
+  const queries = useQueryClient();
+  return useMutation({
+    mutationFn: async (id: string) => {
+      const { error, response } = await api.DELETE("/api/operator/customers/{customerID}", {
+        params: { path: { customerID: id } },
+      });
+      if (!response.ok) {
+        throw new ApiError(response.status, error);
+      }
+    },
+    onSuccess: () => queries.invalidateQueries({ queryKey: ["operator", "customers"] }),
   });
 }
 

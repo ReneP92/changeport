@@ -300,6 +300,35 @@ paths:
           $ref: "#/components/responses/Forbidden"
         "503":
           $ref: "#/components/responses/NotConfigured"
+    post:
+      operationId: provisionCustomer
+      summary: Provision a customer, for operators
+      description: >-
+        Creates a Clerk organization for the customer, invites its first
+        admin if asked, and creates the customer with a new opaque ID, such as
+        c-7f3k2q. The provisioning controller then creates its cluster, which
+        the customer's conditions follow.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/NewCustomer"
+      responses:
+        "201":
+          description: The customer, whose cluster is being created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Customer"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "503":
+          $ref: "#/components/responses/NotConfigured"
   /api/operator/customers/{customerID}:
     get:
       operationId: getOperatorCustomer
@@ -319,6 +348,28 @@ paths:
           $ref: "#/components/responses/Forbidden"
         "404":
           $ref: "#/components/responses/NotFound"
+        "503":
+          $ref: "#/components/responses/NotConfigured"
+    delete:
+      operationId: deprovisionCustomer
+      summary: Deprovision a customer, for operators
+      description: >-
+        Deletes the customer, whose cluster the provisioning controller then
+        deletes. A customer under deletion protection is refused. The
+        customer's Clerk organization is kept, no longer linked to a cluster.
+      parameters:
+        - $ref: "#/components/parameters/CustomerID"
+      responses:
+        "204":
+          description: The customer is being deprovisioned
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
         "503":
           $ref: "#/components/responses/NotConfigured"
 components:
@@ -675,6 +726,25 @@ components:
           type: array
           items:
             $ref: "#/components/schemas/Customer"
+    NewCustomer:
+      type: object
+      required: [displayName, profile, deletionProtection]
+      properties:
+        displayName:
+          type: string
+          description: The customer's name, which also names its Clerk organization
+          minLength: 1
+          maxLength: 100
+        profile:
+          type: string
+          enum: [dev, dev-ha, production]
+        deletionProtection:
+          type: boolean
+          description: Whether deprovisioning is refused until it is turned off
+        inviteEmail:
+          type: string
+          description: Who to invite as the organization's first admin, if anyone
+          maxLength: 254
     Customer:
       type: object
       required: [id, displayName, profile, ready, status, conditions, deletionProtection, createdAt]
@@ -700,6 +770,9 @@ components:
             $ref: "#/components/schemas/Condition"
         deletionProtection:
           type: boolean
+        organizationID:
+          type: string
+          description: The Clerk organization whose members sign in as the customer, if any
         deleting:
           type: boolean
           description: Whether the customer is being deleted

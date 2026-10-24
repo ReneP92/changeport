@@ -5,12 +5,14 @@ package console
 import (
 	"cmp"
 	"context"
+	"crypto/rand"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io/fs"
 	"log/slog"
 	"net/http"
+	"net/mail"
 	"path"
 	"slices"
 	"strings"
@@ -62,13 +64,14 @@ func (c Config) missing() []string {
 
 // Server serves the console.
 type Server struct {
-	config    Config
-	auth      *authenticator
-	customers Customers
-	clusters  Clusters
-	metrics   Metrics
-	ui        fs.FS
-	logger    *slog.Logger
+	config        Config
+	auth          *authenticator
+	customers     Customers
+	organizations Organizations
+	clusters      Clusters
+	metrics       Metrics
+	ui            fs.FS
+	logger        *slog.Logger
 	// csp is the Content-Security-Policy of the web app's pages.
 	csp string
 }
@@ -76,6 +79,9 @@ type Server struct {
 // Options holds what New needs besides the configuration.
 type Options struct {
 	Customers Customers
+	// Organizations manages customers' Clerk organizations; the default
+	// calls Clerk's Backend API with the secret key.
+	Organizations Organizations
 	// Clusters and Metrics read the customers' clusters and their metrics.
 	Clusters Clusters
 	Metrics  Metrics
@@ -93,12 +99,13 @@ type Options struct {
 // error: the console then serves the web app and refuses every API call.
 func New(config Config, options Options) (*Server, error) {
 	s := &Server{
-		config:    config,
-		customers: options.Customers,
-		clusters:  options.Clusters,
-		metrics:   options.Metrics,
-		ui:        options.UI,
-		logger:    options.Logger,
+		config:        config,
+		customers:     options.Customers,
+		organizations: options.Organizations,
+		clusters:      options.Clusters,
+		metrics:       options.Metrics,
+		ui:            options.UI,
+		logger:        options.Logger,
 	}
 	if missing := config.missing(); len(missing) > 0 {
 		s.logger.Warn("the console is not configured and refuses every API call", "missing", strings.Join(missing, ", "))
@@ -112,6 +119,10 @@ func New(config Config, options Options) (*Server, error) {
 	keys := options.Keys
 	if keys == nil {
 		keys = clerkKeys(config.SecretKey)
+	}
+	if s.organizations == nil {
+		// Invitations lead to the console's first origin.
+		s.organizations = NewClerkOrganizations(config.SecretKey, config.Origins[0])
 	}
 	s.auth = &authenticator{
 		keys:    &keySet{fetch: keys, now: time.Now, logger: options.Logger},
@@ -382,10 +393,159 @@ func (s *Server) GetOperatorCustomer(ctx context.Context, request api.GetOperato
 		}
 	}
 	if customer == nil {
-		return api.GetOperatorCustomer404JSONResponse{NotFoundJSONResponse: api.NotFoundJSONResponse(problem(http.StatusNotFound,
-			"No such customer", fmt.Sprintf("There is no customer %s.", request.CustomerID)))}, nil
+		return api.GetOperatorCustomer404JSONResponse{NotFoundJSONResponse: api.NotFoundJSONResponse(noSuchCustomer(request.CustomerID))}, nil
 	}
 	return api.GetOperatorCustomer200JSONResponse(toAPI(customer)), nil
+}
+
+// ProvisionCustomer implements api.StrictServerInterface: it creates the
+// customer's Clerk organization, invites its first admin if asked, and
+// creates the customer, undoing the organization if a later step fails.
+func (s *Server) ProvisionCustomer(ctx context.Context, request api.ProvisionCustomerRequestObject) (api.ProvisionCustomerResponseObject, error) {
+	principal, err := mustPrincipal(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if !s.operator(principal) {
+		return api.ProvisionCustomer403JSONResponse{ForbiddenJSONResponse: api.ForbiddenJSONResponse(operatorsOnly)}, nil
+	}
+	invalid := func(field, detail string) api.ProvisionCustomerResponseObject {
+		p := problem(http.StatusBadRequest, "Invalid customer", detail)
+		p.Field = &field
+		return api.ProvisionCustomer400JSONResponse{BadRequestJSONResponse: api.BadRequestJSONResponse(p)}
+	}
+	body := request.Body
+	displayName := strings.TrimSpace(body.DisplayName)
+	email := ""
+	if body.InviteEmail != nil {
+		email = strings.TrimSpace(*body.InviteEmail)
+	}
+	switch {
+	case displayName == "" || len(displayName) > maxDisplayNameLength:
+		return invalid("displayName", fmt.Sprintf("Name the customer in 1 to %d characters.", maxDisplayNameLength)), nil
+	case !validProfile(string(body.Profile)):
+		return invalid("profile", "Choose dev, dev-ha or production."), nil
+	case email != "" && !validEmail(email):
+		return invalid("inviteEmail", "Enter an email address, such as ada@example.com, or leave it empty."), nil
+	}
+
+	organizationID, err := s.organizations.Create(ctx, displayName)
+	if err != nil {
+		return nil, err
+	}
+	// Undoes the organization when the customer cannot be provisioned, even
+	// when the request is gone.
+	undo := func() {
+		if err := s.organizations.Delete(context.WithoutCancel(ctx), organizationID); err != nil {
+			s.logger.ErrorContext(ctx, "could not delete the organization of a failed provisioning", "organization", organizationID, "error", err)
+		}
+	}
+	if email != "" {
+		if err := s.organizations.InviteAdmin(ctx, organizationID, email); err != nil {
+			undo()
+			if errors.Is(err, ErrInvitationRefused) {
+				return invalid("inviteEmail", err.Error()), nil
+			}
+			return nil, err
+		}
+	}
+	customer := &v1alpha1.Customer{
+		Spec: v1alpha1.CustomerSpec{
+			DisplayName:         displayName,
+			Profile:             string(body.Profile),
+			ClerkOrganizationID: organizationID,
+			DeletionProtection:  body.DeletionProtection,
+		},
+	}
+	// The controller keeps the label in sync; set now, the organization's
+	// members find their customer at once.
+	customer.Labels = map[string]string{v1alpha1.ClerkOrganizationLabel: organizationID}
+	for attempt := 0; ; attempt++ {
+		customer.Name, err = newCustomerID()
+		if err == nil {
+			err = s.customers.Create(ctx, customer)
+		}
+		if !errors.Is(err, ErrCustomerExists) || attempt == 4 {
+			break
+		}
+	}
+	if err != nil {
+		undo()
+		return nil, err
+	}
+	s.audit(ctx, principal, customer.Name, "customer provisioned", "display_name", displayName, "profile", customer.Spec.Profile,
+		"customer_organization", organizationID, "deletion_protection", customer.Spec.DeletionProtection, "invited", email != "")
+	return api.ProvisionCustomer201JSONResponse(toAPI(customer)), nil
+}
+
+// DeprovisionCustomer implements api.StrictServerInterface. The customer's
+// Clerk organization is kept, no longer linked to a cluster.
+func (s *Server) DeprovisionCustomer(ctx context.Context, request api.DeprovisionCustomerRequestObject) (api.DeprovisionCustomerResponseObject, error) {
+	principal, err := mustPrincipal(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if !s.operator(principal) {
+		return api.DeprovisionCustomer403JSONResponse{ForbiddenJSONResponse: api.ForbiddenJSONResponse(operatorsOnly)}, nil
+	}
+	customer, err := s.customers.Get(ctx, request.CustomerID)
+	if err != nil {
+		return nil, err
+	}
+	if customer == nil {
+		return api.DeprovisionCustomer404JSONResponse{NotFoundJSONResponse: api.NotFoundJSONResponse(noSuchCustomer(request.CustomerID))}, nil
+	}
+	if customer.Spec.DeletionProtection {
+		return api.DeprovisionCustomer409JSONResponse{ConflictJSONResponse: api.ConflictJSONResponse(problem(http.StatusConflict,
+			"Deletion protection is on", fmt.Sprintf("Customer %s is protected; turn deletion protection off first.", customer.Name)))}, nil
+	}
+	id, organizationID := customer.Name, customer.Spec.ClerkOrganizationID
+	err = s.customers.Delete(ctx, id)
+	if errors.Is(err, ErrNoSuchCustomer) {
+		return api.DeprovisionCustomer404JSONResponse{NotFoundJSONResponse: api.NotFoundJSONResponse(noSuchCustomer(id))}, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	s.audit(ctx, principal, id, "customer deprovisioned", "customer_organization", organizationID)
+	return api.DeprovisionCustomer204Response{}, nil
+}
+
+// maxDisplayNameLength is the Customer resource's limit.
+const maxDisplayNameLength = 100
+
+func validProfile(name string) bool {
+	_, err := provisioning.ProfileByName(name)
+	return err == nil
+}
+
+// validEmail reports whether s is a bare email address, such as
+// ada@example.com, without a name.
+func validEmail(s string) bool {
+	address, err := mail.ParseAddress(s)
+	return err == nil && address.Address == s && address.Name == ""
+}
+
+// customerIDAlphabet leaves out letters and digits that look alike, such as
+// l and 1, so that people can read IDs out.
+const customerIDAlphabet = "abcdefghijkmnpqrstuvwxyz23456789"
+
+// newCustomerID returns a new opaque customer ID, such as c-7f3k2q: about a
+// billion possibilities, so that collisions are rare and retried.
+func newCustomerID() (string, error) {
+	random := make([]byte, 6)
+	if _, err := rand.Read(random); err != nil {
+		return "", err
+	}
+	id := []byte("c-")
+	for _, b := range random {
+		id = append(id, customerIDAlphabet[int(b)%len(customerIDAlphabet)])
+	}
+	return string(id), nil
+}
+
+func noSuchCustomer(id string) api.Problem {
+	return problem(http.StatusNotFound, "No such customer", fmt.Sprintf("There is no customer %s.", id))
 }
 
 var operatorsOnly = problem(http.StatusForbidden, "Operators only", "Switch to the Changeport staff organization.")
@@ -422,6 +582,7 @@ func toAPI(c *v1alpha1.Customer) api.Customer {
 		DisplayName:        c.Spec.DisplayName,
 		Profile:            api.CustomerProfile(c.Spec.Profile),
 		DeletionProtection: c.Spec.DeletionProtection,
+		OrganizationID:     ptr.To(c.Spec.ClerkOrganizationID),
 		CreatedAt:          c.CreationTimestamp.UTC(),
 		Conditions:         []api.Condition{},
 		Status:             api.Status{Reason: v1alpha1.ReasonPending, Message: "Waiting for the provisioning controller"},
@@ -450,6 +611,12 @@ func toAPI(c *v1alpha1.Customer) api.Customer {
 			out.Ready = ready && condition.ObservedGeneration >= c.Generation
 			out.Status = api.Status{Reason: condition.Reason, Message: condition.Message}
 		}
+	}
+	if c.DeletionTimestamp != nil && out.Status.Reason != v1alpha1.ReasonDeprovisioning && out.Status.Reason != v1alpha1.ReasonDeletionProtected {
+		// Until the controller sees the deletion, the status still says how
+		// the cluster was.
+		out.Ready = false
+		out.Status = api.Status{Reason: v1alpha1.ReasonDeprovisioning, Message: "Waiting for the provisioning controller to delete the cluster"}
 	}
 	return out
 }

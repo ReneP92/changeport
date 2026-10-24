@@ -1,6 +1,7 @@
 import type { Customer } from "@/api/client";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { parts } from "@/lib/parts";
 
 /** What the cluster waits for, in words, per condition type. */
 const conditionNames: Record<Customer["conditions"][number]["type"], string> = {
@@ -49,23 +50,24 @@ export function CustomerSummary({ customer }: { customer: Customer }) {
             {customer.status.message}
           </p>
         )}
+        {/* Every part shows from the start, also before the controller
+            has said anything about it. */}
         <ul aria-label="Progress" className="flex flex-col gap-2">
-          {customer.conditions
-            .filter((condition) => condition.type !== "Ready")
-            .map((condition) => (
-              <li key={condition.type} className="flex items-baseline gap-3 text-sm">
-                <span
-                  aria-hidden
-                  className={condition.ready ? "text-primary" : "text-muted-foreground"}
-                >
-                  {condition.ready ? "●" : "○"}
+          {parts.map((part) => {
+            const condition = customer.conditions.find((c) => c.type === part);
+            const ready = condition?.ready ?? false;
+            return (
+              <li key={part} className="flex items-baseline gap-3 text-sm">
+                <span aria-hidden className={ready ? "text-primary" : "text-muted-foreground"}>
+                  {ready ? "●" : "○"}
                 </span>
-                <span className="w-44 shrink-0">{conditionNames[condition.type]}</span>
+                <span className="w-44 shrink-0">{conditionNames[part]}</span>
                 <span className="truncate text-muted-foreground">
-                  {condition.ready ? "Done" : condition.message}
+                  {ready ? "Done" : (condition?.message ?? "Not started")}
                 </span>
               </li>
-            ))}
+            );
+          })}
         </ul>
       </CardContent>
     </Card>
