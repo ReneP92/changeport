@@ -52,3 +52,18 @@ test("a configured console offers Clerk's sign-in", async ({ page, request }) =>
   await page.waitForLoadState("networkidle");
   expect(violations).toEqual([]);
 });
+
+test("a console that cannot reach Clerk says so", async ({ page, request }) => {
+  test.skip(!realConsole, "needs a real console and Clerk instance");
+  const config = await request.get("/api/config");
+  test.skip(config.status() !== 200, "this console is not configured");
+  // Everything but the console itself fails, as on a broken connection.
+  await page.route(
+    (url) => url.hostname !== "localhost",
+    (route) => route.abort("internetdisconnected"),
+  );
+  await page.goto("/");
+  await expect(page.getByRole("heading", { name: "Sign-in could not load" })).toBeVisible({
+    timeout: 30_000,
+  });
+});

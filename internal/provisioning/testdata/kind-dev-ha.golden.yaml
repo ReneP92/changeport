@@ -308,7 +308,7 @@ spec:
         operations: [Describe]
 ---
 # Lets the console's service account read the Secrets it needs in this
-# namespace, by name, and nothing else.
+# namespace, by name, and the pods, to show the brokers' health.
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
 metadata:
@@ -326,6 +326,9 @@ rules:
       - "admin"
       - "external-listener-tls"
     verbs: [get]
+  - apiGroups: [""]
+    resources: [pods]
+    verbs: [get, list]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding

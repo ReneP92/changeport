@@ -7,6 +7,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
@@ -22,7 +23,9 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	"github.com/ReneP92/changeport/api/v1alpha1"
+	"github.com/ReneP92/changeport/internal/clusters"
 	"github.com/ReneP92/changeport/internal/console/api"
+	"github.com/ReneP92/changeport/internal/metrics"
 )
 
 const (
@@ -30,6 +33,8 @@ const (
 	origin      = "http://localhost:8088"
 	staffOrg    = "org_staff"
 )
+
+var discard = slog.New(slog.NewTextHandler(io.Discard, nil))
 
 var publishableKey = "pk_test_" + base64.StdEncoding.EncodeToString([]byte(frontendAPI+"$"))
 
@@ -146,9 +151,10 @@ func cmpOrTime(a, b time.Time) time.Time {
 
 // fixture is a configured console with the customers acme and globex.
 type fixture struct {
-	handler http.Handler
-	signer  signer
-	fetches int
+	handler  http.Handler
+	signer   signer
+	clusters *fakeClusters
+	fetches  int
 }
 
 var ui = fstest.MapFS{
@@ -159,7 +165,7 @@ var ui = fstest.MapFS{
 
 func newFixture(t *testing.T) *fixture {
 	t.Helper()
-	f := &fixture{signer: newSigner(t, "key-1")}
+	f := &fixture{signer: newSigner(t, "key-1"), clusters: newFakeClusters()}
 	server, err := New(Config{
 		PublishableKey:      publishableKey,
 		SecretKey:           "sk_test_unused",
@@ -167,6 +173,8 @@ func newFixture(t *testing.T) *fixture {
 		Origins:             []string{origin, "http://localhost:5173"},
 	}, Options{
 		Customers: newFakeCustomers(),
+		Clusters:  f.clusters,
+		Metrics:   fakeMetrics{},
 		UI:        ui,
 		Logger:    slog.New(slog.NewTextHandler(io.Discard, nil)),
 		Keys: func(context.Context) ([]*clerk.JSONWebKey, error) {
@@ -247,6 +255,26 @@ func TestAuthorizationMatrix(t *testing.T) {
 			"staff": {200, `"id":"acme"`},
 		},
 	}
+	// Every customer route acts on the active organization's customer.
+	customerRoute := func(member, admin, globex string) map[string]want {
+		return map[string]want{
+			"anonymous": {401, "Sign in first"}, "no organization": {403, "Choose an organization"},
+			"acme member": {200, member}, "acme admin": {200, admin}, "globex member": {200, globex},
+			"organization without": {404, "No Kafka cluster yet"}, "staff": {403, "not a customer"},
+		}
+	}
+	routes["/api/customer/connection"] = customerRoute(
+		`"bootstrapAddress":"bootstrap.acme.kafka.changeport.test:9094"`,
+		`"caCertificate":"-----BEGIN CERTIFICATE-----`,
+		`"bootstrapAddress":"bootstrap.globex.kafka.changeport.test:9094"`)
+	routes["/api/customer/health"] = customerRoute(`"name":"acme-dual-role-0"`, `"underReplicatedPartitions":0`, `"name":"globex-dual-role-0"`)
+	routes["/api/customer/topics"] = customerRoute(`"name":"acme-orders"`, `"tiered":true`, `"name":"globex-orders"`)
+	routes["/api/customer/throughput"] = customerRoute(`"bytesIn":[{`, `"range":"1h"`, `"stepSeconds":60`)
+	// Only an organization's admins may download its credentials.
+	clientProperties := customerRoute("", "sasl.jaas.config=", "")
+	clientProperties["acme member"] = want{403, "Admins only"}
+	clientProperties["globex member"] = want{403, "Admins only"}
+	routes["/api/customer/client-properties"] = clientProperties
 	for route, byPrincipal := range routes {
 		for principal, token := range principals {
 			w, ok := byPrincipal[principal]
@@ -321,7 +349,7 @@ func TestInvalidTokensAreRefused(t *testing.T) {
 func TestUnknownKeysDoNotFloodClerk(t *testing.T) {
 	now := time.Now()
 	fetches := 0
-	keys := &keySet{now: func() time.Time { return now }, fetch: func(context.Context) ([]*clerk.JSONWebKey, error) {
+	keys := &keySet{now: func() time.Time { return now }, logger: discard, fetch: func(context.Context) ([]*clerk.JSONWebKey, error) {
 		fetches++
 		return nil, nil
 	}}
@@ -340,20 +368,43 @@ func TestUnknownKeysDoNotFloodClerk(t *testing.T) {
 	}
 }
 
-func TestFailedKeyFetchesAreRetriedSoon(t *testing.T) {
+func TestFailedKeyFetchesAreRetriedSoonThenLessOften(t *testing.T) {
 	now := time.Now()
-	keys := &keySet{now: func() time.Time { return now }, fetch: func(context.Context) ([]*clerk.JSONWebKey, error) {
-		return nil, errors.New("clerk is down")
-	}}
-	_, _ = keys.key(t.Context(), "key-1")
+	down := func(context.Context) ([]*clerk.JSONWebKey, error) { return nil, errors.New("clerk is down") }
+	keys := &keySet{now: func() time.Time { return now }, logger: discard, fetch: down}
+	// Each failure doubles the wait, up to lastRetry.
+	for _, wait := range []time.Duration{time.Second, 2 * time.Second, 4 * time.Second, 8 * time.Second, 16 * time.Second, 30 * time.Second, 30 * time.Second} {
+		if _, err := keys.key(t.Context(), "key-1"); err == nil {
+			t.Fatal("found a key while Clerk is down")
+		}
+		if got := keys.nextFetch.Sub(now); got != wait {
+			t.Errorf("waits %v after %d failures, want %v", got, keys.failures, wait)
+		}
+		now = now.Add(wait)
+	}
 	signer := newSigner(t, "key-1")
 	keys.fetch = func(context.Context) ([]*clerk.JSONWebKey, error) { return []*clerk.JSONWebKey{signer.jwk()}, nil }
-	if _, err := keys.key(t.Context(), "key-1"); err == nil {
-		t.Fatal("refetched right after a failure")
-	}
-	now = now.Add(retryInterval)
 	if _, err := keys.key(t.Context(), "key-1"); err != nil {
-		t.Errorf("did not refetch %v after a failure: %v", retryInterval, err)
+		t.Errorf("did not fetch once Clerk was back: %v", err)
+	}
+	if keys.failures != 0 || keys.nextFetch.Sub(now) != refetchInterval {
+		t.Errorf("after a success: %d failures, next fetch in %v", keys.failures, keys.nextFetch.Sub(now))
+	}
+}
+
+func TestWarmFetchesTheKeysUntilItHasThem(t *testing.T) {
+	signer := newSigner(t, "key-1")
+	attempts := 0
+	keys := &keySet{now: time.Now, logger: discard, fetch: func(context.Context) ([]*clerk.JSONWebKey, error) {
+		attempts++
+		if attempts < 3 {
+			return nil, errors.New("clerk is down")
+		}
+		return []*clerk.JSONWebKey{signer.jwk()}, nil
+	}}
+	keys.warm(t.Context())
+	if attempts != 3 || len(keys.keys) != 1 {
+		t.Errorf("warm made %d attempts and has %d keys, want 3 and 1", attempts, len(keys.keys))
 	}
 }
 
@@ -442,5 +493,118 @@ func TestWebApp(t *testing.T) {
 	}
 	if status, _, _ := get(t, f.handler, "/healthz", ""); status != 200 {
 		t.Errorf("GET /healthz = %d", status)
+	}
+}
+
+// fakeClusters has a broker, a topic and credentials for every customer.
+type fakeClusters struct {
+	// notReady lists customers whose credentials and topics are not there yet.
+	notReady map[string]bool
+}
+
+func newFakeClusters() *fakeClusters { return &fakeClusters{notReady: map[string]bool{}} }
+
+func (f *fakeClusters) Brokers(_ context.Context, id string) ([]Broker, error) {
+	return []Broker{{Name: id + "-dual-role-0", Ready: true, Zone: "zone-a"}}, nil
+}
+
+func (f *fakeClusters) Topics(_ context.Context, id string) ([]TopicSettings, error) {
+	if f.notReady[id] {
+		return nil, fmt.Errorf("no certificate yet: %w", clusters.ErrNotReady)
+	}
+	week := int64(7 * 24 * time.Hour / time.Millisecond)
+	return []TopicSettings{{Name: id + "-orders", Partitions: 3, ReplicationFactor: 1, Tiered: true, CleanupPolicy: "delete", RetentionMs: &week}}, nil
+}
+
+func (f *fakeClusters) AdminCredentials(_ context.Context, id string) (string, error) {
+	if f.notReady[id] {
+		return "", fmt.Errorf("no password yet: %w", clusters.ErrNotReady)
+	}
+	return `org.apache.kafka.common.security.scram.ScramLoginModule required username="admin" password="` + id + `-secret";`, nil
+}
+
+func (f *fakeClusters) ListenerCA(context.Context, string) (string, error) {
+	return "-----BEGIN CERTIFICATE-----\nMIIB\n-----END CERTIFICATE-----", nil
+}
+
+// fakeMetrics answers every query of a tenant with one point per series:
+// a topic series named after the tenant, or a cluster series of 0.
+type fakeMetrics struct{}
+
+func (fakeMetrics) Instant(_ context.Context, tenant string, q metrics.Query, _ metrics.Filter, at time.Time) ([]metrics.Series, error) {
+	labels := map[string]string{"topic": tenant + "-orders"}
+	value := 1024.0
+	if expr, _ := metrics.Expr(q, tenant, metrics.Filter{}); !strings.Contains(expr, "topic") {
+		labels, value = map[string]string{}, 0
+	}
+	return []metrics.Series{{Labels: labels, Points: []metrics.Point{{Time: at, Value: value}}}}, nil
+}
+
+func (fakeMetrics) Range(_ context.Context, tenant string, _ metrics.Query, _ metrics.Filter, start, end time.Time, step time.Duration) ([]metrics.Series, error) {
+	one := metrics.Series{Labels: map[string]string{"topic": tenant + "-orders"}}
+	for t := start; !t.After(end); t = t.Add(step) {
+		one.Points = append(one.Points, metrics.Point{Time: t, Value: 10})
+	}
+	// A second topic, so that the series must be added up.
+	two := metrics.Series{Labels: map[string]string{"topic": tenant + "-payments"}, Points: one.Points}
+	return []metrics.Series{one, two}, nil
+}
+
+func TestClientPropertiesDownload(t *testing.T) {
+	f := newFixture(t)
+	admin := f.signer.token(t, session{user: "user_3", org: "org_acme", role: "admin"})
+	status, body, header := get(t, f.handler, "/api/customer/client-properties", admin)
+	if status != 200 {
+		t.Fatalf("GET client.properties = %d %s", status, body)
+	}
+	for _, want := range []string{
+		"bootstrap.servers=bootstrap.acme.kafka.changeport.test:9094\n",
+		"security.protocol=SASL_SSL\n",
+		`password="acme-secret"`,
+		"ssl.truststore.certificates=-----BEGIN CERTIFICATE-----",
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("client.properties lacks %q:\n%s", want, body)
+		}
+	}
+	if got := header.Get("Content-Disposition"); got != `attachment; filename="acme-client.properties"` {
+		t.Errorf("Content-Disposition = %q", got)
+	}
+	if header.Get("Cache-Control") != "no-store" {
+		t.Errorf("Cache-Control = %q, want no-store for a file with a password", header.Get("Cache-Control"))
+	}
+}
+
+func TestNotReadyClusters(t *testing.T) {
+	f := newFixture(t)
+	f.clusters.notReady["acme"] = true
+	admin := f.signer.token(t, session{user: "user_3", org: "org_acme", role: "admin"})
+	for _, route := range []string{"/api/customer/client-properties", "/api/customer/topics"} {
+		if status, body, _ := get(t, f.handler, route, admin); status != 409 || !strings.Contains(body, "not ready yet") {
+			t.Errorf("GET %s of a cluster without credentials = %d %s, want 409", route, status, body)
+		}
+	}
+}
+
+func TestThroughput(t *testing.T) {
+	f := newFixture(t)
+	member := f.signer.token(t, session{user: "user_2", org: "org_acme", role: "member"})
+	status, body, _ := get(t, f.handler, "/api/customer/throughput?range=6h", member)
+	if status != 200 {
+		t.Fatalf("GET throughput = %d %s", status, body)
+	}
+	var throughput api.Throughput
+	if err := json.Unmarshal([]byte(body), &throughput); err != nil {
+		t.Fatal(err)
+	}
+	if throughput.Range != "6h" || throughput.StepSeconds != 300 || len(throughput.BytesIn) != 73 {
+		t.Errorf("throughput = %s with %d points every %ds, want 6h with 73 points every 300s", throughput.Range, len(throughput.BytesIn), throughput.StepSeconds)
+	}
+	// Two topics of 10 bytes per second each.
+	if throughput.BytesIn[0].Value != 20 || !throughput.BytesIn[0].Time.Before(throughput.BytesIn[1].Time) {
+		t.Errorf("the first points are %+v and %+v, want 20 in time order", throughput.BytesIn[0], throughput.BytesIn[1])
+	}
+	if status, _, _ := get(t, f.handler, "/api/customer/throughput?range=1y", member); status != 400 {
+		t.Errorf("GET throughput for a year = %d, want 400", status)
 	}
 }

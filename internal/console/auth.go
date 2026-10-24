@@ -5,6 +5,7 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"slices"
 	"strings"
@@ -52,28 +53,39 @@ func FrontendAPI(publishableKey string) (string, error) {
 // KeySource fetches the Clerk instance's JSON Web Key Set.
 type KeySource func(ctx context.Context) ([]*clerk.JSONWebKey, error)
 
-// keySet caches the instance's signing keys: it fetches them for the first
-// request and again for a key it has not seen, at most once a minute, which
-// covers Clerk's key rotation without a request to Clerk per token.
+// keySet caches the instance's signing keys. The console fetches them when
+// it starts (warm), and again for a key it has not seen, at most once a
+// minute, which covers Clerk's key rotation without a request to Clerk per
+// token. A failed fetch is retried soon, then less and less often.
 type keySet struct {
-	fetch KeySource
-	now   func() time.Time
+	fetch  KeySource
+	now    func() time.Time
+	logger *slog.Logger
 
 	mu   sync.Mutex
 	keys map[string]*clerk.JSONWebKey
 	// nextFetch is when an unknown key ID may make the console ask Clerk
 	// again, so that forged tokens cannot flood Clerk.
 	nextFetch time.Time
+	// failures counts the fetches that failed in a row.
+	failures int
 }
 
 const (
 	// refetchInterval spaces out fetches after a successful one.
 	refetchInterval = time.Minute
-	// retryInterval spaces out fetches after a failed one, so that a short
-	// outage at Clerk does not lock everyone out for long.
-	retryInterval = 10 * time.Second
+	// firstRetry and lastRetry bound the wait after failed fetches, which
+	// doubles with each one, so that a blip at Clerk costs a second and an
+	// outage does not become a flood.
+	firstRetry = time.Second
+	lastRetry  = 30 * time.Second
+	// fetchTimeout bounds one fetch, so that a slow Clerk cannot hold up
+	// requests for long.
+	fetchTimeout = 10 * time.Second
 )
 
+// key returns the signing key keyID, fetching the keys when it is unknown
+// and the last fetch is long enough ago.
 func (s *keySet) key(ctx context.Context, keyID string) (*clerk.JSONWebKey, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -83,11 +95,29 @@ func (s *keySet) key(ctx context.Context, keyID string) (*clerk.JSONWebKey, erro
 	if s.now().Before(s.nextFetch) {
 		return nil, fmt.Errorf("unknown signing key %q", keyID)
 	}
+	if err := s.refreshLocked(ctx); err != nil {
+		return nil, err
+	}
+	if key, ok := s.keys[keyID]; ok {
+		return key, nil
+	}
+	return nil, fmt.Errorf("unknown signing key %q", keyID)
+}
+
+// refreshLocked fetches the keys and schedules the next fetch. The caller
+// holds mu.
+func (s *keySet) refreshLocked(ctx context.Context) error {
+	ctx, cancel := context.WithTimeout(ctx, fetchTimeout)
+	defer cancel()
 	keys, err := s.fetch(ctx)
 	if err != nil {
-		s.nextFetch = s.now().Add(retryInterval)
-		return nil, fmt.Errorf("fetch Clerk's signing keys: %w", err)
+		s.failures++
+		wait := min(firstRetry<<(s.failures-1), lastRetry)
+		s.nextFetch = s.now().Add(wait)
+		s.logger.Warn("could not fetch Clerk's signing keys", "error", err, "failures", s.failures, "retry", wait.String())
+		return fmt.Errorf("fetch Clerk's signing keys: %w", err)
 	}
+	s.failures = 0
 	s.nextFetch = s.now().Add(refetchInterval)
 	s.keys = map[string]*clerk.JSONWebKey{}
 	for _, key := range keys {
@@ -95,10 +125,34 @@ func (s *keySet) key(ctx context.Context, keyID string) (*clerk.JSONWebKey, erro
 			s.keys[key.KeyID] = key
 		}
 	}
-	if key, ok := s.keys[keyID]; ok {
-		return key, nil
+	return nil
+}
+
+// warm fetches the keys until it has them or ctx is done, so that the first
+// requests do not wait on Clerk.
+func (s *keySet) warm(ctx context.Context) {
+	for {
+		s.mu.Lock()
+		if len(s.keys) > 0 {
+			s.mu.Unlock()
+			return
+		}
+		wait := s.nextFetch.Sub(s.now())
+		if wait <= 0 {
+			err := s.refreshLocked(ctx)
+			wait = s.nextFetch.Sub(s.now())
+			if err == nil {
+				s.mu.Unlock()
+				return
+			}
+		}
+		s.mu.Unlock()
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(wait):
+		}
 	}
-	return nil, fmt.Errorf("unknown signing key %q", keyID)
 }
 
 // authenticator verifies Clerk session tokens.

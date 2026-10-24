@@ -41,22 +41,68 @@ const (
 	// LagMessages is the messages each consumer group has not consumed yet,
 	// per group and topic.
 	LagMessages Query = "lag_messages"
+
+	// UnderReplicated is the partitions with fewer in-sync replicas than
+	// replicas, over all brokers.
+	UnderReplicated Query = "under_replicated"
+	// UnderMinISR is the partitions with fewer in-sync replicas than
+	// min.insync.replicas, which refuse writes with acks=all.
+	UnderMinISR Query = "under_min_isr"
+	// OfflinePartitions is the partitions without a leader, which refuse
+	// reads and writes, as the active controller counts them.
+	OfflinePartitions Query = "offline_partitions"
+	// ActiveControllers is the controllers acting as the active one: 1 in a
+	// healthy cluster.
+	ActiveControllers Query = "active_controllers"
+	// ActiveBrokers is the brokers the active controller sees registered.
+	ActiveBrokers Query = "active_brokers"
+	// FencedBrokers is the brokers the active controller has fenced.
+	FencedBrokers Query = "fenced_brokers"
 )
 
-// expressions are the queries' PromQL; %s is the series selector.
-var expressions = map[Query]string{
-	BytesIn:     `sum by (topic) (rate(kafka_server_brokertopicmetrics_bytesinpersec_total{%s}[5m]))`,
-	BytesOut:    `sum by (topic) (rate(kafka_server_brokertopicmetrics_bytesoutpersec_total{%s}[5m]))`,
-	MessagesIn:  `sum by (topic) (rate(kafka_server_brokertopicmetrics_messagesinpersec_total{%s}[5m]))`,
-	LocalSize:   `sum by (topic) (max by (topic, partition) (kafka_log_log_size{%s}))`,
-	RemoteSize:  `sum by (topic) (kafka_server_brokertopicmetrics_remotelogsizebytes{%s})`,
-	LagSeconds:  `max by (consumer_group, topic) (changeport_consumergroup_lag_seconds{%s})`,
-	LagMessages: `sum by (consumer_group, topic) (changeport_consumergroup_lag_messages{%s})`,
+// scope is what a query's series are about, which decides its filters.
+type scope int
+
+const (
+	// perTopic queries have a series per topic.
+	perTopic scope = iota
+	// perGroup queries have a series per consumer group and topic.
+	perGroup
+	// perCluster queries have one series for the whole cluster.
+	perCluster
+)
+
+// definition is a query's PromQL, where %s is the series selector, and its
+// scope.
+type definition struct {
+	expression string
+	scope      scope
+}
+
+var definitions = map[Query]definition{
+	BytesIn:     {`sum by (topic) (rate(kafka_server_brokertopicmetrics_bytesinpersec_total{%s}[5m]))`, perTopic},
+	BytesOut:    {`sum by (topic) (rate(kafka_server_brokertopicmetrics_bytesoutpersec_total{%s}[5m]))`, perTopic},
+	MessagesIn:  {`sum by (topic) (rate(kafka_server_brokertopicmetrics_messagesinpersec_total{%s}[5m]))`, perTopic},
+	LocalSize:   {`sum by (topic) (max by (topic, partition) (kafka_log_log_size{%s}))`, perTopic},
+	RemoteSize:  {`sum by (topic) (kafka_server_brokertopicmetrics_remotelogsizebytes{%s})`, perTopic},
+	LagSeconds:  {`max by (consumer_group, topic) (changeport_consumergroup_lag_seconds{%s})`, perGroup},
+	LagMessages: {`sum by (consumer_group, topic) (changeport_consumergroup_lag_messages{%s})`, perGroup},
+	// Every broker reports its own partitions; every controller reports the
+	// controller's counts, but only the active one knows them.
+	UnderReplicated:   {`sum(kafka_server_replicamanager_underreplicatedpartitions{%s})`, perCluster},
+	UnderMinISR:       {`sum(kafka_server_replicamanager_underminisrpartitioncount{%s})`, perCluster},
+	OfflinePartitions: {`max(kafka_controller_kafkacontroller_offlinepartitionscount{%s})`, perCluster},
+	ActiveControllers: {`sum(kafka_controller_kafkacontroller_activecontrollercount{%s})`, perCluster},
+	ActiveBrokers:     {`max(kafka_controller_kafkacontroller_activebrokercount{%s})`, perCluster},
+	FencedBrokers:     {`max(kafka_controller_kafkacontroller_fencedbrokercount{%s})`, perCluster},
 }
 
 // Queries lists every named query.
 func Queries() []Query {
-	return []Query{BytesIn, BytesOut, MessagesIn, LocalSize, RemoteSize, LagSeconds, LagMessages}
+	return []Query{
+		BytesIn, BytesOut, MessagesIn, LocalSize, RemoteSize, LagSeconds, LagMessages,
+		UnderReplicated, UnderMinISR, OfflinePartitions, ActiveControllers, ActiveBrokers, FencedBrokers,
+	}
 }
 
 // ErrUnknownQuery is returned for a query name that is not one of Queries.
@@ -64,7 +110,7 @@ var ErrUnknownQuery = errors.New("unknown query")
 
 // ParseQuery returns the named query, or ErrUnknownQuery.
 func ParseQuery(name string) (Query, error) {
-	if _, ok := expressions[Query(name)]; !ok {
+	if _, ok := definitions[Query(name)]; !ok {
 		return "", fmt.Errorf("%w %q", ErrUnknownQuery, name)
 	}
 	return Query(name), nil
@@ -79,7 +125,7 @@ type Filter struct {
 
 // Expr returns the PromQL of q for tenant's series that match filter.
 func Expr(q Query, tenant string, filter Filter) (string, error) {
-	expression, ok := expressions[q]
+	d, ok := definitions[q]
 	if !ok {
 		return "", fmt.Errorf("%w %q", ErrUnknownQuery, q)
 	}
@@ -87,19 +133,21 @@ func Expr(q Query, tenant string, filter Filter) (string, error) {
 		return "", err
 	}
 	selector := []string{`tenant=` + quote(tenant)}
-	if filter.Topic != "" {
+	switch {
+	case d.scope == perCluster && (filter.Topic != "" || filter.ConsumerGroup != ""):
+		return "", fmt.Errorf("query %s is about the whole cluster", q)
+	case d.scope == perTopic && filter.ConsumerGroup != "":
+		return "", fmt.Errorf("query %s has no consumer groups", q)
+	case filter.Topic != "":
 		selector = append(selector, `topic=`+quote(filter.Topic))
-	} else if q != LagSeconds && q != LagMessages {
+	case d.scope == perTopic:
 		// Broker metrics without a topic label are totals over all topics.
 		selector = append(selector, `topic!=""`)
 	}
 	if filter.ConsumerGroup != "" {
-		if q != LagSeconds && q != LagMessages {
-			return "", fmt.Errorf("query %s has no consumer groups", q)
-		}
 		selector = append(selector, `consumer_group=`+quote(filter.ConsumerGroup))
 	}
-	return fmt.Sprintf(expression, strings.Join(selector, ", ")), nil
+	return fmt.Sprintf(d.expression, strings.Join(selector, ", ")), nil
 }
 
 // quote writes s as a PromQL string literal.

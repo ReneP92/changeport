@@ -28,14 +28,21 @@ func (p *Provisioner) ClientProperties(ctx context.Context, spec Spec) (string, 
 	if err != nil {
 		return "", err
 	}
+	return ClientPropertiesFile(spec.CustomerID, spec.BootstrapAddress(), user, ca), nil
+}
 
+// ClientPropertiesFile writes a Java client.properties for the customer's
+// admin user on the public listener at bootstrapAddress, from the
+// sasl.jaas.config of the user's Secret and, when the listener certificate's
+// issuer is not publicly trusted (the local CA on kind), that CA's PEM.
+func ClientPropertiesFile(customerID, bootstrapAddress, jaasConfig, listenerCA string) string {
 	var b strings.Builder
-	fmt.Fprintf(&b, "# Kafka cluster of customer %s, as user %s\n", spec.CustomerID, AdminUser)
-	fmt.Fprintf(&b, "bootstrap.servers=%s\n", spec.BootstrapAddress())
+	fmt.Fprintf(&b, "# Kafka cluster of customer %s, as user %s\n", customerID, AdminUser)
+	fmt.Fprintf(&b, "bootstrap.servers=%s\n", bootstrapAddress)
 	b.WriteString("security.protocol=SASL_SSL\n")
 	b.WriteString("sasl.mechanism=SCRAM-SHA-512\n")
-	fmt.Fprintf(&b, "sasl.jaas.config=%s\n", strings.TrimSpace(user))
-	if ca = strings.TrimSpace(ca); ca != "" {
+	fmt.Fprintf(&b, "sasl.jaas.config=%s\n", strings.TrimSpace(jaasConfig))
+	if ca := strings.TrimSpace(listenerCA); ca != "" {
 		b.WriteString("# The listener certificate comes from a CA clients do not trust by default.\n")
 		b.WriteString("ssl.truststore.type=PEM\n")
 		b.WriteString("ssl.truststore.certificates=")
@@ -48,7 +55,7 @@ func (p *Provisioner) ClientProperties(ctx context.Context, spec Spec) (string, 
 			}
 		}
 	}
-	return b.String(), nil
+	return b.String()
 }
 
 // secretValue returns one decoded key of a Secret, or "" if the key is

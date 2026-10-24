@@ -1,7 +1,7 @@
 import { useAuth } from "@clerk/react";
 import { useQuery } from "@tanstack/react-query";
 import { createContext, use } from "react";
-import { unwrap, type ApiClient } from "@/api/client";
+import { ApiError, unwrap, type ApiClient, type ThroughputRange } from "@/api/client";
 
 /** The API client of the signed-in user, which ApiProvider provides. */
 export const ApiContext = createContext<ApiClient | null>(null);
@@ -52,4 +52,70 @@ export function useCustomers() {
     queryFn: async () => unwrap(await api.GET("/api/operator/customers")).customers,
     refetchInterval: 10_000,
   });
+}
+
+/** How the active organization's customer connects. */
+export function useConnection() {
+  const api = useApi();
+  const organization = useOrganizationKey();
+  return useQuery({
+    queryKey: ["customer", "connection", organization],
+    queryFn: async () => unwrap(await api.GET("/api/customer/connection")),
+  });
+}
+
+/** The brokers and partitions of the active organization's cluster. */
+export function useHealth() {
+  const api = useApi();
+  const organization = useOrganizationKey();
+  return useQuery({
+    queryKey: ["customer", "health", organization],
+    queryFn: async () => unwrap(await api.GET("/api/customer/health")),
+    refetchInterval: 15_000,
+  });
+}
+
+/** The topics of the active organization's cluster. */
+export function useTopics() {
+  const api = useApi();
+  const organization = useOrganizationKey();
+  return useQuery({
+    queryKey: ["customer", "topics", organization],
+    queryFn: async () => unwrap(await api.GET("/api/customer/topics")).topics,
+    refetchInterval: 15_000,
+  });
+}
+
+/** The cluster's bytes in and out per second over range. */
+export function useThroughput(range: ThroughputRange) {
+  const api = useApi();
+  const organization = useOrganizationKey();
+  return useQuery({
+    queryKey: ["customer", "throughput", range, organization],
+    queryFn: async () =>
+      unwrap(await api.GET("/api/customer/throughput", { params: { query: { range } } })),
+    refetchInterval: 60_000,
+  });
+}
+
+/** Downloads the admin user's client.properties as a file. */
+export function useDownloadClientProperties() {
+  const api = useApi();
+  return async () => {
+    const { data, error, response } = await api.GET("/api/customer/client-properties", {
+      parseAs: "text",
+    });
+    if (data === undefined) {
+      throw new ApiError(response.status, error);
+    }
+    const name =
+      /filename="([^"]+)"/.exec(response.headers.get("Content-Disposition") ?? "")?.[1] ??
+      "client.properties";
+    const url = URL.createObjectURL(new Blob([data], { type: "text/plain" }));
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = name;
+    link.click();
+    URL.revokeObjectURL(url);
+  };
 }

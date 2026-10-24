@@ -18,7 +18,8 @@ import {
 // Creates this run's Clerk users and organizations, and a customer for each
 // organization, after removing what runs that died left behind.
 setup("create this run's users, organizations and customers", async () => {
-  setup.setTimeout(120_000);
+  // Creating customer A's cluster takes a minute or two.
+  setup.setTimeout(6 * 60_000);
   const clerk = clerkClient();
   await removeAbandoned();
 
@@ -74,7 +75,6 @@ setup("create this run's users, organizations and customers", async () => {
       }),
     );
   }
-
   const fixtures: Fixtures = {
     run,
     customers,
@@ -82,6 +82,11 @@ setup("create this run's users, organizations and customers", async () => {
     organizations: [organizationA.id, organizationB.id],
   };
   writeFixtures(fixtures);
+
+  // The fixtures are written first, so that the teardown removes everything
+  // even when this fails. Customer A's cluster serves the overview tests,
+  // which need it ready; B only needs to exist.
+  kubectl(["wait", `customer/${customers.a.id}`, "--for=condition=Ready", "--timeout=5m"]);
 });
 
 /**

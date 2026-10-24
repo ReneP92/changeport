@@ -4,6 +4,13 @@ import type { components, paths } from "@/api/schema";
 export type Customer = components["schemas"]["Customer"];
 export type Me = components["schemas"]["Me"];
 export type Problem = components["schemas"]["Problem"];
+export type Connection = components["schemas"]["Connection"];
+export type Health = components["schemas"]["Health"];
+export type Topic = components["schemas"]["Topic"];
+export type Throughput = components["schemas"]["Throughput"];
+export type ThroughputRange = NonNullable<
+  NonNullable<paths["/api/customer/throughput"]["get"]["parameters"]["query"]>["range"]
+>;
 
 /** An error the console's API answered, with its problem description. */
 export class ApiError extends Error {

@@ -102,6 +102,8 @@ test("the API scopes customers to their organization and operators to staff", as
   browser,
   request,
 }) => {
+  // Four users sign in, one after the other.
+  test.setTimeout(120_000);
   const memberA = await sessionToken(browser, fixtures.users.memberA);
   expect(await call(request, "/api/me", memberA)).toMatchObject({
     status: 200,
@@ -114,6 +116,8 @@ test("the API scopes customers to their organization and operators to staff", as
   for (const path of ["/api/operator/customers", `/api/operator/customers/${b.id}`]) {
     expect((await call(request, path, memberA)).status).toBe(403);
   }
+  // Only an organization's admins may download its credentials.
+  expect((await call(request, "/api/customer/client-properties", memberA)).status).toBe(403);
 
   const adminA = await sessionToken(browser, fixtures.users.adminA);
   expect(await call(request, "/api/me", adminA)).toMatchObject({
@@ -149,6 +153,7 @@ test("signing out returns to the sign-in form", async ({ page }) => {
   await expect(page.getByRole("main").getByText(a.displayName)).toBeVisible();
   await page.getByRole("button", { name: /open user menu/i }).click();
   await page.getByRole("button", { name: "Sign out" }).click();
-  await expect(page.getByLabel(/email address/i)).toBeVisible();
+  // Signing out reloads Clerk before the form shows again.
+  await expect(page.getByLabel(/email address/i)).toBeVisible({ timeout: 20_000 });
   await expect(page.getByRole("main").getByText(a.displayName)).toHaveCount(0);
 });

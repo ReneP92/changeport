@@ -33,6 +33,11 @@ func TestExpr(t *testing.T) {
 			Filter{ConsumerGroup: "billing"},
 			`max by (consumer_group, topic) (changeport_consumergroup_lag_seconds{tenant="acme", consumer_group="billing"})`,
 		},
+		{
+			"the whole cluster", OfflinePartitions,
+			Filter{},
+			`max(kafka_controller_kafkacontroller_offlinepartitionscount{tenant="acme"})`,
+		},
 		// Consumer group names are free text; quoting keeps them inside the
 		// label value.
 		{
@@ -65,6 +70,7 @@ func TestExprRefuses(t *testing.T) {
 		{"no tenant", BytesIn, "", Filter{}},
 		{"a tenant that is not a customer ID", BytesIn, `acme"}`, Filter{}},
 		{"a consumer group on a broker metric", BytesIn, "acme", Filter{ConsumerGroup: "billing"}},
+		{"a topic on a cluster metric", UnderReplicated, "acme", Filter{Topic: "orders"}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -208,7 +214,7 @@ func TestQueriesAgainstVictoriaMetrics(t *testing.T) {
 			continue
 		}
 		for _, s := range series {
-			if s.Labels["topic"] == "" {
+			if definitions[q].scope != perCluster && s.Labels["topic"] == "" {
 				t.Errorf("%s returned a series without a topic: %v", q, s.Labels)
 			}
 		}

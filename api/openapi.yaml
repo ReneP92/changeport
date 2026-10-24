@@ -65,6 +65,116 @@ paths:
           $ref: "#/components/responses/NotFound"
         "503":
           $ref: "#/components/responses/NotConfigured"
+  /api/customer/connection:
+    get:
+      operationId: getConnection
+      summary: How the customer's clients connect, without the password
+      responses:
+        "200":
+          description: The connection details
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Connection"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "503":
+          $ref: "#/components/responses/NotConfigured"
+  /api/customer/client-properties:
+    get:
+      operationId: getClientProperties
+      summary: A client.properties with the admin user's credentials, for organization admins
+      responses:
+        "200":
+          description: A Java client.properties
+          content:
+            text/plain:
+              schema:
+                type: string
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/NotReady"
+        "503":
+          $ref: "#/components/responses/NotConfigured"
+  /api/customer/health:
+    get:
+      operationId: getHealth
+      summary: The brokers and the partitions' health
+      responses:
+        "200":
+          description: The cluster's health
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Health"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "503":
+          $ref: "#/components/responses/NotConfigured"
+  /api/customer/topics:
+    get:
+      operationId: listTopics
+      summary: The customer's topics, with their settings, size and throughput
+      responses:
+        "200":
+          description: The topics, by name
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TopicList"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/NotReady"
+        "503":
+          $ref: "#/components/responses/NotConfigured"
+  /api/customer/throughput:
+    get:
+      operationId: getThroughput
+      summary: Bytes in and out per second over the whole cluster
+      parameters:
+        - name: range
+          in: query
+          required: false
+          description: How far back to look
+          schema:
+            type: string
+            enum: [1h, 6h, 24h, 7d]
+            default: 1h
+      responses:
+        "200":
+          description: The throughput
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Throughput"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "503":
+          $ref: "#/components/responses/NotConfigured"
   /api/operator/customers:
     get:
       operationId: listCustomers
@@ -139,6 +249,18 @@ components:
         application/json:
           schema:
             $ref: "#/components/schemas/Problem"
+    NotReady:
+      description: The cluster is not ready for this yet
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Problem"
+    BadRequest:
+      description: The request is malformed
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Problem"
     NotConfigured:
       description: The console has no Clerk configuration, so it refuses everything
       content:
@@ -186,6 +308,123 @@ components:
         customerID:
           type: string
           description: The customer of the active organization, if any
+    Connection:
+      type: object
+      required: [username, securityProtocol, saslMechanism]
+      properties:
+        bootstrapAddress:
+          type: string
+          description: Where clients bootstrap from, once the cluster has it
+        username:
+          type: string
+        securityProtocol:
+          type: string
+          enum: [SASL_SSL]
+        saslMechanism:
+          type: string
+          enum: [SCRAM-SHA-512]
+        caCertificate:
+          type: string
+          description: |
+            The PEM certificate of the CA that issued the listener's
+            certificate, when clients do not trust it by default
+    Health:
+      type: object
+      required: [brokers]
+      description: |
+        The brokers, and the partitions' health from the brokers' metrics,
+        which are absent until the metrics store has them
+      properties:
+        brokers:
+          type: array
+          items:
+            $ref: "#/components/schemas/Broker"
+        underReplicatedPartitions:
+          type: integer
+        underMinIsrPartitions:
+          type: integer
+        offlinePartitions:
+          type: integer
+        activeControllers:
+          type: integer
+        activeBrokers:
+          type: integer
+        fencedBrokers:
+          type: integer
+    Broker:
+      type: object
+      required: [name, ready, restarts]
+      properties:
+        name:
+          type: string
+        ready:
+          type: boolean
+        zone:
+          type: string
+        restarts:
+          type: integer
+    TopicList:
+      type: object
+      required: [topics]
+      properties:
+        topics:
+          type: array
+          items:
+            $ref: "#/components/schemas/Topic"
+    Topic:
+      type: object
+      required: [name, partitions, replicationFactor, tiered, cleanupPolicy]
+      properties:
+        name:
+          type: string
+        partitions:
+          type: integer
+        replicationFactor:
+          type: integer
+        tiered:
+          type: boolean
+          description: Whether the topic offloads its history to tiered storage
+        cleanupPolicy:
+          type: string
+        retentionMs:
+          type: integer
+          format: int64
+          description: How long the topic keeps messages; absent for no limit
+        localBytes:
+          type: number
+          description: Bytes on the brokers' disks, once, not counting replicas
+        remoteBytes:
+          type: number
+          description: Bytes in tiered storage
+        bytesInPerSecond:
+          type: number
+        bytesOutPerSecond:
+          type: number
+    Throughput:
+      type: object
+      required: [range, stepSeconds, bytesIn, bytesOut]
+      properties:
+        range:
+          type: string
+        stepSeconds:
+          type: integer
+        bytesIn:
+          type: array
+          items:
+            $ref: "#/components/schemas/Point"
+        bytesOut:
+          type: array
+          items:
+            $ref: "#/components/schemas/Point"
+    Point:
+      type: object
+      required: [time, value]
+      properties:
+        time:
+          type: string
+          format: date-time
+        value:
+          type: number
     CustomerList:
       type: object
       required: [customers]
