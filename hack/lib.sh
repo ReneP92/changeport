@@ -258,9 +258,9 @@ resources:
   - ../kind
 images:
   - name: ${PROVISIONER_IMAGE%:*}
-    newTag: ${provisioner##*:}
+    newTag: "${provisioner##*:}"
   - name: ${CONSOLE_IMAGE%:*}
-    newTag: ${console##*:}
+    newTag: "${console##*:}"
 patches:
   - target:
       kind: Deployment
