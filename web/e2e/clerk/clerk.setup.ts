@@ -65,7 +65,10 @@ setup("create this run's users, organizations and customers", async () => {
     organizationID,
   });
   const customers = { a: customer("a", organizationA.id), b: customer("b", organizationB.id) };
-  for (const c of Object.values(customers)) {
+  // The screenshot tour provisions customers of its own, through the
+  // operator console.
+  const tour = Boolean(process.env.CHANGEPORT_SCREENSHOTS_DIR);
+  for (const c of tour ? [] : Object.values(customers)) {
     kubectl(
       ["apply", "--server-side", "--field-manager=changeport-e2e", "-f", "-"],
       JSON.stringify({
@@ -87,7 +90,9 @@ setup("create this run's users, organizations and customers", async () => {
   // The fixtures are written first, so that the teardown removes everything
   // even when this fails. Customer A's cluster serves the overview tests,
   // which need it ready; B only needs to exist.
-  kubectl(["wait", `customer/${customers.a.id}`, "--for=condition=Ready", "--timeout=5m"]);
+  if (!tour) {
+    kubectl(["wait", `customer/${customers.a.id}`, "--for=condition=Ready", "--timeout=5m"]);
+  }
 });
 
 /**

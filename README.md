@@ -368,6 +368,15 @@ run removes what a crashed run left behind after an hour:
 make ui-e2e
 ```
 
+The same setup also runs a tour of every screen on a desktop and a phone,
+which provisions Acme Corp through the operator console, fills its charts
+with a few minutes of traffic, and deprovisions it again. It writes the
+screenshots that [docs/console.md](docs/console.md) shows:
+
+```bash
+make ui-screenshots
+```
+
 ## Checks
 
 ```bash

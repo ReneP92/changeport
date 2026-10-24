@@ -1,6 +1,7 @@
 import { clerk } from "@clerk/testing/playwright";
 import { expect, test, type Page } from "@playwright/test";
 import { clerkClient, kubectl, readFixtures, testEmail } from "./fixtures";
+import { expectNoSidewaysScroll } from "./helpers";
 
 // The operator console, signed in as this run's staff member. The customer
 // it provisions is named like the run's organizations, so that the teardown
@@ -80,6 +81,7 @@ test("an operator provisions a customer, watches it get ready, and deprovisions 
   await page.getByRole("link", { name: "All customers" }).click();
   const row = main.getByRole("row").filter({ hasText: id });
   await expect(row.getByRole("img", { name: "4 of 4 parts ready" })).toBeVisible();
+  await expectNoSidewaysScroll(page);
   await row.getByRole("link", { name: displayName }).click();
 
   // Deprovisioning takes the customer ID typed.
