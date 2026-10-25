@@ -149,10 +149,13 @@ make kafka-client CUSTOMER=demo
 `go run ./cmd/provisioner credentials -context kind-changeport -customer demo`
 prints the same `client.properties`.
 
-Provision more customers from the same template, or run the end-to-end check,
-which provisions a second customer, smoke tests both clusters and removes the
-second one again, with the metrics test in between, then runs the tiered
-storage and failover tests:
+Provision more customers from the same template, or run the end-to-end
+check. Its core suite provisions a second customer, protected from deletion,
+smoke tests both clusters, runs the metrics, deletion protection, agent, lag,
+console, tiered storage and host access tests, and removes the second
+customer again; its failover suite freezes a zone and drains a broker of a
+three-zone customer. CI runs the two on separate clusters at once; locally
+`make e2e` runs both, one after the other:
 
 ```bash
 make provision CUSTOMER=acme
@@ -160,6 +163,19 @@ make provision CUSTOMER=acme
 
 ```bash
 make e2e
+```
+
+To run tests quickly while working on one part, run one suite, or one test
+against the running cluster, such as the lag test; most tests have a make
+target of their own (`make help` lists them). For the web app, `make web-dev`
+serves it with hot reload against the console on kind:
+
+```bash
+make e2e SUITE=core
+```
+
+```bash
+make lag-test
 ```
 
 The metrics test checks that VictoriaMetrics scrapes every customer's brokers

@@ -330,6 +330,9 @@ spec:
       offsets.topic.replication.factor: {{ .Profile.ReplicationFactor }}
       transaction.state.log.replication.factor: {{ .Profile.ReplicationFactor }}
       transaction.state.log.min.isr: {{ .Profile.MinInsyncReplicas }}
+{{- range $key, $value := .Platform.KafkaConfig }}
+      {{ $key }}: {{ quote $value }}
+{{- end }}
   entityOperator:
 {{- if .Platform.DedicatedNodes }}
     template:

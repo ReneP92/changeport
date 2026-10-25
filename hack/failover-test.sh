@@ -65,7 +65,7 @@ start_load() {
     [[ $(consumed "$topic") -gt 100 ]] && return
     sleep 1
   done
-  die "the load on $topic did not start"
+  die "the load on $topic did not start; the producer and the consumer said:"$'\n'"$(tail -20 "$work/out/$topic-producer.log" "$work/out/$topic-consumer.log" 2>&1)"
 }
 
 # Stops the producer, waits until the consumer has read everything produced,

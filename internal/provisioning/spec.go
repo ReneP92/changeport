@@ -295,6 +295,9 @@ type Platform struct {
 	LoadBalancer LoadBalancer
 	// TieredStorage is where brokers offload topic history.
 	TieredStorage TieredStorage
+	// KafkaConfig is broker configuration of this platform's clusters only,
+	// on top of the template's.
+	KafkaConfig map[string]string
 	// DedicatedNodes, when set, gives every customer an EKS Auto Mode
 	// NodePool of their own: nodes tainted and labelled with the tenant, which
 	// only that customer's pods tolerate and select.
@@ -436,6 +439,13 @@ var KindPlatform = Platform{
 			AccessKeyID:     "changeport",
 			SecretAccessKey: "changeport-local-only",
 		},
+	},
+	// Brokers that act sooner on what the tests wait for: deleting local
+	// copies of offloaded segments (every 5 minutes by default) and copying
+	// finished segments to tiered storage (every 30 seconds).
+	KafkaConfig: map[string]string{
+		"log.retention.check.interval.ms":     "15000",
+		"remote.log.manager.task.interval.ms": "5000",
 	},
 }
 

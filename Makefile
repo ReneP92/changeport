@@ -193,8 +193,9 @@ deprovision: ## Delete CUSTOMER's Kafka cluster from kind
 	go run ./cmd/provisioner deprovision -context $(KUBE_CONTEXT) -customer $(CUSTOMER) -wait
 
 .PHONY: e2e
-e2e: ## Provision a second customer, smoke test both clusters, then deprovision it (KEEP=1 keeps it)
-	hack/e2e.sh $(CUSTOMER)
+e2e: SUITE ?= all
+e2e: ## Run the end-to-end suites on kind: SUITE=core, failover or all (default); KEEP=1 keeps the customers
+	SUITE=$(SUITE) hack/e2e.sh $(CUSTOMER)
 
 ##@ Platform components
 

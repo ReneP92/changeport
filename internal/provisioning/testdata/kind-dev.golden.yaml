@@ -192,6 +192,8 @@ spec:
       offsets.topic.replication.factor: 1
       transaction.state.log.replication.factor: 1
       transaction.state.log.min.isr: 1
+      log.retention.check.interval.ms: "15000"
+      remote.log.manager.task.interval.ms: "5000"
   entityOperator:
     topicOperator: {}
     userOperator: {}
