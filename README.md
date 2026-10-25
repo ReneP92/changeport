@@ -319,7 +319,22 @@ cp .env.sample .env  # then fill it in
 just console-config
 ```
 
-Without them the console fails closed: it says it is not configured and
+With the keys there, `just dev-up` also sets up your own test user,
+`<you>+clerk_test@example.com`, which Clerk's development instances verify
+with the code 424242. It is an admin of the staff organization, so it lands
+on the operator console, and of an organization of its own, "Demo (<you>)",
+linked to the demo customer, so the organization switcher takes it to the
+demo's overview, topics and consumer groups too. It creates only what is
+missing; `<you>` is `CHANGEPORT_DEV_USER` in `.env`, or else the start of
+your git email address. The signed-in tests' cleanup only removes their own
+`e2e...` users and organizations, so yours stay. To set it up again without
+the rest of dev-up:
+
+```bash
+just dev-user
+```
+
+Without the keys the console fails closed: it says it is not configured and
 refuses every API call, which is how CI runs it. The console only accepts
 session tokens of that Clerk instance, issued to its own origins.
 
