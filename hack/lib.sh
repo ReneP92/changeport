@@ -341,19 +341,19 @@ ensure_kind_cluster() {
 # already has are left out.
 # Usage: kind_load <comma-separated workers> <image>...
 kind_load() {
-  local workers=$1 image node archive output platform missing=()
+  local workers=$1 image node archive output platform to_load=()
   for image in "${@:2}"; do
     for node in ${workers//,/ }; do
       if ! docker exec "$node" crictl inspecti -q "$image" >/dev/null 2>&1; then
-        missing+=("$image")
+        to_load+=("$image")
         break
       fi
     done
   done
-  [[ ${#missing[@]} -gt 0 ]] || return 0
+  [[ ${#to_load[@]} -gt 0 ]] || return 0
   platform=linux/$(docker version -f '{{.Server.Arch}}')
   archive=$(mktemp "${TMPDIR:-/tmp}/kind-images.XXXXXX")
-  if ! output=$({ docker image save --platform "$platform" -o "$archive" "${missing[@]}" &&
+  if ! output=$({ docker image save --platform "$platform" -o "$archive" "${to_load[@]}" &&
     kind load image-archive --name "$CLUSTER_NAME" --nodes "$workers" "$archive"; } 2>&1); then
     rm -f "$archive"
     die "could not load images into the kind workers:"$'\n'"$output"
