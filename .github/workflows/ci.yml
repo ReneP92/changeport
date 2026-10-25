@@ -69,6 +69,14 @@ jobs:
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      # The pinned tools in bin/ and Playwright's browser, until a pin changes.
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            bin/
+            !bin/*.kubeconfig
+            ~/.cache/ms-playwright
+          key: tools-${{ runner.os }}-${{ hashFiles('hack/lib.sh', 'tools/go.sum', 'web/bun.lock') }}
       - run: make web-check
       - run: make web-e2e
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
@@ -90,6 +98,8 @@ jobs:
       fail-fast: false
       matrix:
         suite: [core, failover]
+    env:
+      BUILD_CACHE: gha
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
@@ -98,6 +108,18 @@ jobs:
           cache-dependency-path: |
             go.sum
             tools/go.sum
+      # Docker layers come from and go to GitHub Actions' cache (BUILD_CACHE),
+      # which needs BuildKit's container driver and the runtime's token.
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+      - uses: crazy-max/ghaction-github-runtime@04d248b84655b509d8c44dc1d6f990c879747487 # v4.0.0
+      # The pinned tools in bin/ and Playwright's browser, until a pin changes.
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            bin/
+            !bin/*.kubeconfig
+            ~/.cache/ms-playwright
+          key: tools-${{ runner.os }}-${{ hashFiles('hack/lib.sh', 'tools/go.sum', 'web/bun.lock') }}
       # The failover suite brings its own customer.
       - run: make dev-up
         env:
@@ -128,6 +150,7 @@ jobs:
       CLERK_SECRET_KEY: ${{ secrets.CLERK_SECRET_KEY }}
       CLERK_PUBLISHABLE_KEY: ${{ vars.CLERK_PUBLISHABLE_KEY }}
       CHANGEPORT_STAFF_ORG_ID: ${{ vars.CHANGEPORT_STAFF_ORG_ID }}
+      BUILD_CACHE: gha
     steps:
       - id: clerk
         name: Check for the Clerk test instance
@@ -153,6 +176,21 @@ jobs:
           umask 077
           printf 'CLERK_PUBLISHABLE_KEY=%s\nCLERK_SECRET_KEY=%s\nCHANGEPORT_STAFF_ORG_ID=%s\n' \
             "$CLERK_PUBLISHABLE_KEY" "$CLERK_SECRET_KEY" "$CHANGEPORT_STAFF_ORG_ID" > .env
+      # Docker layers come from and go to GitHub Actions' cache (BUILD_CACHE),
+      # which needs BuildKit's container driver and the runtime's token.
+      - if: steps.clerk.outputs.available == 'true'
+        uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+      - if: steps.clerk.outputs.available == 'true'
+        uses: crazy-max/ghaction-github-runtime@04d248b84655b509d8c44dc1d6f990c879747487 # v4.0.0
+      # The pinned tools in bin/ and Playwright's browser, until a pin changes.
+      - if: steps.clerk.outputs.available == 'true'
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            bin/
+            !bin/*.kubeconfig
+            ~/.cache/ms-playwright
+          key: tools-${{ runner.os }}-${{ hashFiles('hack/lib.sh', 'tools/go.sum', 'web/bun.lock') }}
       # The signed-in tests create customers of their own.
       - if: steps.clerk.outputs.available == 'true'
         run: make dev-up
@@ -179,10 +217,15 @@ jobs:
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      # The docker-container driver builds for several platforms at once.
-      - run: docker buildx create --use --driver docker-container
+      # BuildKit's container driver builds for several platforms at once, with
+      # the layers cached in GitHub Actions' cache.
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+      - uses: crazy-max/ghaction-github-runtime@04d248b84655b509d8c44dc1d6f990c879747487 # v4.0.0
       - name: Build for amd64 and arm64
-        run: docker buildx build --platform linux/amd64,linux/arm64 images/kafka
+        run: >-
+          docker buildx build --platform linux/amd64,linux/arm64
+          --cache-from type=gha,scope=kafka-multiarch --cache-to type=gha,mode=max,scope=kafka-multiarch
+          images/kafka
       - name: Load the amd64 image
         run: docker buildx build --load -t changeport/kafka:local images/kafka
       - run: make kafka-image-test
@@ -193,10 +236,15 @@ jobs:
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      # The docker-container driver builds for several platforms at once.
-      - run: docker buildx create --use --driver docker-container
+      # BuildKit's container driver builds for several platforms at once, with
+      # the layers cached in GitHub Actions' cache.
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+      - uses: crazy-max/ghaction-github-runtime@04d248b84655b509d8c44dc1d6f990c879747487 # v4.0.0
       - name: Build for amd64 and arm64
-        run: docker buildx build --platform linux/amd64,linux/arm64 -f images/provisioner/Dockerfile .
+        run: >-
+          docker buildx build --platform linux/amd64,linux/arm64
+          --cache-from type=gha,scope=provisioner-multiarch --cache-to type=gha,mode=max,scope=provisioner-multiarch
+          -f images/provisioner/Dockerfile .
 
   console-image:
     name: Console image
@@ -204,10 +252,15 @@ jobs:
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      # The docker-container driver builds for several platforms at once.
-      - run: docker buildx create --use --driver docker-container
+      # BuildKit's container driver builds for several platforms at once, with
+      # the layers cached in GitHub Actions' cache.
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+      - uses: crazy-max/ghaction-github-runtime@04d248b84655b509d8c44dc1d6f990c879747487 # v4.0.0
       - name: Build for amd64 and arm64
-        run: docker buildx build --platform linux/amd64,linux/arm64 -f images/console/Dockerfile .
+        run: >-
+          docker buildx build --platform linux/amd64,linux/arm64
+          --cache-from type=gha,scope=console-multiarch --cache-to type=gha,mode=max,scope=console-multiarch
+          -f images/console/Dockerfile .
 
   agent-image:
     name: Agent image
@@ -215,7 +268,12 @@ jobs:
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      # The docker-container driver builds for several platforms at once.
-      - run: docker buildx create --use --driver docker-container
+      # BuildKit's container driver builds for several platforms at once, with
+      # the layers cached in GitHub Actions' cache.
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+      - uses: crazy-max/ghaction-github-runtime@04d248b84655b509d8c44dc1d6f990c879747487 # v4.0.0
       - name: Build for amd64 and arm64
-        run: docker buildx build --platform linux/amd64,linux/arm64 -f images/agent/Dockerfile .
+        run: >-
+          docker buildx build --platform linux/amd64,linux/arm64
+          --cache-from type=gha,scope=agent-multiarch --cache-to type=gha,mode=max,scope=agent-multiarch
+          -f images/agent/Dockerfile .

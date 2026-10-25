@@ -217,27 +217,40 @@ check_docker_disk() {
   fi
 }
 
+# Prints the build cache arguments of an image's build: with BUILD_CACHE=gha,
+# as CI sets it, the layers come from and go to GitHub Actions' cache under
+# the image's own scope; otherwise Docker's local cache is all there is.
+# Usage: build_cache_args <scope>
+build_cache_args() {
+  [[ ${BUILD_CACHE:-} == gha ]] || return 0
+  echo "--cache-from type=gha,scope=$1 --cache-to type=gha,mode=max,scope=$1"
+}
+
 build_kafka_image() {
   log "Building $KAFKA_IMAGE"
-  retry_registry docker buildx build --load --quiet -t "$KAFKA_IMAGE" images/kafka >/dev/null
+  # shellcheck disable=SC2046 # the cache arguments are separate words
+  retry_registry docker buildx build --load --quiet $(build_cache_args kafka) -t "$KAFKA_IMAGE" images/kafka >/dev/null
   tag_content "$KAFKA_IMAGE"
 }
 
 build_agent_image() {
   log "Building $AGENT_IMAGE"
-  retry_registry docker buildx build --load --quiet -t "$AGENT_IMAGE" -f images/agent/Dockerfile . >/dev/null
+  # shellcheck disable=SC2046 # the cache arguments are separate words
+  retry_registry docker buildx build --load --quiet $(build_cache_args agent) -t "$AGENT_IMAGE" -f images/agent/Dockerfile . >/dev/null
   tag_content "$AGENT_IMAGE"
 }
 
 build_provisioner_image() {
   log "Building $PROVISIONER_IMAGE"
-  retry_registry docker buildx build --load --quiet -t "$PROVISIONER_IMAGE" -f images/provisioner/Dockerfile . >/dev/null
+  # shellcheck disable=SC2046 # the cache arguments are separate words
+  retry_registry docker buildx build --load --quiet $(build_cache_args provisioner) -t "$PROVISIONER_IMAGE" -f images/provisioner/Dockerfile . >/dev/null
   tag_content "$PROVISIONER_IMAGE"
 }
 
 build_console_image() {
   log "Building $CONSOLE_IMAGE"
-  retry_registry docker buildx build --load --quiet -t "$CONSOLE_IMAGE" -f images/console/Dockerfile . >/dev/null
+  # shellcheck disable=SC2046 # the cache arguments are separate words
+  retry_registry docker buildx build --load --quiet $(build_cache_args console) -t "$CONSOLE_IMAGE" -f images/console/Dockerfile . >/dev/null
   tag_content "$CONSOLE_IMAGE"
 }
 
