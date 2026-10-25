@@ -321,14 +321,23 @@ ensure_kind_cluster() {
   local workers
   workers=$(kind get nodes --name "$CLUSTER_NAME" | grep -v control-plane | paste -sd , -)
   log "Loading images into the kind workers"
-  kind load docker-image --name "$CLUSTER_NAME" --nodes "$workers" "${KIND_PRELOAD_IMAGES[@]}" >/dev/null 2>&1
+  kind_load "$workers" "${KIND_PRELOAD_IMAGES[@]}"
   local image
   for image in "$KAFKA_IMAGE" "$AGENT_IMAGE" "$PROVISIONER_IMAGE" "$CONSOLE_IMAGE"; do
     if docker image inspect "$image" >/dev/null 2>&1; then
-      kind load docker-image --name "$CLUSTER_NAME" --nodes "$workers" "$(content_tag "$image")" >/dev/null 2>&1
+      kind_load "$workers" "$(content_tag "$image")"
       prune_node_images "$image" "$workers"
     fi
   done
+}
+
+# Loads images from the host's Docker into the kind workers, quietly unless it
+# fails. Usage: kind_load <comma-separated workers> <image>...
+kind_load() {
+  local output
+  if ! output=$(kind load docker-image --name "$CLUSTER_NAME" --nodes "$1" "${@:2}" 2>&1); then
+    die "could not load images into the kind workers:"$'\n'"$output"
+  fi
 }
 
 # Removes the content tags of image's earlier builds from the kind workers,
