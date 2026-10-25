@@ -11,7 +11,7 @@ source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 ensure_kind
 ensure_kubectl
 cluster_exists || die "kind cluster $CLUSTER_NAME does not exist; run make dev-up first"
-config=$(curl -s -o /dev/null -w '%{http_code}' "http://localhost:$CONSOLE_PORT/api/config")
+config=$(console_config_status)
 [[ $config == 200 ]] ||
   die "the console at http://localhost:$CONSOLE_PORT is not configured (GET /api/config answered $config); fill in .env and run make console-config"
 

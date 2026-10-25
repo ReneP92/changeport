@@ -395,6 +395,23 @@ kafka_client_container() {
 # Usage: object_store_ls <path>
 object_store_ls() { kubectl -n object-store exec deploy/seaweedfs -- sh -c "echo 'fs.ls $1' | weed shell 2>/dev/null"; }
 
+# Prints the HTTP status the console at localhost answers GET /api/config
+# with (200 configured, 503 not), once it answers at all: right after a
+# restart, the old pod may drop connections for a moment.
+# Usage: console_config_status
+console_config_status() {
+  local code
+  for _ in $(seq 30); do
+    code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 5 "http://localhost:$CONSOLE_PORT/api/config" || true)
+    if [[ $code != 000 ]]; then
+      echo "$code"
+      return
+    fi
+    sleep 2
+  done
+  die "the console at http://localhost:$CONSOLE_PORT does not answer"
+}
+
 # Prints the value of a PromQL query against the metrics store that returns at
 # most one number, or nothing when it returns no series. It goes through the
 # Kubernetes API server's service proxy, so it needs no port-forward.

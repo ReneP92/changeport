@@ -49,10 +49,11 @@ if [[ $hash != "$current" ]]; then
   kubectl -n changeport patch deployment changeport-console --type merge \
     -p "{\"spec\":{\"template\":{\"metadata\":{\"annotations\":{\"changeport.io/clerk-config\":\"$hash\"}}}}}" >/dev/null
   kubectl -n changeport rollout status deployment/changeport-console --timeout=2m >/dev/null
-elif [[ $(curl -s -o /dev/null -w '%{http_code}' "http://localhost:$CONSOLE_PORT/api/config") == 503 ]]; then
+elif [[ $(console_config_status) == 503 ]]; then
   # The console started while the Secret was missing.
   log "Restarting the console, which started without its Clerk configuration"
   kubectl -n changeport rollout restart deployment/changeport-console >/dev/null
   kubectl -n changeport rollout status deployment/changeport-console --timeout=2m >/dev/null
 fi
+[[ $(console_config_status) == 200 ]] || die "the console at http://localhost:$CONSOLE_PORT did not take its Clerk configuration"
 log "The console at http://localhost:$CONSOLE_PORT signs in with Clerk"

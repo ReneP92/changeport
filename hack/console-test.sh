@@ -13,7 +13,10 @@ work=$(mktemp -d)
 trap 'rm -rf "$work"' EXIT
 
 # Prints the HTTP status of a GET, saving the body and headers.
-status() { curl -s -o "$work/body" -D "$work/headers" -w '%{http_code}' "${@:2}" "$url$1"; }
+status() { curl -s --max-time 10 -o "$work/body" -D "$work/headers" -w '%{http_code}' "${@:2}" "$url$1"; }
+
+# A console restarted a moment ago may still drop connections.
+console_config_status >/dev/null
 
 [[ $(status /healthz) == 200 ]] || die "the console at $url is not healthy"
 if [[ $(status /) != 200 ]] || ! grep -q '<div id="root">' "$work/body"; then
