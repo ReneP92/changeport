@@ -49,6 +49,9 @@ func TestCommandErrors(t *testing.T) {
 		{"credentials invalid customer", []string{"credentials", "-customer", "A"}, `customer ID "A"`},
 		{"credentials unknown platform", []string{"credentials", "-customer", "acme", "-platform", "gke"}, `unknown platform "gke"`},
 		{"controller unknown platform", []string{"controller", "-platform", "gke"}, `unknown platform "gke"`},
+		{"protect invalid customer", []string{"protect", "-customer", "A"}, `customer ID "A"`},
+		{"unprotect unconfirmed", []string{"unprotect", "-customer", "acme"}, "the customer ID typed again"},
+		{"unprotect confirmed wrong", []string{"unprotect", "-customer", "acme", "-confirm", "acme2"}, "the customer ID typed again"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

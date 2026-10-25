@@ -70,7 +70,16 @@ type Spec struct {
 	Profile Profile
 	// Platform is where the cluster runs.
 	Platform Platform
+	// DeletionProtection labels the customer's namespace with
+	// DeletionProtectionLabel, which the platform's admission policy reads
+	// to refuse deleting it.
+	DeletionProtection bool
 }
+
+// DeletionProtectionLabel marks the namespace of a customer with deletion
+// protection. The ValidatingAdmissionPolicy in deploy/base/deletion-protection
+// refuses deleting namespaces that carry it.
+const DeletionProtectionLabel = "changeport.io/deletion-protection"
 
 // Namespace is the customer's own namespace.
 func (s Spec) Namespace() string { return namespacePrefix + s.CustomerID }

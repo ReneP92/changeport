@@ -366,6 +366,11 @@ kafka_client_container() {
   [[ $hosts -gt 0 ]] || die "customer $customer has no load balancers"
 }
 
+# Lists a directory of the local object store, such as
+# /buckets/changeport-tiered-storage/customer-demo/, one entry per line.
+# Usage: object_store_ls <path>
+object_store_ls() { kubectl -n object-store exec deploy/seaweedfs -- sh -c "echo 'fs.ls $1' | weed shell 2>/dev/null"; }
+
 # Prints the value of a PromQL query against the metrics store that returns at
 # most one number, or nothing when it returns no series. It goes through the
 # Kubernetes API server's service proxy, so it needs no port-forward.

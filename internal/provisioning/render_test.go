@@ -22,7 +22,12 @@ func TestRenderYAMLMatchesGoldenFiles(t *testing.T) {
 	for _, platform := range sortedValues(Platforms) {
 		for _, profile := range sortedValues(Profiles) {
 			t.Run(platform.Name+"/"+profile.Name, func(t *testing.T) {
-				testGoldenFile(t, Spec{CustomerID: "acme", Profile: profile, Platform: platform})
+				// Production customers are protected, as the CLI and the
+				// console create them by default.
+				testGoldenFile(t, Spec{
+					CustomerID: "acme", Profile: profile, Platform: platform,
+					DeletionProtection: profile.Name == ProductionProfile.Name,
+				})
 			})
 		}
 	}

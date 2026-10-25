@@ -262,6 +262,18 @@ for the controller; `render` and `credentials` work without it.
 kubectl get customers
 ```
 
+Deletion protection keeps a customer's data from going by mistake. The API
+server refuses deleting a protected `Customer` or its namespace, and
+`provisioner provision` protects new production customers unless told
+otherwise (`-deletion-protection=false`). Turning protection off takes the
+customer ID typed again. Deprovisioned customers' volumes and tiered storage
+are kept for 30 days before the purge; [docs/runbook.md](docs/runbook.md)
+has the procedures:
+
+```bash
+go run ./cmd/provisioner unprotect -customer acme -confirm acme
+```
+
 After changing the provisioner, rebuild it and roll it out on kind:
 
 ```bash

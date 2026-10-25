@@ -74,7 +74,7 @@ function CustomerPage() {
             </CardTitle>
             <CardDescription>
               {c.deletionProtection
-                ? "Deletion protection is on, so deprovisioning is refused until it is turned off."
+                ? "Deletion protection is on, so deprovisioning is refused until an operator turns it off with provisioner unprotect."
                 : "Deletes the cluster and its data for good. The Clerk organization is kept, no longer linked to a cluster."}
             </CardDescription>
           </CardHeader>

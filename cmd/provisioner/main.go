@@ -35,6 +35,8 @@ Commands:
   controller   run the controller that provisions every Customer resource
   provision    create or update a Customer, whose Kafka cluster the controller provisions
   deprovision  delete a Customer, whose Kafka cluster the controller deletes first
+  protect      turn a Customer's deletion protection on
+  unprotect    turn a Customer's deletion protection off, with its ID typed again
   credentials  print a client.properties for connecting as the customer's admin user
   render       print the resources for a customer without applying them
 
@@ -68,6 +70,10 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 		return runProvision(ctx, args, logger, stderr)
 	case "deprovision":
 		return runDeprovision(ctx, args, logger, stderr)
+	case "protect":
+		return runProtection(ctx, "protect", args, logger, stderr)
+	case "unprotect":
+		return runProtection(ctx, "unprotect", args, logger, stderr)
 	case "credentials":
 		return runCredentials(ctx, args, logger, stdout, stderr)
 	case "render":
@@ -155,9 +161,16 @@ func runProvision(ctx context.Context, args []string, logger *slog.Logger, stder
 	common.register(fs)
 	profile := fs.String("profile", provisioning.DevProfile.Name, "cluster size profile: dev, dev-ha or production")
 	displayName := fs.String("display-name", "", "the customer's name as people know it (default: the customer ID)")
+	protect := fs.Bool("deletion-protection", false, "refuse deleting the customer until protection is turned off (default: on for new production customers)")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
+	var protection *bool
+	fs.Visit(func(f *flag.Flag) {
+		if f.Name == "deletion-protection" {
+			protection = protect
+		}
+	})
 	if err := provisioning.ValidateCustomerID(common.customer); err != nil {
 		return err
 	}
@@ -173,7 +186,7 @@ func runProvision(ctx context.Context, args []string, logger *slog.Logger, stder
 	}
 	ctx, cancel := context.WithTimeout(ctx, common.timeout)
 	defer cancel()
-	if err := applyCustomer(ctx, c, common.customer, *displayName, *profile); err != nil {
+	if err := applyCustomer(ctx, c, common.customer, *displayName, *profile, protection); err != nil {
 		return err
 	}
 	logger.Info("applied the Customer", "tenant", common.customer, "profile", *profile)
@@ -209,6 +222,36 @@ func runDeprovision(ctx context.Context, args []string, logger *slog.Logger, std
 		return nil
 	}
 	return waitGone(ctx, c, common.customer, logger)
+}
+
+// runProtection turns a Customer's deletion protection on (protect) or off
+// (unprotect). Turning it off takes the customer ID typed again, as it lets
+// the customer and all its data be deleted.
+func runProtection(ctx context.Context, command string, args []string, logger *slog.Logger, stderr io.Writer) error {
+	fs := flag.NewFlagSet(command, flag.ContinueOnError)
+	fs.SetOutput(stderr)
+	customer := fs.String("customer", "", "customer ID, for example acme (required)")
+	kubeContext := fs.String("context", "", "kubeconfig context to use (default: the current context)")
+	confirm := fs.String("confirm", "", "the customer ID again, to turn protection off")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if err := provisioning.ValidateCustomerID(*customer); err != nil {
+		return err
+	}
+	on := command == "protect"
+	if !on && *confirm != *customer {
+		return errNotConfirmed
+	}
+	c, err := newCustomerClient(*kubeContext)
+	if err != nil {
+		return err
+	}
+	if err := setProtection(ctx, c, *customer, on); err != nil {
+		return err
+	}
+	logger.Info("set deletion protection", "tenant", *customer, "on", on)
+	return nil
 }
 
 func runCredentials(ctx context.Context, args []string, logger *slog.Logger, stdout, stderr io.Writer) error {

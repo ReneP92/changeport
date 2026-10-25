@@ -1,6 +1,7 @@
 # The provisioning controller (provisioner controller), which turns every
 # Customer into its dedicated Kafka cluster from the one template, in the
-# changeport namespace. The Customer CRD is written by make generate from
+# changeport namespace, and the admission policies that protect customers
+# with deletion protection. The Customer CRD is written by make generate from
 # api/v1alpha1. Overlays choose the platform (-platform); on EKS, the
 # controller will also need an IAM role through EKS Pod Identity for the
 # brokers' Pod Identity associations (#58).
@@ -12,3 +13,4 @@ labels:
 resources:
   - changeport.io_customers.yaml
   - provisioner.yaml
+  - deletion-protection.yaml

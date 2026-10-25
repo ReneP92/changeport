@@ -66,6 +66,11 @@ type templateValues struct {
 	DedicatedNodeCPULimit int
 
 	TieredStoragePrefix string
+
+	// DeletionProtectionLabel labels the namespace when DeletionProtection
+	// is set.
+	DeletionProtection      bool
+	DeletionProtectionLabel string
 }
 
 // RenderYAML renders the customer cluster template for spec.
@@ -106,6 +111,9 @@ func RenderYAML(spec Spec) ([]byte, error) {
 		DedicatedNodeCPULimit: (spec.Profile.Replicas + 1) * spec.Profile.NodeCPUs,
 
 		TieredStoragePrefix: spec.TieredStoragePrefix(),
+
+		DeletionProtection:      spec.DeletionProtection,
+		DeletionProtectionLabel: DeletionProtectionLabel,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("render customer cluster template: %w", err)
