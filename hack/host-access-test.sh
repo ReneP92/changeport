@@ -3,7 +3,7 @@
 # cluster on kind with the customer's client.properties, as the console hands
 # it out: through the host's DNS and the host gateway, a Go Kafka client
 # produces to and consumes from every broker. On Linux, as in CI, it writes
-# the customers' names into /etc/hosts first (make host-dns); on macOS that is
+# the customers' names into /etc/hosts first (just host-dns); on macOS that is
 # a one-time step the test checks.
 # Usage: hack/host-access-test.sh [customer-id] (default demo)
 # shellcheck source=lib.sh
@@ -15,12 +15,12 @@ trap 'rm -rf "$work"' EXIT
 
 ensure_kubectl
 [[ $(docker inspect -f '{{.State.Running}}' "$HOST_GATEWAY_CONTAINER" 2>/dev/null) == true ]] ||
-  die "the host gateway is not running; run make dev-up"
+  die "the host gateway is not running; run just dev-up"
 case $(uname -s) in
 Linux) "$ROOT/hack/host-dns.sh" ;;
 Darwin)
   [[ -f /etc/resolver/changeport.test ]] ||
-    die "macOS does not ask the host gateway for changeport.test yet; run make host-dns once"
+    die "macOS does not ask the host gateway for changeport.test yet; run just host-dns once"
   ;;
 esac
 

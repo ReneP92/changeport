@@ -28,7 +28,7 @@ Darwin)
     exit 0
   fi
   log "Writing $resolver, so that macOS asks the host gateway for $domain"
-  need_sudo "make host-dns   # or: sudo mkdir -p /etc/resolver && printf 'nameserver 127.0.0.1\\nport $HOST_DNS_PORT\\n' | sudo tee $resolver"
+  need_sudo "just host-dns   # or: sudo mkdir -p /etc/resolver && printf 'nameserver 127.0.0.1\\nport $HOST_DNS_PORT\\n' | sudo tee $resolver"
   sudo mkdir -p /etc/resolver
   printf '%s\n' "$want" | sudo tee "$resolver" >/dev/null
   ;;
@@ -42,7 +42,7 @@ Linux)
   [[ -n $names ]] || die "no customer on kind has public names yet"
   block=$(printf '%s\n' "$begin" && while read -r name; do printf '127.0.0.1 %s\n' "$name"; done <<<"$names" && printf '%s\n' "$end")
   log "Writing the customers' $(wc -l <<<"$names" | tr -d ' ') public names into /etc/hosts"
-  need_sudo "make host-dns"
+  need_sudo "just host-dns"
   {
     sed "/^$begin\$/,/^$end\$/d" /etc/hosts
     printf '%s\n' "$block"
@@ -51,7 +51,7 @@ Linux)
   rm -f "${TMPDIR:-/tmp}/hosts.changeport"
   ;;
 *)
-  die "make host-dns supports macOS and Linux"
+  die "just host-dns supports macOS and Linux"
   ;;
 esac
 log "Kafka clients on this machine reach the customers' clusters on kind with their client.properties"

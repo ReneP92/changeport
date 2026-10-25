@@ -1,15 +1,15 @@
 # The console
 
-Every screen of the first console, as `make ui-screenshots` captures it on
+Every screen of the first console, as `just ui-screenshots` captures it on
 kind: an operator provisions Acme Corp and Globex through the operator
 console, Acme's admin Ada creates topics, producers and consumer groups run
 for a few minutes, and Acme is deprovisioned again. Each screen also has a
 phone version, under the same name ending in `-phone.png`. To capture them
-again after changing the console, run `make dev-up` with `.env` filled in,
+again after changing the console, run `just dev-up` with `.env` filled in,
 then:
 
 ```bash
-make ui-screenshots
+just ui-screenshots
 ```
 
 ## Customers

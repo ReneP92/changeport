@@ -2,7 +2,7 @@
 # Applies the platform components of one environment: the operators in
 # deploy/overlays/<overlay>, then, once they are ready, the resources in
 # config/ that need their CRDs and webhooks. On kind, the components built
-# here run the locally built images (make dev-up builds them). Safe to run
+# here run the locally built images (just dev-up builds them). Safe to run
 # again.
 # Usage: hack/platform-apply.sh kind|dev|prod (prod also needs CONFIRM=prod)
 # shellcheck source=lib.sh

@@ -1,7 +1,7 @@
 # syntax=docker/dockerfile:1
 
 # The Changeport Kafka agent (cmd/agent), which runs next to every customer's
-# Kafka cluster. Build it from the repository root with make agent-image.
+# Kafka cluster. Build it from the repository root with just agent-image.
 
 # The Go toolchain matching go.mod, pinned by the digest of its index. The
 # binary is cross-compiled on the build machine's own platform.

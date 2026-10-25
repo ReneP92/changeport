@@ -8,5 +8,5 @@ Per-customer resources are not managed here; the Go provisioning service
 creates them through the Kubernetes API.
 
 ```bash
-make tf-fmt tf-validate
+just tf-fmt tf-validate
 ```

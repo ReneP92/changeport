@@ -2,7 +2,7 @@
 // customers' Kafka clusters on kind (internal/hostgateway). hack/lib.sh runs
 // it as a container on the kind network, with its ports published on the
 // host's loopback address: Kafka on 9094, and DNS for the Kafka domain on
-// 15353, which the host's resolver uses after make host-dns.
+// 15353, which the host's resolver uses after just host-dns.
 package main
 
 import (

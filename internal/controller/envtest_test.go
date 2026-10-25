@@ -84,9 +84,9 @@ func requireEnv(t *testing.T) {
 		return
 	}
 	if os.Getenv("CI") != "" {
-		t.Fatal("KUBEBUILDER_ASSETS is not set; run the tests with make test")
+		t.Fatal("KUBEBUILDER_ASSETS is not set; run the tests with just test")
 	}
-	t.Skip("envtest is not installed; run the tests with make test")
+	t.Skip("envtest is not installed; run the tests with just test")
 }
 
 func testScheme(t *testing.T) *runtime.Scheme {

@@ -70,11 +70,11 @@ export const testOrganizationPattern = /^E2E e2e[a-z0-9]+ [A-Z]$/;
 /** Labels the customers the tests create, by run. */
 export const runLabel = "changeport.io/e2e-run";
 
-/** Reads a setting from the environment, which make ui-e2e fills. */
+/** Reads a setting from the environment, which just ui-e2e fills. */
 export function env(name: string): string {
   const value = process.env[name];
   if (!value) {
-    throw new Error(`${name} is not set; run the signed-in tests with make ui-e2e`);
+    throw new Error(`${name} is not set; run the signed-in tests with just ui-e2e`);
   }
   return value;
 }

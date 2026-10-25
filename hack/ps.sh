@@ -19,7 +19,7 @@ printf 'Kind cluster %s: nodes\n' "$CLUSTER_NAME"
 nodes=$(docker ps -a --filter "label=io.x-k8s.kind.cluster=$CLUSTER_NAME" \
   --format '{{.Names}}\t{{.Label "io.x-k8s.kind.role"}}\t{{.Status}}' | sort)
 if [[ -z $nodes ]]; then
-  echo "  none; make dev-up creates the cluster"
+  echo "  none; just dev-up creates the cluster"
 else
   { printf 'NODE\tROLE\tSTATUS\n' && printf '%s\n' "$nodes"; } | table
 fi

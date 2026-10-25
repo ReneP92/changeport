@@ -30,6 +30,6 @@ if [[ -n $DEMO_CUSTOMER ]]; then
   log "Provisioning customer $DEMO_CUSTOMER"
   provisioner provision -customer "$DEMO_CUSTOMER" -wait -timeout 10m
   "$ROOT/hack/smoke-test.sh" "$DEMO_CUSTOMER"
-  log "Ready. Connect to customer $DEMO_CUSTOMER's Kafka cluster with: make kafka-client CUSTOMER=$DEMO_CUSTOMER"
+  log "Ready. Connect to customer $DEMO_CUSTOMER's Kafka cluster with: just kafka-client $DEMO_CUSTOMER"
 fi
 log "The console is at http://localhost:$CONSOLE_PORT"

@@ -44,5 +44,5 @@ formatters:
         - github.com/ReneP92/changeport
   exclusions:
     # Generated code stays exactly as its generator wrote it, so that CI can
-    # check it is up to date (make generate).
+    # check it is up to date (just generate).
     generated: strict

@@ -87,7 +87,7 @@ func (k *KubeCluster) List(ctx context.Context, gvk schema.GroupVersionKind, nam
 func (k *KubeCluster) resource(gvk schema.GroupVersionKind, namespace string) (dynamic.ResourceInterface, error) {
 	mapping, err := k.mapper.RESTMapping(gvk.GroupKind(), gvk.Version)
 	if meta.IsNoMatchError(err) {
-		return nil, fmt.Errorf("the cluster does not serve %s; is the Strimzi operator installed (make dev-up)? %w", gvk, err)
+		return nil, fmt.Errorf("the cluster does not serve %s; is the Strimzi operator installed (just dev-up)? %w", gvk, err)
 	}
 	if err != nil {
 		return nil, fmt.Errorf("map %s to a resource: %w", gvk, err)

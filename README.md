@@ -83,8 +83,8 @@ for progress.
 | --- | --- |
 | `cmd/console`, `internal/console` | The console: the API of `api/openapi.yaml` behind Clerk sign-in, serving the web app built into its image |
 | `cmd/provisioner` | Creates and removes customer Kafka clusters: a CLI, and the controller that reconciles `Customer` resources |
-| `api/openapi.yaml` | The console's API; `make generate` writes its Go server and TypeScript client from it |
-| `api/v1alpha1` | The `Customer` resource (`customers.changeport.io`); `make generate` writes its CRD into `deploy/base/provisioner` |
+| `api/openapi.yaml` | The console's API; `just generate` writes its Go server and TypeScript client from it |
+| `api/v1alpha1` | The `Customer` resource (`customers.changeport.io`); `just generate` writes its CRD into `deploy/base/provisioner` |
 | `internal/controller` | The `Customer` controller, which provisions, reports status and deprovisions through a finalizer |
 | `internal/clusters` | The console's Kafka admin clients, one per customer cluster, connected on demand with certificates that follow Strimzi's renewals |
 | `internal/metrics` | The console's named VictoriaMetrics queries, which always select the customer's tenant |
@@ -94,8 +94,8 @@ for progress.
 | `terraform` | Base infrastructure per environment: VPC, EKS, S3, IAM (empty modules, nothing applied) |
 | `deploy` | Kubernetes manifests: the kind cluster, and the platform components (Strimzi, cert-manager) with one overlay per environment |
 | `images` | Container images we build: Strimzi's Kafka image plus the tiered storage plugin, the Kafka agent, the provisioner and the console |
-| `hack` | Local development scripts behind the Makefile |
-| `tools` | Go module pinning the tools (kind, golangci-lint); `make tools` builds them into `bin/` |
+| `hack` | Local development scripts behind the justfile |
+| `tools` | Go module pinning the tools (kind, golangci-lint); `just tools` builds them into `bin/` |
 
 ## Local development
 
@@ -104,15 +104,17 @@ template by the provisioning service. Locally this runs on
 [kind](https://kind.sigs.k8s.io/) with the
 [Strimzi](https://strimzi.io/) operator, mirroring the EKS layout.
 
-Prerequisites: Docker (give it at least 8 GB of memory; the failover test
-peaks at about 5 GB), Go 1.26 and make.
+Prerequisites: Docker (give it at least 12 GB of memory: with 8 GB the full
+end-to-end suite runs out, as the e2e customers' brokers come and go next to
+the demo's), Go 1.26 and [just](https://just.systems/) (`brew install just`),
+which runs every task here; `just` alone lists them.
 The scripts download a pinned, checksum-verified kubectl into `bin/` and the
 upstream install files pinned in `deploy/upstream-files.txt` (Strimzi,
 cert-manager) into `deploy/base/*/upstream/`, and build kind from
 `tools/go.mod`.
 
 ```bash
-make dev-up
+just dev-up
 ```
 
 This builds the Kafka broker image (`images/kafka`, Strimzi's image plus the
@@ -127,7 +129,7 @@ storage, and VictoriaMetrics for metrics), provisions the `demo` customer
 (namespace `customer-demo`, a single-node KRaft cluster on Kafka 4.3.1) with
 the provisioning service, and runs the smoke test. It is safe to run again. If
 the cluster was created from an older `deploy/kind/cluster.yaml`, it says so;
-recreate it with `make dev-down dev-up`.
+recreate it with `just dev-down dev-up`.
 
 Customers connect the way they will on EKS: to public names such as
 `bootstrap.demo.kafka.changeport.test:9094`, over TLS with SCRAM, as their
@@ -143,7 +145,7 @@ To work with a customer's cluster yourself, open a shell with the Kafka tools
 and the customer's `client.properties`:
 
 ```bash
-make kafka-client CUSTOMER=demo
+just kafka-client demo
 ```
 
 `go run ./cmd/provisioner credentials -context kind-changeport -customer demo`
@@ -155,27 +157,27 @@ smoke tests both clusters, runs the metrics, deletion protection, agent, lag,
 console, tiered storage and host access tests, and removes the second
 customer again; its failover suite freezes a zone and drains a broker of a
 three-zone customer. CI runs the two on separate clusters at once; locally
-`make e2e` runs both, one after the other:
+`just e2e` runs both, one after the other:
 
 ```bash
-make provision CUSTOMER=acme
+just provision acme
 ```
 
 ```bash
-make e2e
+just e2e
 ```
 
 To run tests quickly while working on one part, run one suite, or one test
-against the running cluster, such as the lag test; most tests have a make
-target of their own (`make help` lists them). For the web app, `make web-dev`
+against the running cluster, such as the lag test; most tests have a
+recipe of their own (`just` lists them). For the web app, `just web-dev`
 serves it with hot reload against the console on kind:
 
 ```bash
-make e2e SUITE=core
+just e2e core
 ```
 
 ```bash
-make lag-test
+just lag-test
 ```
 
 The metrics test checks that VictoriaMetrics scrapes every customer's brokers
@@ -183,7 +185,7 @@ and that every series carries its tenant and the other labels in
 [docs/metrics-labels.md](docs/metrics-labels.md):
 
 ```bash
-make metrics-test
+just metrics-test
 ```
 
 Kafka has no broker-wide default for tiered storage, so the Kafka agent
@@ -192,14 +194,14 @@ that can use it, leaving compacted topics and a customer's explicit
 `remote.storage.enable=false` alone. The agent test checks that:
 
 ```bash
-make agent-test
+just agent-test
 ```
 
 The lag test produces messages at a known moment and checks the consumer lag
 in seconds the agent reports, for a classic and a KIP-848 consumer group:
 
 ```bash
-make lag-test
+just lag-test
 ```
 
 The console reaches each customer's cluster as the Kafka user
@@ -210,7 +212,7 @@ user may create, describe and delete topics and list consumer groups, but
 producing and consuming are refused:
 
 ```bash
-make console-access-test
+just console-access-test
 ```
 
 The tiered storage test offloads a topic with small segments to the local
@@ -218,7 +220,7 @@ object store (SeaweedFS, standing in for S3), checks that the brokers delete
 their local copies, and reads every message back from offset 0:
 
 ```bash
-make tiered-storage-test
+just tiered-storage-test
 ```
 
 The failover test provisions a three-zone customer with the `dev-ha` profile
@@ -230,21 +232,21 @@ message must arrive exactly once, and the cluster must recover with all
 partitions in sync:
 
 ```bash
-make failover-test
+just failover-test
 ```
 
 Other targets:
 
 ```bash
-make smoke-test CUSTOMER=acme
+just smoke-test acme
 ```
 
 ```bash
-make deprovision CUSTOMER=acme
+just deprovision acme
 ```
 
 ```bash
-make dev-down
+just dev-down
 ```
 
 The scripts only ever use the `kind-changeport` kubectl context. To look
@@ -271,7 +273,7 @@ its cluster. It applies the template in order without blocking, reports how
 far the cluster is in the conditions `CertificateIssued`, `KafkaReady`,
 `UsersReady`, `AgentAvailable` and `Ready`, and on deletion removes the
 cluster before the `Customer` goes, unless deletion protection is on.
-`make provision` and `make deprovision` create and delete Customers and wait
+`just provision` and `just deprovision` create and delete Customers and wait
 for the controller; `render` and `credentials` work without it.
 
 ```bash
@@ -296,25 +298,25 @@ lists them by role: the cluster's nodes, the customers' load balancers (one
 per broker and one per bootstrap address), and the helpers:
 
 ```bash
-make ps
+just ps
 ```
 
 After changing the provisioner, rebuild it and roll it out on kind:
 
 ```bash
-make provisioner-reload
+just provisioner-reload
 ```
 
 ### Console
 
-`make dev-up` also runs the console at <http://localhost:8088>. Customers
+`just dev-up` also runs the console at <http://localhost:8088>. Customers
 sign in with Clerk, where each Clerk organization is a customer and members
 of the "Changeport staff" organization are operators. Give it the keys of
 your Clerk development instance in a `.env` file, which git ignores:
 
 ```bash
 cp .env.sample .env  # then fill it in
-make console-config
+just console-config
 ```
 
 Without them the console fails closed: it says it is not configured and
@@ -326,11 +328,11 @@ To work on the web app with hot reload, run the Vite dev server, which sends
 changing the console's Go code, rebuild it and roll it out:
 
 ```bash
-make web-dev
+just web-dev
 ```
 
 ```bash
-make console-reload
+just console-reload
 ```
 
 A customer whose cluster is ready sees its overview: how to connect, with a
@@ -369,7 +371,7 @@ deletion protection off.
 
 Applications on your machine connect to a customer's cluster with the
 `client.properties` the console hands out, unchanged, as they would to
-Changeport in the cloud. `make dev-up` starts a host gateway: a container on
+Changeport in the cloud. `just dev-up` starts a host gateway: a container on
 the kind network with Kafka's port 9094 published on `127.0.0.1`, which
 reads the name each client asks for in its TLS handshake and forwards the
 connection, still encrypted end to end, to that broker's load balancer. It
@@ -379,14 +381,14 @@ covers every customer to come; on Linux the current customers' names in
 `/etc/hosts`); it asks for your password:
 
 ```bash
-make host-dns
+just host-dns
 ```
 
 The host access test produces and consumes as an application on your
 machine would:
 
 ```bash
-make host-access-test CUSTOMER=demo
+just host-access-test demo
 ```
 
 Port 9094 of `127.0.0.1` must be free for the gateway, so stop any local
@@ -406,7 +408,7 @@ session, and in Chromium either the "not configured" page or Clerk's sign-in
 form:
 
 ```bash
-make console-test
+just console-test
 ```
 
 The signed-in tests use the Clerk instance of `.env`. A setup creates this
@@ -427,7 +429,7 @@ teardown removes the run's users, organizations and customers, and the next
 run removes what a crashed run left behind after an hour:
 
 ```bash
-make ui-e2e
+just ui-e2e
 ```
 
 The same setup also runs a tour of every screen on a desktop and a phone,
@@ -436,34 +438,34 @@ with a few minutes of traffic, and deprovisions it again. It writes the
 screenshots that [docs/console.md](docs/console.md) shows:
 
 ```bash
-make ui-screenshots
+just ui-screenshots
 ```
 
 ## Checks
 
 ```bash
-make lint test
-make web-check web-e2e
-make check-text
+just lint test
+just web-check web-e2e
+just check-text
 ```
 
 The controller's tests run against a real API server with the Changeport,
-Strimzi and cert-manager CRDs (envtest), which `make test` downloads into
-`bin/`. After changing `api/`, run `make generate`; CI fails on stale
+Strimzi and cert-manager CRDs (envtest), which `just test` downloads into
+`bin/`. After changing `api/`, run `just generate`; CI fails on stale
 generated code.
 
 CI runs the same Go lint and tests, the web app's checks and Playwright
-tests, `make tf-fmt tf-validate`, `make shellcheck`, and `make check-text`,
+tests, `just tf-fmt tf-validate`, `just shellcheck`, and `just check-text`,
 which fails on any em dash in the repository, and on every pull request the
-whole end-to-end suite on a fresh kind cluster: `make dev-up e2e
+whole end-to-end suite on a fresh kind cluster: `just dev-up e2e
 platform-check`, where `platform-check` also server-side dry-runs the EKS
 overlays. When that job fails, it uploads
 the output of `hack/diagnostics.sh` (pods, events, resources and logs) as the
-`e2e-diagnostics` artifact. A second kind job runs `make ui-e2e` against the
+`e2e-diagnostics` artifact. A second kind job runs `just ui-e2e` against the
 Clerk development instance, with the secret `CLERK_SECRET_KEY` and the
 variables `CLERK_PUBLISHABLE_KEY` and `CHANGEPORT_STAFF_ORG_ID`; where the
 secret is not available, such as in pull requests from forks, it skips with
 a notice. CI also builds the Kafka, agent, provisioner and console images
-for amd64 and arm64 and runs `make kafka-image-test`, which starts a broker
+for amd64 and arm64 and runs `just kafka-image-test`, which starts a broker
 from the Kafka image with tiered storage configured. Run
-`make help` for every target.
+`just` for every recipe.
