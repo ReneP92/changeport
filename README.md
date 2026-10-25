@@ -290,6 +290,15 @@ has the procedures:
 go run ./cmd/provisioner unprotect -customer acme -confirm acme
 ```
 
+Docker Desktop lists the local setup's containers without grouping them, as
+kind and cloud-provider-kind create theirs without a Compose project. This
+lists them by role: the cluster's nodes, the customers' load balancers (one
+per broker and one per bootstrap address), and the helpers:
+
+```bash
+make ps
+```
+
 After changing the provisioner, rebuild it and roll it out on kind:
 
 ```bash
