@@ -1,5 +1,11 @@
 # Build output and pinned tool downloads
 /bin/
+# What go build ./cmd/<name> leaves in the repository root
+/agent
+/console
+/devuser
+/hostgateway
+/provisioner
 
 # Downloaded and checksum-verified from deploy/upstream-files.txt
 /deploy/base/*/upstream/

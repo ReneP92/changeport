@@ -4,8 +4,9 @@
 # platform components (Strimzi, cert-manager, the provisioning controller,
 # the console) and gives the console its Clerk keys from .env, creates the
 # "demo" Customer, which the controller provisions, and runs the smoke test
-# against it. DEMO_CUSTOMER= (empty) leaves the demo out, for runs that bring
-# customers of their own. Safe to run again.
+# against it, and with .env sets up your dev user for the console
+# (hack/dev-user.sh). DEMO_CUSTOMER= (empty) leaves the demo out, for runs that
+# bring customers of their own. Safe to run again.
 # shellcheck source=lib.sh
 source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 
@@ -32,4 +33,5 @@ if [[ -n $DEMO_CUSTOMER ]]; then
   "$ROOT/hack/smoke-test.sh" "$DEMO_CUSTOMER"
   log "Ready. Connect to customer $DEMO_CUSTOMER's Kafka cluster with: just kafka-client $DEMO_CUSTOMER"
 fi
+DEMO_CUSTOMER=$DEMO_CUSTOMER "$ROOT/hack/dev-user.sh"
 log "The console is at http://localhost:$CONSOLE_PORT"

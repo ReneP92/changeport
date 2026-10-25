@@ -109,6 +109,11 @@ console-image:
 console-reload:
     @source hack/lib.sh && build_console_image && ensure_kind && ensure_kubectl && ensure_kind_cluster && hack/platform-apply.sh kind && hack/console-config.sh
 
+# Set up your Clerk test user: an operator, and the demo customer's admin (dev-up does it too)
+[group('Local development (kind + Strimzi)')]
+dev-user:
+    hack/dev-user.sh
+
 # Give the console on kind its Clerk keys from .env (see .env.sample)
 [group('Images')]
 console-config:
