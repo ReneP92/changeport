@@ -331,13 +331,34 @@ ensure_kind_cluster() {
   done
 }
 
-# Loads images from the host's Docker into the kind workers, quietly unless it
-# fails. Usage: kind_load <comma-separated workers> <image>...
+# Loads images from the host's Docker into the kind workers that lack them,
+# quietly unless it fails. With Docker's containerd image store (Docker 29 on
+# Linux), a pulled multi-platform image keeps only this platform's layers but
+# kind load docker-image exports its whole index, which the workers' import
+# rejects with "content digest ... not found" (kubernetes-sigs/kind#3795). So
+# the images are saved for the workers' platform only and loaded as an
+# archive, which kind imports on every node it is given; images every worker
+# already has are left out.
+# Usage: kind_load <comma-separated workers> <image>...
 kind_load() {
-  local output
-  if ! output=$(kind load docker-image --name "$CLUSTER_NAME" --nodes "$1" "${@:2}" 2>&1); then
+  local workers=$1 image node archive output platform missing=()
+  for image in "${@:2}"; do
+    for node in ${workers//,/ }; do
+      if ! docker exec "$node" crictl inspecti -q "$image" >/dev/null 2>&1; then
+        missing+=("$image")
+        break
+      fi
+    done
+  done
+  [[ ${#missing[@]} -gt 0 ]] || return 0
+  platform=linux/$(docker version -f '{{.Server.Arch}}')
+  archive=$(mktemp "${TMPDIR:-/tmp}/kind-images.XXXXXX")
+  if ! output=$({ docker image save --platform "$platform" -o "$archive" "${missing[@]}" &&
+    kind load image-archive --name "$CLUSTER_NAME" --nodes "$workers" "$archive"; } 2>&1); then
+    rm -f "$archive"
     die "could not load images into the kind workers:"$'\n'"$output"
   fi
+  rm -f "$archive"
 }
 
 # Removes the content tags of image's earlier builds from the kind workers,
