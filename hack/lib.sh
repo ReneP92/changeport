@@ -40,6 +40,14 @@ CONSOLE_PORT=8088
 CLOUD_PROVIDER_KIND_IMAGE=registry.k8s.io/cloud-provider-kind/cloud-controller-manager:v0.12.0@sha256:1b97632e5dfec8f83c7e970cf18cedb9e6b707e272011d712cabf6ab59d323c9
 CLOUD_PROVIDER_KIND_CONTAINER=changeport-cloud-provider-kind
 
+# The host gateway (cmd/hostgateway) lets Kafka clients on this machine reach
+# the customers' clusters: it runs on the kind network with Kafka's port and
+# its DNS published on the loopback address. HOST_DNS_PORT is what
+# make host-dns points the host's resolver at for changeport.test.
+HOST_GATEWAY_CONTAINER=changeport-host-gateway
+HOST_KAFKA_PORT=9094
+HOST_DNS_PORT=15353
+
 # Every other image the platform components and customer clusters run on kind,
 # matching the versions in deploy/upstream-files.txt and
 # internal/provisioning.KafkaVersion. They are pulled once into the host's
@@ -332,6 +340,22 @@ ensure_cloud_provider_kind() {
   log "Starting cloud-provider-kind"
   docker run -d --name "$CLOUD_PROVIDER_KIND_CONTAINER" --restart unless-stopped --network kind \
     -v /var/run/docker.sock:/var/run/docker.sock "$CLOUD_PROVIDER_KIND_IMAGE" --gateway-channel disabled >/dev/null
+}
+
+# Starts the host gateway from the provisioner image, anew, so that it runs
+# the latest build with the current cluster's credentials. It reads the load
+# balancers' Services as the kind cluster's admin, on the kind network.
+ensure_host_gateway() {
+  local kubeconfig="$BIN_DIR/host-gateway.kubeconfig"
+  kind get kubeconfig --internal --name "$CLUSTER_NAME" >"$kubeconfig"
+  chmod 600 "$kubeconfig"
+  docker rm -f "$HOST_GATEWAY_CONTAINER" >/dev/null 2>&1 || true
+  log "Starting the host gateway on 127.0.0.1:$HOST_KAFKA_PORT"
+  docker run -d --name "$HOST_GATEWAY_CONTAINER" --restart unless-stopped --network kind \
+    --user "$(id -u):$(id -g)" -v "$kubeconfig:/kubeconfig:ro" -e KUBECONFIG=/kubeconfig \
+    -p "127.0.0.1:$HOST_KAFKA_PORT:9094" -p "127.0.0.1:$HOST_DNS_PORT:15353/udp" \
+    --entrypoint /hostgateway "$(content_tag "$PROVISIONER_IMAGE")" >/dev/null ||
+    die "could not start the host gateway; is port $HOST_KAFKA_PORT of 127.0.0.1 taken, by a local Kafka perhaps?"
 }
 
 # Prints "<public name> <address>" for each load balancer of a customer's

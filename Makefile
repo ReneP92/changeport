@@ -115,7 +115,7 @@ ui-screenshots: ## Capture every screen of the console on kind into docs/screens
 
 .PHONY: provisioner-reload
 provisioner-reload: ## Rebuild the provisioner and roll it out on kind
-	@bash -c 'source hack/lib.sh && build_provisioner_image && ensure_kind && ensure_kubectl && ensure_kind_cluster && hack/platform-apply.sh kind'
+	@bash -c 'source hack/lib.sh && build_provisioner_image && ensure_kind && ensure_kubectl && ensure_kind_cluster && ensure_host_gateway && hack/platform-apply.sh kind'
 
 .PHONY: kafka-image-test
 kafka-image-test: ## Start a broker from the Kafka image with tiered storage configured (IMAGE=changeport/kafka:local)
@@ -166,6 +166,15 @@ console-access-test: ## Check that the console may manage CUSTOMER's topics (def
 tiered-storage-test: CUSTOMER ?= demo
 tiered-storage-test: ## Offload a topic of CUSTOMER (default demo) to the object store and read it back from offset 0
 	hack/tiered-storage-test.sh $(CUSTOMER)
+
+.PHONY: host-dns
+host-dns: ## Point this machine's DNS for the customers' Kafka names at the host gateway (asks for sudo)
+	hack/host-dns.sh
+
+.PHONY: host-access-test
+host-access-test: CUSTOMER ?= demo
+host-access-test: ## Produce to and consume from CUSTOMER's cluster (default demo) as an application on this machine
+	hack/host-access-test.sh $(CUSTOMER)
 
 .PHONY: deletion-protection-test
 deletion-protection-test: ## Check that a protected CUSTOMER cannot be deleted, then deprovision it and purge its data
