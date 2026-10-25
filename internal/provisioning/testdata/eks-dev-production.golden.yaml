@@ -215,7 +215,10 @@ spec:
     # tenant label (docs/metrics-labels.md). Only what observability and
     # usage metering need, to keep the number of series per broker low. The
     # patterns match names before Prometheus appends _total to counters; JVM
-    # and process metrics are always exported and trimmed when scraped.
+    # and process metrics are always exported and trimmed when scraped. The
+    # metrics clients push (KIP-714) come out of the same reporter as
+    # clients_* series, which the allowList does not apply to; the Kafka
+    # agent sets up which ones and how they are labelled.
     metricsConfig:
       type: strimziMetricsReporter
       values:
@@ -314,6 +317,8 @@ spec:
 # The Kafka agent's user on the internal listener: it reads the cluster,
 # keeps topic settings such as tiered storage in place, and reads consumer
 # groups' committed offsets to measure their lag. It cannot read messages.
+# It also keeps client telemetry in place, a client metrics subscription and
+# a dynamic broker config, both of which Kafka authorizes as cluster configs.
 apiVersion: kafka.strimzi.io/v1
 kind: KafkaUser
 metadata:
@@ -341,7 +346,7 @@ spec:
         operations: [Describe]
       - resource:
           type: cluster
-        operations: [Describe, DescribeConfigs]
+        operations: [Describe, DescribeConfigs, AlterConfigs]
 ---
 # The console's user on the internal listener: it manages the customer's
 # topics within the platform's guardrails, reads cluster metadata and which

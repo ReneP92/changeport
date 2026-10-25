@@ -1,8 +1,9 @@
 // Package agent keeps the settings the platform owns in place on a customer's
-// Kafka cluster. For now it turns on tiered storage for every topic that can
-// use it: Kafka has no broker-wide default for remote.storage.enable, so
-// topics customers create would otherwise keep all their history on the
-// brokers' disks.
+// Kafka cluster. It turns on tiered storage for every topic that can use it:
+// Kafka has no broker-wide default for remote.storage.enable, so topics
+// customers create would otherwise keep all their history on the brokers'
+// disks. It keeps client telemetry (KIP-714) in place (telemetry.go), and
+// measures consumer lag in seconds (lag.go).
 package agent
 
 import (

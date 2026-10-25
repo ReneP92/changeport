@@ -241,6 +241,11 @@ jobs:
       - uses: extractions/setup-just@53165ef7e734c5c07cb06b3c8e7b647c5aa16db3 # v4
         with:
           just-version: 1.59.0
+      # The image's last stage runs one command (removing the jars it
+      # replaces), which needs emulation to build for arm64 here.
+      - uses: docker/setup-qemu-action@99012661954931238ded8c8b007157a8430204e1 # v4.4.0
+        with:
+          platforms: arm64
       # BuildKit's container driver builds for several platforms at once, with
       # the layers cached in GitHub Actions' cache.
       - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1

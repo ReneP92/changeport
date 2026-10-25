@@ -153,8 +153,10 @@ func TestRenderPlatformUsersCannotTouchMessages(t *testing.T) {
 				switch operation {
 				case "Read", "Write", "All", "IdempotentWrite", "Alter", "AlterConfigs":
 					resource, _, _ := unstructured.NestedString(acl, "resource", "type")
-					if operation == "AlterConfigs" && obj.GetName() == AgentUser && resource == "topic" {
-						// The agent turns on tiered storage, a topic setting.
+					if operation == "AlterConfigs" && obj.GetName() == AgentUser && (resource == "topic" || resource == "cluster") {
+						// The agent turns on tiered storage, a topic setting,
+						// and keeps the client metrics subscription in place,
+						// which Kafka authorizes as a cluster setting.
 						continue
 					}
 					t.Errorf("KafkaUser %s may %s %ss", obj.GetName(), operation, resource)

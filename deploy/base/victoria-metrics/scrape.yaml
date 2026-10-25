@@ -10,7 +10,7 @@ scrape_configs:
   - job_name: kafka
     kubernetes_sd_configs:
       - role: pod
-    relabel_configs:
+    relabel_configs: &kafka-pods
       - source_labels: [__meta_kubernetes_pod_label_strimzi_io_kind, __meta_kubernetes_pod_label_strimzi_io_component_type, __meta_kubernetes_pod_container_port_number]
         regex: Kafka;kafka;9404
         action: keep
@@ -31,12 +31,28 @@ scrape_configs:
       - source_labels: [__meta_kubernetes_pod_name]
         target_label: instance
     metric_relabel_configs:
+      # The metrics clients push, which the kafka-clients job takes.
+      - if: '{__name__=~"clients_.*"}'
+        action: drop
       # The reporter always exports JVM and process metrics, whatever its
       # allowList says; keep memory, garbage collection, threads and CPU.
       - if: '{__name__=~"jvm_.*|process_.*", __name__!~"jvm_memory_(used|max)_bytes|jvm_gc_collection_seconds_(count|sum)|jvm_threads_current|process_cpu_seconds_total|process_open_fds"}'
         action: drop
       # Request latency only for producing and fetching.
       - if: '{__name__=~"kafka_network_requestmetrics_totaltimems.*", request!~"Produce|Fetch|FetchConsumer|FetchFollower"}'
+        action: drop
+  # The metrics customers' clients push to the same brokers (KIP-714), which
+  # the brokers' metrics reporter exposes as clients_* series. Customers
+  # decide how many clients they run, so this job has its own limit on the
+  # unique series per broker in 24 hours: past it, new client series are
+  # dropped and the broker's own series are unaffected.
+  - job_name: kafka-clients
+    series_limit: 2000
+    kubernetes_sd_configs:
+      - role: pod
+    relabel_configs: *kafka-pods
+    metric_relabel_configs:
+      - if: '{__name__!~"clients_.*"}'
         action: drop
   # The Kafka agent next to every customer's cluster.
   - job_name: kafka-agent

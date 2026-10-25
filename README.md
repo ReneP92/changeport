@@ -88,12 +88,12 @@ for progress.
 | `internal/controller` | The `Customer` controller, which provisions, reports status and deprovisions through a finalizer |
 | `internal/clusters` | The console's Kafka admin clients, one per customer cluster, connected on demand with certificates that follow Strimzi's renewals |
 | `internal/metrics` | The console's named VictoriaMetrics queries, which always select the customer's tenant |
-| `cmd/agent` | The Kafka agent next to every customer's cluster: turns on tiered storage for every topic that can use it |
+| `cmd/agent` | The Kafka agent next to every customer's cluster: turns on tiered storage for every topic that can use it, keeps the client metrics subscription in place and measures consumer lag in seconds |
 | `internal/provisioning` | The per-customer template and the code that applies it through the Kubernetes API |
 | `web` | The console's React app, built and tested with Bun (see [web/README.md](web/README.md)) |
 | `terraform` | Base infrastructure per environment: VPC, EKS, S3, IAM (empty modules, nothing applied) |
 | `deploy` | Kubernetes manifests: the kind cluster, and the platform components (Strimzi, cert-manager) with one overlay per environment |
-| `images` | Container images we build: Strimzi's Kafka image plus the tiered storage plugin, the Kafka agent, the provisioner and the console |
+| `images` | Container images we build: Strimzi's Kafka image plus the tiered storage plugin and client telemetry, the Kafka agent, the provisioner and the console |
 | `hack` | Local development scripts behind the justfile |
 | `tools` | Go module pinning the tools (kind, golangci-lint); `just tools` builds them into `bin/` |
 
@@ -118,7 +118,8 @@ just dev-up
 ```
 
 This builds the Kafka broker image (`images/kafka`, Strimzi's image plus the
-Aiven tiered storage plugin; the first build takes about 10 minutes) and
+Aiven tiered storage plugin and Strimzi's metrics reporter with client
+telemetry; the first build takes about 10 minutes) and
 creates the `changeport` kind cluster on Kubernetes 1.37: a control plane and
 three workers, one per zone like the three availability zones on EKS, with
 [cloud-provider-kind](https://github.com/kubernetes-sigs/cloud-provider-kind)
@@ -154,10 +155,10 @@ prints the same `client.properties`.
 Provision more customers from the same template, or run the end-to-end
 check. Its core suite provisions a second customer, protected from deletion,
 smoke tests both clusters, runs the metrics, deletion protection, agent, lag,
-console, tiered storage and host access tests, and removes the second
-customer again; its failover suite freezes a zone and drains a broker of a
-three-zone customer. CI runs the two on separate clusters at once; locally
-`just e2e` runs both, one after the other:
+client telemetry, console, tiered storage and host access tests, and removes
+the second customer again; its failover suite freezes a zone and drains a
+broker of a three-zone customer. CI runs the two on separate clusters at once;
+locally `just e2e` runs both, one after the other:
 
 ```bash
 just provision acme
@@ -202,6 +203,16 @@ in seconds the agent reports, for a classic and a KIP-848 consumer group:
 
 ```bash
 just lag-test
+```
+
+Clients push their own metrics to the brokers (KIP-714), and the agent keeps
+the subscription that says which ones in place. The client telemetry test
+runs a Java producer as the demo customer's admin and checks that its counts
+reach VictoriaMetrics with the tenant, its Kafka user and client ID
+(docs/metrics-labels.md):
+
+```bash
+just client-telemetry-test
 ```
 
 The console reaches each customer's cluster as the Kafka user
