@@ -269,7 +269,7 @@ func (s *Server) serveUI() http.Handler {
 		}
 		index, err := fs.ReadFile(s.ui, "index.html")
 		if err != nil {
-			http.Error(w, "the web app is not built into this console; run make web-dev", http.StatusNotFound)
+			http.Error(w, "the web app is not built into this console; run just web-dev", http.StatusNotFound)
 			return
 		}
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")

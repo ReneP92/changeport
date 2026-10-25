@@ -3,7 +3,7 @@
 # The Changeport Kafka broker image: Strimzi's Kafka image plus the Aiven
 # remote storage manager for tiered storage on S3, installed into
 # /opt/kafka/plugins/tiered-storage/ (the classPath of the template's
-# tieredStorage). Build it with make kafka-image.
+# tieredStorage). Build it with just kafka-image.
 
 # Strimzi 1.3.0 with Kafka 4.3.1 (internal/provisioning.KafkaVersion),
 # pinned by the digest of its multi-architecture index.

@@ -75,7 +75,7 @@ aws s3 rm s3://changeport-prod-tiered-storage/customer-c-7f3k2q/ --recursive
 ```
 
 On kind, the volumes went with the namespace, and the object store is
-SeaweedFS; the deletion protection test (`make deletion-protection-test`)
+SeaweedFS; the deletion protection test (`just deletion-protection-test`)
 runs this purge:
 
 ```bash

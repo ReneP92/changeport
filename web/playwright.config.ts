@@ -2,7 +2,7 @@ import { defineConfig, devices, type Project } from "@playwright/test";
 
 // End-to-end tests. They run against the built app served by vite preview;
 // PLAYWRIGHT_BASE_URL points them at a running console instead, such as the
-// one on kind. With a Clerk secret key too (make ui-e2e), the signed-in tests
+// one on kind. With a Clerk secret key too (just ui-e2e), the signed-in tests
 // run as well: a setup project creates this run's Clerk test users,
 // organizations and customers, and a teardown project removes them.
 const baseURL = process.env.PLAYWRIGHT_BASE_URL ?? "http://localhost:4173";
@@ -10,7 +10,7 @@ const ci = Boolean(process.env.CI);
 const signedIn = Boolean(process.env.PLAYWRIGHT_BASE_URL && process.env.CLERK_SECRET_KEY);
 const chrome = { ...devices["Desktop Chrome"] };
 
-// With CHANGEPORT_SCREENSHOTS_DIR (make ui-screenshots), the signed-in setup
+// With CHANGEPORT_SCREENSHOTS_DIR (just ui-screenshots), the signed-in setup
 // serves a tour of every screen instead of the tests.
 const screenshots = Boolean(process.env.CHANGEPORT_SCREENSHOTS_DIR);
 

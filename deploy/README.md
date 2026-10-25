@@ -12,7 +12,7 @@ Kubernetes manifests that are not generated per customer.
     the Strimzi operator.
   - `provisioner/`: the provisioning controller in the `changeport`
     namespace, with its RBAC, and the `Customer` CRD
-    (`customers.changeport.io`), which `make generate` writes from
+    (`customers.changeport.io`), which `just generate` writes from
     `api/v1alpha1`. On EKS it stays at zero replicas until its image is in
     ECR (#18). On kind, `hack/platform-apply.sh` applies the kind overlay
     through the git-ignored `overlays/kind-local`, which points the
@@ -34,15 +34,15 @@ Kubernetes manifests that are not generated per customer.
 Apply an environment's components, or validate every overlay:
 
 ```bash
-make platform-apply ENV=kind
+just platform-apply kind
 ```
 
 ```bash
-make platform-apply ENV=prod CONFIRM=prod
+CONFIRM=prod just platform-apply prod
 ```
 
 ```bash
-make platform-check
+just platform-check
 ```
 
 `ENV=dev` and `ENV=prod` use the kubectl contexts `changeport-dev` and

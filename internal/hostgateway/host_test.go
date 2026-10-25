@@ -21,7 +21,7 @@ import (
 // TestProduceAndConsumeFromTheHost connects to a customer's cluster on kind
 // as an application on the developer's machine would, with the
 // client.properties of CHANGEPORT_CLIENT_PROPERTIES, through the host
-// gateway and the host's DNS (make host-dns). hack/host-access-test.sh runs
+// gateway and the host's DNS (just host-dns). hack/host-access-test.sh runs
 // it; without the variable it is skipped.
 func TestProduceAndConsumeFromTheHost(t *testing.T) {
 	path := os.Getenv("CHANGEPORT_CLIENT_PROPERTIES")

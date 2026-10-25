@@ -16,7 +16,7 @@
 # host access test produces and consumes as an application on this machine.
 # The failover suite freezes a zone and drains a broker of a three-zone
 # customer under load. SUITE=core or SUITE=failover runs one (default: both,
-# one after the other). Set KEEP=1 to keep the customers. Run make dev-up
+# one after the other). Set KEEP=1 to keep the customers. Run just dev-up
 # first.
 # shellcheck source=lib.sh
 source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
@@ -26,7 +26,7 @@ DEMO_CUSTOMER=${DEMO_CUSTOMER:-demo}
 
 ensure_kind
 ensure_kubectl
-cluster_exists || die "kind cluster $CLUSTER_NAME does not exist; run make dev-up first"
+cluster_exists || die "kind cluster $CLUSTER_NAME does not exist; run just dev-up first"
 # A full disk shows up as obscure failures deep in a test, such as the
 # object store refusing tiered storage uploads.
 check_docker_disk

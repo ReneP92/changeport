@@ -1,7 +1,7 @@
 # syntax=docker/dockerfile:1
 
 # The Changeport console (cmd/console) with the web app (web/) built in.
-# Build it from the repository root with make console-image.
+# Build it from the repository root with just console-image.
 
 # Bun, pinned by the digest of its index, installs and builds the web app on
 # the build machine's own platform; the output is plain static files.

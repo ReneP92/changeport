@@ -2,7 +2,7 @@
 # Runs the console's Playwright tests against the console on kind
 # (http://localhost:8088), signed in as Clerk test users: the setup creates
 # this run's users, organizations and customers in the Clerk development
-# instance of .env, and the teardown removes them. Run make dev-up first, with
+# instance of .env, and the teardown removes them. Run just dev-up first, with
 # .env filled in (see .env.sample).
 # Usage: hack/ui-e2e.sh [playwright arguments]
 # shellcheck source=lib.sh
@@ -10,10 +10,10 @@ source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 
 ensure_kind
 ensure_kubectl
-cluster_exists || die "kind cluster $CLUSTER_NAME does not exist; run make dev-up first"
+cluster_exists || die "kind cluster $CLUSTER_NAME does not exist; run just dev-up first"
 config=$(console_config_status)
 [[ $config == 200 ]] ||
-  die "the console at http://localhost:$CONSOLE_PORT is not configured (GET /api/config answered $config); fill in .env and run make console-config"
+  die "the console at http://localhost:$CONSOLE_PORT is not configured (GET /api/config answered $config); fill in .env and run just console-config"
 
 publishable_key=$(dotenv_value CLERK_PUBLISHABLE_KEY)
 [[ -n $publishable_key ]] || publishable_key=$(dotenv_value VITE_CLERK_PUBLISHABLE_KEY)

@@ -43,7 +43,7 @@ CLOUD_PROVIDER_KIND_CONTAINER=changeport-cloud-provider-kind
 # The host gateway (cmd/hostgateway) lets Kafka clients on this machine reach
 # the customers' clusters: it runs on the kind network with Kafka's port and
 # its DNS published on the loopback address. HOST_DNS_PORT is what
-# make host-dns points the host's resolver at for changeport.test.
+# just host-dns points the host's resolver at for changeport.test.
 HOST_GATEWAY_CONTAINER=changeport-host-gateway
 HOST_KAFKA_PORT=9094
 HOST_DNS_PORT=15353
@@ -53,7 +53,7 @@ HOST_DNS_PORT=15353
 # internal/provisioning.KafkaVersion. They are pulled once into the host's
 # Docker, which keeps them across cluster rebuilds, and loaded into every kind
 # node; pulling 400 MB Kafka images on each node can outlast Strimzi's
-# timeouts. make e2e fails if a pod runs an image missing here.
+# timeouts. just e2e fails if a pod runs an image missing here.
 KIND_PRELOAD_IMAGES=(
   quay.io/strimzi/operator:1.3.0
   quay.io/strimzi/drain-cleaner:1.8.0
@@ -264,7 +264,7 @@ KIND_LOCAL_OVERLAY="$ROOT/deploy/overlays/kind-local"
 kind_local_overlay() {
   local image kafka agent provisioner console
   for image in "$KAFKA_IMAGE" "$AGENT_IMAGE" "$PROVISIONER_IMAGE" "$CONSOLE_IMAGE"; do
-    docker image inspect "$image" >/dev/null 2>&1 || die "$image has not been built; run make dev-up"
+    docker image inspect "$image" >/dev/null 2>&1 || die "$image has not been built; run just dev-up"
   done
   kafka=$(content_tag "$KAFKA_IMAGE")
   agent=$(content_tag "$AGENT_IMAGE")
@@ -483,9 +483,9 @@ check_kind_cluster() {
   zones=$(kubectl get nodes -o jsonpath='{range .items[*]}{.metadata.labels.topology\.kubernetes\.io/zone}{"\n"}{end}' | sort -u | grep -c . || true)
   versions=$(kubectl get nodes -o jsonpath='{range .items[*]}{.status.nodeInfo.kubeletVersion}{"\n"}{end}' | sort -u | paste -sd ' ' -)
   if [[ $zones -ne 3 || "$versions" != "$want" ]]; then
-    die "kind cluster $CLUSTER_NAME has nodes in $zones zones on Kubernetes $versions; deploy/kind/cluster.yaml wants 3 zones on $want. Recreate it: make dev-down dev-up"
+    die "kind cluster $CLUSTER_NAME has nodes in $zones zones on Kubernetes $versions; deploy/kind/cluster.yaml wants 3 zones on $want. Recreate it: just dev-down dev-up"
   fi
   if [[ $(docker port "$CLUSTER_NAME-control-plane" 30088/tcp 2>/dev/null) != "127.0.0.1:$CONSOLE_PORT" ]]; then
-    die "kind cluster $CLUSTER_NAME does not publish the console on localhost:$CONSOLE_PORT, which deploy/kind/cluster.yaml asks for. Recreate it: make dev-down dev-up"
+    die "kind cluster $CLUSTER_NAME does not publish the console on localhost:$CONSOLE_PORT, which deploy/kind/cluster.yaml asks for. Recreate it: just dev-down dev-up"
   fi
 }

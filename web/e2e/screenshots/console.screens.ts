@@ -6,7 +6,7 @@ import { clerkClient, kubectl, readFixtures, testEmail, type UserFixture } from 
 import { connect, downloadClientProperties, kafka, kafkaInBackground } from "../clerk/helpers";
 
 // Captures every screen of the console, on a desktop and a phone, into
-// CHANGEPORT_SCREENSHOTS_DIR (make ui-screenshots). An operator provisions
+// CHANGEPORT_SCREENSHOTS_DIR (just ui-screenshots). An operator provisions
 // Acme Corp and Globex through the operator console; Acme's admin, Ada,
 // creates topics; traffic and consumer groups fill the charts; then Acme is
 // deprovisioned. Everything it creates goes again at the end.

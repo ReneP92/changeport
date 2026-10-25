@@ -56,10 +56,10 @@ func testGoldenFile(t *testing.T, spec Spec) {
 	}
 	want, err := os.ReadFile(golden)
 	if err != nil {
-		t.Fatalf("%v (run make golden to create it)", err)
+		t.Fatalf("%v (run just golden to create it)", err)
 	}
 	if !bytes.Equal(got, want) {
-		t.Errorf("rendered YAML differs from %s; if the change is intended, run make golden\n--- got ---\n%s", golden, got)
+		t.Errorf("rendered YAML differs from %s; if the change is intended, run just golden\n--- got ---\n%s", golden, got)
 	}
 }
 

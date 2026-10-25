@@ -11,15 +11,15 @@ docs/PROJECT_PLAN.md.
 ## Development
 
 Bun runs everything here, so neither Node nor another package manager is
-needed. The Makefile targets download the Bun that `hack/lib.sh` pins into
+needed. The just recipes download the Bun that `hack/lib.sh` pins into
 `bin/`, checksum-verified; `packageManager` in `package.json` names the same
 version, and the scripts refuse to run when the two disagree. Run any other
 Bun command in this directory through `hack/bun.sh` from the repository root.
 
 ```bash
-make web-dev     # Vite with hot reload on http://localhost:5173; /api goes to the console on :8088
-make web-check   # ESLint, tsc, Prettier, bun test and the production build
-make web-e2e     # Playwright in Chromium against the production build
+just web-dev     # Vite with hot reload on http://localhost:5173; /api goes to the console on :8088
+just web-check   # ESLint, tsc, Prettier, bun test and the production build
+just web-e2e     # Playwright in Chromium against the production build
 ```
 
 - **Unit tests** run under `bun test`, with happy-dom as the DOM
@@ -28,12 +28,12 @@ make web-e2e     # Playwright in Chromium against the production build
 - **End-to-end tests** live in `e2e/` and run under Playwright's own runner,
   which runs on Bun too, as do its workers and the preview server.
   `PLAYWRIGHT_BASE_URL` points them at a running console instead of a
-  local build. With a Clerk secret key too, which `make ui-e2e` takes from
+  local build. With a Clerk secret key too, which `just ui-e2e` takes from
   `.env`, the signed-in tests in `e2e/clerk` run as well, between a setup
   and a teardown project that create and remove the run's Clerk test users,
   organizations and customers. Failing tests are fixed, never retried.
 - **The API client** is generated from `api/openapi.yaml` into
-  `src/api/schema.ts` by `make generate`, and calls the API with
+  `src/api/schema.ts` by `just generate`, and calls the API with
   openapi-fetch and the Clerk session token. The app learns its Clerk
   publishable key from `GET /api/config`, so one build serves every
   environment, and says so when the console is not configured.

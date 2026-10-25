@@ -30,7 +30,7 @@ export function App() {
     return (
       <Notice title="The console is not configured">
         It has no sign-in configuration yet, so it refuses every request. Operators set it up with
-        make console-config.
+        just console-config.
       </Notice>
     );
   }
