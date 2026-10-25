@@ -49,11 +49,14 @@ seq -f '%08g' 1 3000 | awk '{ printf "%s-%01000d\n", $0, 0 }' |
   kafka kafka-console-producer.sh --bootstrap-server "$bootstrap" --command-config /config/client.properties --topic "$topic"
 prefix="/buckets/$(kubectl -n "$namespace" get kafka "$customer" \
   -o jsonpath='{.spec.kafka.tieredStorage.remoteStorageManager.config.storage\.s3\.bucket\.name}')/$namespace"
+# Whether the object store holds segments of the topic. The listing is read
+# whole first: under pipefail, grep -q ending a pipe early could fail it.
+stored() { grep -q "^$topic-" <<<"$(object_store_ls "$prefix/")"; }
 for _ in $(seq 60); do
-  object_store_ls "$prefix/" | grep -q "^$topic-" && break
+  stored && break
   sleep 5
 done
-object_store_ls "$prefix/" | grep -q "^$topic-" || die "no segment of $topic was offloaded within 5 minutes"
+stored || die "no segment of $topic was offloaded within 5 minutes"
 log "Topic $topic has segments in the object store under $prefix"
 
 log "Turning deletion protection off and deprovisioning"
@@ -66,7 +69,7 @@ done
   die "namespace $namespace kept its deletion protection label after protection was turned off"
 provisioner deprovision -customer "$customer" -wait -timeout 5m
 
-object_store_ls "$prefix/" | grep -q "^$topic-" || die "deprovisioning removed the tiered storage of $customer under $prefix"
+stored || die "deprovisioning removed the tiered storage of $customer under $prefix"
 log "The tiered storage of $customer outlived its cluster under $prefix"
 
 # The purge of docs/runbook.md, after 30 days; on kind the object store is

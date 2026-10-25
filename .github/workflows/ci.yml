@@ -10,9 +10,7 @@ on:
 permissions:
   contents: read
 
-# Runners are pinned, like everything else: ubuntu-latest moved to 26.04,
-# whose Docker 29 with the containerd image store breaks loading images into
-# kind (#85 tracks moving on).
+# Runners are pinned, like everything else.
 
 # A new push cancels the run it supersedes; runs started by hand each get
 # their own group, so several can run side by side.
@@ -23,7 +21,7 @@ concurrency:
 jobs:
   go:
     name: Go lint and test
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: extractions/setup-just@53165ef7e734c5c07cb06b3c8e7b647c5aa16db3 # v4
@@ -50,7 +48,7 @@ jobs:
 
   terraform:
     name: Terraform format and validate
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: extractions/setup-just@53165ef7e734c5c07cb06b3c8e7b647c5aa16db3 # v4
@@ -65,7 +63,7 @@ jobs:
 
   shell:
     name: Shell scripts and text
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: extractions/setup-just@53165ef7e734c5c07cb06b3c8e7b647c5aa16db3 # v4
@@ -78,7 +76,7 @@ jobs:
   # does on a laptop, so no Node or setup action is involved.
   web:
     name: Web lint, test and build
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -108,7 +106,7 @@ jobs:
   # suite freezes a zone, which would disturb the core suite's tests.
   e2e:
     name: End to end on kind (${{ matrix.suite }})
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     timeout-minutes: 45
     strategy:
       fail-fast: false
@@ -163,7 +161,7 @@ jobs:
   # with a notice.
   console-e2e:
     name: Console end to end with Clerk
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     timeout-minutes: 45
     env:
       CLERK_SECRET_KEY: ${{ secrets.CLERK_SECRET_KEY }}
@@ -236,7 +234,7 @@ jobs:
 
   kafka-image:
     name: Kafka image
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -258,7 +256,7 @@ jobs:
 
   provisioner-image:
     name: Provisioner image
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -274,7 +272,7 @@ jobs:
 
   console-image:
     name: Console image
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -290,7 +288,7 @@ jobs:
 
   agent-image:
     name: Agent image
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
