@@ -25,16 +25,20 @@ separate labels because a shared cluster in Phase 6 serves many tenants:
 there `cluster` names the shared cluster, and the tenant of each series comes
 from its topic prefix or principal.
 
-Labels that arrive in Phase 2 with KIP-714 client telemetry and the Kafka
-agent, and that must carry `tenant`, `cluster` and `env` as well:
+Client telemetry (KIP-714, below) adds the labels of the client a series
+comes from, next to `tenant`, `cluster` and `env`:
 
-| Label | Meaning |
-| --- | --- |
-| `principal` | The Kafka user a client connects as |
-| `client_id` | The `client.id` an application sets |
-| `client_instance_id` | The KIP-714 ID of one client instance |
-| `client_software_name`, `client_software_version` | The client library and version, from KIP-714 |
-| `consumer_group` | The consumer group, on lag and group metrics |
+| Label | Meaning | Source |
+| --- | --- | --- |
+| `principal` | The Kafka user a client connects as, such as `User:admin` | The broker, as the Kafka agent configures the reporter |
+| `client_id` | The `client.id` an application sets | The broker, as the Kafka agent configures the reporter |
+| `client_instance_id` | The KIP-714 ID of one client instance, new on every start | The reporter, always |
+| `topic`, `partition` | The topic and partition, on a client's per-topic metrics | The client's own attributes |
+| `consumer_group` | The consumer group, on the agent's lag metrics | The Kafka agent |
+
+The client library and version (`client_software_name` and
+`client_software_version`) are part of KIP-714 but not among the labels the
+reporter can add.
 
 No label may take unbounded values: never message keys, offsets, client IP
 addresses or timestamps.
@@ -62,6 +66,54 @@ outside Kafka are not. When a lookup fails, for example while a topic
 switches to tiered storage, the group keeps its last value instead of
 reporting a wrong one.
 
+## Client telemetry
+
+Kafka clients push their own metrics to a broker (KIP-714): Java clients
+from Kafka 3.7 on do by default, librdkafka-based clients from 2.5 on. The
+brokers run Strimzi's metrics reporter built with KIP-714 support
+(`images/kafka`), which exposes what clients push as `clients_*` series on
+the same port 9404, such as
+`clients_org_apache_kafka_producer_record_send_total`. Customers do not
+change their code or configuration.
+
+The reporter labels each client's series with its client ID and Kafka user
+(`prometheus.metrics.reporter.client.telemetry.labels`). Strimzi forbids
+that option in the Kafka resource, so the Kafka agent sets it as a
+cluster-wide dynamic broker config, which the reporter applies without a
+restart; client addresses, which it could add too, are left out as
+unbounded.
+
+Clients push only what a client metrics subscription asks for. The Kafka
+agent keeps the platform's, named `changeport`, in place: about 30 metrics,
+by full name, in `internal/agent/telemetry.go`, pushed every minute
+(every 5 seconds on kind, for the tests). They are KIP-714's standard
+metrics, which every client library reports, and the Java clients' counts of
+records, errors and bytes: per producer 13 series and 3 per topic it writes
+to, per consumer 15 series and 2 per topic it reads. Java clients have about
+120 metrics; the per-broker ones (`node.*`) are left out, as there are as
+many of them as brokers and their `node_id` attribute clashes with the
+broker's own label.
+
+A client pushes to one broker at a time, so its series carry that broker's
+`node_id`, `zone` and `instance`. When it moves to another broker, both
+expose its series for up to a minute, the time a broker keeps a client's
+last push. Queries over clients therefore take the largest value per client
+instance before adding up, for example records sent per application:
+
+```promql
+sum by (client_id) (max by (client_id, client_instance_id) (
+  rate(clients_org_apache_kafka_producer_record_send_total{tenant="acme"}[5m])))
+```
+
+Java producers of Kafka 4.3 skip the final push KIP-714 asks for when a
+client closes, so what a producer does in its last push interval before it
+closes is not reported, and one that lives shorter than an interval
+reports nothing.
+
+The reporter's allow list does not apply to client series; the subscription
+bounds how many series each client sends, and the scrape job below bounds how
+many clients count.
+
 ## Console queries
 
 The console never sends PromQL from the browser. It asks for named queries
@@ -78,7 +130,9 @@ the local VictoriaMetrics.
 ## Relabel rules
 
 `deploy/base/victoria-metrics/scrape.yaml` scrapes port 9404 of every pod
-that Strimzi labels as a Kafka node and that carries `changeport.io/tenant`.
+that Strimzi labels as a Kafka node and that carries `changeport.io/tenant`,
+in two jobs: `kafka` takes the broker's own series and `kafka-clients` the
+`clients_*` series of client telemetry.
 A pod without that label is not scraped at all, so no Kafka series can exist
 without a tenant; `hack/metrics-test.sh` checks this in every end-to-end run.
 The rules then:
@@ -144,3 +198,14 @@ partitions, since every partition replica is a series.
 
 `hack/metrics-test.sh` fails when a broker in the end-to-end test sends more
 than 1,000 series, which catches an allow list that lets too much through.
+
+Client telemetry depends on how many clients a customer runs and how often
+they restart, since every start brings a new `client_instance_id`. The
+design partner's assumed 30 client instances come to about 750 series per
+cluster. The `kafka-clients` scrape job takes at most **2,000** unique series
+per broker in 24 hours (`series_limit`); past that, VictoriaMetrics drops new
+client series, the broker's own series are unaffected, and
+`scrape_series_limit_samples_dropped` counts what was dropped. Alert on
+`scrape_series_current / scrape_series_limit > 0.9` before customers reach
+it. At the limit, 50 three-broker clusters would add 300,000 series; at the
+expected numbers, about 40,000.

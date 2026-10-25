@@ -1,17 +1,18 @@
 #!/usr/bin/env bash
-# Proves the per-customer approach end to end on kind, in two suites that
-# need separate clusters, as the failover test freezes a zone. The core suite:
-# the provisioning service creates a second customer's namespace and Kafka
-# cluster from the same template as the demo cluster, protected from
-# deletion, while the demo cluster is smoke tested; both clusters pass the
-# smoke test side by side, and the metrics test checks that both customers'
-# brokers are scraped with their tenant. The deletion protection test checks
-# that the second customer cannot be deleted until protection is turned off,
-# deprovisions it, and checks that its tiered storage outlives it until the
-# purge. Then the agent test checks that the Kafka agent tiers new topics, the
-# lag test checks its consumer lag in seconds, the console access test checks
-# what the console may read and do on a customer's cluster, the console test
-# opens the console as a browser does, the tiered storage test offloads a
+# Proves the per-customer approach end to end on kind, in two suites that need
+# separate clusters, as the failover test freezes a zone. The core suite: the
+# provisioning service creates a second customer's namespace and Kafka cluster
+# from the same template as the demo cluster, protected from deletion, while
+# the demo cluster is smoke tested; both clusters pass the smoke test side by
+# side, and the metrics test checks that both customers' brokers are scraped
+# with their tenant. The deletion protection test checks that the second
+# customer cannot be deleted until protection is turned off, deprovisions it,
+# and checks that its tiered storage outlives it until the purge. Then the
+# agent test checks that the Kafka agent tiers new topics, the lag test checks
+# its consumer lag in seconds, the client telemetry test checks that a
+# producer's own metrics reach the metrics store, the console access test
+# checks what the console may read and do on a customer's cluster, the console
+# test opens the console as a browser does, the tiered storage test offloads a
 # topic of the demo customer to the object store and reads it back, and the
 # host access test produces and consumes as an application on this machine.
 # The failover suite freezes a zone and drains a broker of a three-zone
@@ -68,6 +69,7 @@ core_suite() {
 
   "$ROOT/hack/agent-test.sh" "$DEMO_CUSTOMER"
   "$ROOT/hack/lag-test.sh" "$DEMO_CUSTOMER"
+  "$ROOT/hack/client-telemetry-test.sh" "$DEMO_CUSTOMER"
   "$ROOT/hack/console-access-test.sh" "$DEMO_CUSTOMER"
   "$ROOT/hack/console-test.sh"
   "$ROOT/hack/tiered-storage-test.sh" "$DEMO_CUSTOMER"

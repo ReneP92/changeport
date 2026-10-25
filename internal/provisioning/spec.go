@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"regexp"
 	"strings"
+	"time"
 
 	"k8s.io/apimachinery/pkg/util/validation"
 )
@@ -298,6 +299,9 @@ type Platform struct {
 	// KafkaConfig is broker configuration of this platform's clusters only,
 	// on top of the template's.
 	KafkaConfig map[string]string
+	// ClientMetricsInterval is how often clients push their metrics to the
+	// brokers (KIP-714). Zero means the Kafka agent's default, a minute.
+	ClientMetricsInterval time.Duration
 	// DedicatedNodes, when set, gives every customer an EKS Auto Mode
 	// NodePool of their own: nodes tainted and labelled with the tenant, which
 	// only that customer's pods tolerate and select.
@@ -447,6 +451,9 @@ var KindPlatform = Platform{
 		"log.retention.check.interval.ms":     "15000",
 		"remote.log.manager.task.interval.ms": "5000",
 	},
+	// Client metrics that reach the metrics store soon after a test client
+	// starts.
+	ClientMetricsInterval: 5 * time.Second,
 }
 
 // eksLoadBalancer is an internet-facing EKS Auto Mode Network Load Balancer

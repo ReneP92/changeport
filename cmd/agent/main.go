@@ -1,8 +1,9 @@
 // Command agent keeps the settings the platform owns in place on one
 // customer's Kafka cluster, turning on tiered storage for every topic that
-// can use it, and measures each consumer group's lag in seconds. It runs next to the cluster, connects to the internal mTLS
-// listener as the changeport-agent KafkaUser, and serves its metrics and
-// health on -listen.
+// can use it and setting up client telemetry (KIP-714), and measures each
+// consumer group's lag in seconds. It runs next to the cluster, connects to
+// the internal mTLS listener as the changeport-agent KafkaUser, and serves its
+// metrics and health on -listen.
 package main
 
 import (
@@ -49,6 +50,8 @@ type options struct {
 	ca        string
 	interval  time.Duration
 	listen    string
+	// clientMetricsInterval is how often clients push their metrics.
+	clientMetricsInterval time.Duration
 }
 
 func run(ctx context.Context, args []string, stderr io.Writer) error {
@@ -60,6 +63,7 @@ func run(ctx context.Context, args []string, stderr io.Writer) error {
 	fs.StringVar(&o.key, "key", "/etc/changeport/agent-user/user.key", "private key of the agent's KafkaUser")
 	fs.StringVar(&o.ca, "ca", "/etc/changeport/cluster-ca/ca.crt", "the Kafka cluster's CA certificate")
 	fs.DurationVar(&o.interval, "interval", 30*time.Second, "how often to reconcile")
+	fs.DurationVar(&o.clientMetricsInterval, "client-metrics-interval", time.Minute, "how often clients push their metrics to the brokers")
 	fs.StringVar(&o.listen, "listen", ":8080", "address to serve /metrics, /healthz and /readyz on")
 	if err := fs.Parse(args); err != nil {
 		return err
@@ -83,6 +87,7 @@ func run(ctx context.Context, args []string, stderr io.Writer) error {
 	admin := kadm.NewClient(client)
 	reconciler := &agent.Reconciler{Admin: admin, Logger: logger, Metrics: agent.NewMetrics(registry)}
 	lag := agent.NewLagCollector(admin, registry)
+	telemetry := agent.NewTelemetry(client, o.clientMetricsInterval, logger, registry)
 	health := &health{started: time.Now(), stale: 10 * o.interval}
 	server := &http.Server{Addr: o.listen, Handler: health.routes(registry), ReadHeaderTimeout: 5 * time.Second}
 	go func() {
@@ -111,6 +116,11 @@ func run(ctx context.Context, args []string, stderr io.Writer) error {
 	ticker := time.NewTicker(o.interval)
 	defer ticker.Stop()
 	for {
+		// Client telemetry only adds observability, so its failures do not
+		// affect health either.
+		if err := telemetry.Reconcile(ctx); err != nil && ctx.Err() == nil {
+			logger.Error("keeping client telemetry in place failed", "error", err)
+		}
 		if err := reconciler.Reconcile(ctx); err == nil {
 			health.succeeded()
 		} else if ctx.Err() == nil {

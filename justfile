@@ -139,7 +139,7 @@ ui-screenshots:
 provisioner-reload:
     @source hack/lib.sh && build_provisioner_image && ensure_kind && ensure_kubectl && ensure_kind_cluster && ensure_host_gateway && hack/platform-apply.sh kind
 
-# Start a broker from the Kafka image with tiered storage configured (default changeport/kafka:local)
+# Start a broker from the Kafka image with tiered storage and client telemetry (default changeport/kafka:local)
 [group('Images')]
 kafka-image-test image="":
     hack/kafka-image-test.sh {{ image }}
@@ -183,6 +183,11 @@ agent-test customer="demo":
 [group('Local development (kind + Strimzi)')]
 lag-test customer="demo":
     hack/lag-test.sh {{ customer }}
+
+# Check that a producer's own metrics (KIP-714) reach the metrics store with its tenant
+[group('Local development (kind + Strimzi)')]
+client-telemetry-test customer="demo":
+    hack/client-telemetry-test.sh {{ customer }}
 
 # Check that the console may manage a customer's topics but not read or write messages
 [group('Local development (kind + Strimzi)')]

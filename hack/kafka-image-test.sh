@@ -1,9 +1,11 @@
 #!/usr/bin/env bash
-# Checks that the Kafka image runs a broker with tiered storage: a single-node
-# KRaft broker in Docker loads and configures the remote storage manager for
-# S3 and accepts a topic with remote.storage.enable=true. This catches plugin
-# loading problems such as Aiven issue #776 without any S3 store, since nothing
-# is uploaded before a segment rolls; offloading is tested on kind.
+# Checks that the Kafka image runs a broker with tiered storage and client
+# telemetry: a single-node KRaft broker in Docker loads and configures the
+# remote storage manager for S3 and accepts a topic with
+# remote.storage.enable=true, and its metrics reporter exposes the metrics a
+# producer pushes (KIP-714). This catches plugin loading problems such as
+# Aiven issue #776 without any S3 store, since nothing is uploaded before a
+# segment rolls; offloading is tested on kind.
 # Usage: hack/kafka-image-test.sh [image] (default: the kind platform's image)
 # shellcheck source=lib.sh
 source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
@@ -37,7 +39,11 @@ rsm.config.storage.s3.region=us-east-1
 rsm.config.storage.s3.endpoint.url=http://localhost:9000
 rsm.config.storage.s3.path.style.access.enabled=true
 rsm.config.storage.aws.access.key.id=test
-rsm.config.storage.aws.secret.access.key=test'
+rsm.config.storage.aws.secret.access.key=test
+metric.reporters=io.strimzi.kafka.metrics.prometheus.ServerKafkaMetricsReporter
+kafka.metrics.reporters=io.strimzi.kafka.metrics.prometheus.ServerYammerMetricsReporter
+prometheus.metrics.reporter.listener=http://:9404
+prometheus.metrics.reporter.client.telemetry.labels=client_id,principal'
 
 log "Starting a broker from $image with tiered storage configured"
 # LOG_DIR: the scripts' default, /opt/kafka/logs, is not writable by the
@@ -66,6 +72,17 @@ docker exec "$name" /opt/kafka/bin/kafka-topics.sh --bootstrap-server localhost:
 docker exec "$name" /opt/kafka/bin/kafka-configs.sh --bootstrap-server localhost:9092 --describe --entity-type topics \
   --entity-name tiered | grep "remote.storage.enable=true" >/dev/null || die "the topic does not have tiered storage enabled"
 
+log "Producing with client telemetry"
+docker exec "$name" /opt/kafka/bin/kafka-client-metrics.sh --bootstrap-server localhost:9092 --alter --name image-test \
+  --metrics org.apache.kafka.producer.record.send.total --interval 1000 >/dev/null
+# Java producers skip the push KIP-714 asks for when a client closes, so the
+# producer stays open for a few push intervals after sending.
+docker exec "$name" bash -c '{ seq 1 100; sleep 4; } | /opt/kafka/bin/kafka-console-producer.sh \
+  --bootstrap-server localhost:9092 --topic tiered --command-property client.id=image-test' 
+sent=$(docker exec "$name" curl -sf localhost:9404/metrics |
+  sed -nE 's/^clients_org_apache_kafka_producer_record_send_total\{.*client_id="image-test".*principal="User:ANONYMOUS".*\} ([0-9.E]+)$/\1/p')
+[[ $sent == 100.0 ]] || die "the metrics reporter exposes ${sent:-no} records sent by the producer, want 100.0"
+
 errors=$(docker logs "$name" 2>&1 | grep -E "ERROR|Exception" || true)
 [[ -z "$errors" ]] || die "the broker logged errors:"$'\n'"$errors"
-log "Kafka image test passed: $image runs a broker with the tiered storage plugin"
+log "Kafka image test passed: $image runs a broker with the tiered storage plugin and client telemetry"

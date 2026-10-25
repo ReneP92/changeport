@@ -82,7 +82,7 @@ We self-host Apache Kafka on EKS and buy everything that is not Kafka.
 | Storage | gp3 EBS for hot data (about 24 hours locally), tiered storage to S3 for history through the Aiven S3 remote storage manager in our own broker image; a small in-cluster agent turns tiering on for every new topic | Keeps disks small and enables replay. Kafka has no broker-wide default for tiering, so customer-created topics would otherwise fill the disks |
 | Cross-AZ cost | Follower fetching so consumers read from a replica in their own AZ | Inter-AZ transfer is often the largest AWS cost line |
 | Client auth | SASL/SCRAM-SHA-512 over TLS on public endpoints first; mTLS when a customer asks for it, PrivateLink later | Standard protocols keep migration open; a username and password is simplest for newcomers; each extra public listener costs a load balancer per broker; PrivateLink is fiddly with Kafka's per-broker addresses |
-| Backend language | Go for the API, provisioning, metering and diagnosis services; the KIP-714 telemetry receiver is the one JVM component, because broker plugins must be Java | Strongest Kubernetes and operator ecosystem (client-go, controller-runtime), mature pure-Go Kafka clients, simple static binaries |
+| Backend language | Go for the API, provisioning, metering and diagnosis services; broker plugins must be Java, and the ones we need (tiered storage, the KIP-714 telemetry receiver) come from upstream projects, so we write no JVM code | Strongest Kubernetes and operator ecosystem (client-go, controller-runtime), mature pure-Go Kafka clients, simple static binaries |
 | Metrics store | VictoriaMetrics open-source edition, single-node to start | Free, and the docs recommend single-node below one million samples per second; the free cluster version adds multi-tenancy if needed. Enterprise-only features (downsampling, multiple retentions, multitenant vmalert, advanced per-tenant stats) are not needed before Phase 6 |
 | Alerting | Alertmanager with per-tenant routing to Slack, PagerDuty and webhooks | Proven, cheap to run |
 | Cluster layout | One EKS cluster per environment in EKS Auto Mode, on Kubernetes 1.37; each customer's Kafka cluster in its own namespace on dedicated nodes (a NodePool with taints per customer). Strimzi Drain Cleaner keeps node replacements to one broker at a time | One control plane fee and one upgrade path instead of 50; dedicated nodes keep brokers isolated; Auto Mode runs node provisioning, OS patching, EBS and load balancers for about 12% on top of instance cost, which matters more than cost for a one-person team. Auto Mode replaces every node after at most 21 days, which disruption budgets do not stop, hence Drain Cleaner |
@@ -118,7 +118,7 @@ Observability is the largest build and the centerpiece; the guidance layer is ho
 
 - **Live topology map** of producers, topics and consumer groups, built from broker metrics keyed by client ID and principal plus consumer group data from the AdminClient.
 - **Lag in time, not offsets**, computed from committed offsets and message timestamps.
-- **Client telemetry without customer instrumentation** via KIP-714 (Kafka 3.7+): clients push metrics to the broker, and a broker-side receiver plugin forwards them into our pipeline.
+- **Client telemetry without customer instrumentation** via KIP-714 (Kafka 3.7+): clients push metrics to the broker, and the broker's metrics reporter exposes them to our pipeline.
 - **Change timeline**: config changes, ACL edits, rebalances, broker restarts and throttling, overlaid on metric graphs.
 - **Live topic tail** with schema decoding, sampling and permission checks.
 - **Real-time alerting** on time-lag thresholds, throttling, stuck consumers and error spikes, streamed to the UI over WebSockets or SSE.
@@ -261,6 +261,7 @@ Decided:
 - [x] User auth: Clerk, with organizations as customers and a staff organization for operators
 - [x] Console: one Go service with the embedded React app; a `Customer` resource and a provisioning controller; a console Kafka user that cannot read messages; Bun for all TypeScript, including Playwright's test runner, so no Node is needed anywhere
 - [x] [KIP-714 telemetry receiver](https://github.com/ReneP92/changeport/issues/34) moves from Phase 1 to Phase 2, to keep Phase 1 to the deployable cluster
+- [x] [KIP-714 telemetry receiver](https://github.com/ReneP92/changeport/issues/34): Strimzi's own metrics reporter, which gained KIP-714 support (strimzi/metrics-reporter#134) after its 0.4.0 release, built from the merge commit into the Kafka image until a release has it; no plugin of our own. Clients' metrics come out as `clients_*` series on the brokers' metrics endpoint, the Kafka agent keeps one subscription of about 30 metrics and the client ID and principal labels in place, and a separate scrape job caps them at 2,000 series per broker (see [docs/metrics-labels.md](metrics-labels.md))
 
 Deferred to Phase 6: [decide whether to adopt the topic-rewriting proxy](https://github.com/ReneP92/changeport/issues/2).
 
