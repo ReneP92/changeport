@@ -342,8 +342,33 @@ the Clerk organization is kept, no longer linked to a cluster. The console
 may create and delete Customers but not change them, so it cannot turn
 deletion protection off.
 
-To act as a customer's own client with a `client.properties` from the
-console, run the Kafka tools from the kind network with it:
+Applications on your machine connect to a customer's cluster with the
+`client.properties` the console hands out, unchanged, as they would to
+Changeport in the cloud. `make dev-up` starts a host gateway: a container on
+the kind network with Kafka's port 9094 published on `127.0.0.1`, which
+reads the name each client asks for in its TLS handshake and forwards the
+connection, still encrypted end to end, to that broker's load balancer. It
+also answers DNS for `*.kafka.changeport.test` with `127.0.0.1`. Point your
+machine's DNS at it once (on macOS a resolver for `changeport.test`, which
+covers every customer to come; on Linux the current customers' names in
+`/etc/hosts`); it asks for your password:
+
+```bash
+make host-dns
+```
+
+The host access test produces and consumes as an application on your
+machine would:
+
+```bash
+make host-access-test CUSTOMER=demo
+```
+
+Port 9094 of `127.0.0.1` must be free for the gateway, so stop any local
+Kafka first.
+
+The Kafka command-line tools also run from the kind network, in a container,
+with a customer's `client.properties`:
 
 ```bash
 hack/kafka-with.sh acme acme-client.properties kafka-topics.sh --list \

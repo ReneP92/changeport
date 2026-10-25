@@ -21,6 +21,7 @@ build_console_image
 check_docker_disk
 ensure_kind_cluster
 ensure_cloud_provider_kind
+ensure_host_gateway
 "$ROOT/hack/platform-apply.sh" kind
 "$ROOT/hack/console-config.sh"
 

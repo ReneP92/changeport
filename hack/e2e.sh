@@ -11,7 +11,8 @@
 # test checks what the console may read and do on a customer's cluster, the
 # console test opens the console as a browser does, the tiered storage test
 # offloads a topic of the demo customer to the object store and reads it
-# back, and the failover test freezes a zone and drains a broker of a
+# back, the host access test produces and consumes as an application on this
+# machine, and the failover test freezes a zone and drains a broker of a
 # three-zone customer under load. Set KEEP=1 to keep the customers. Run make
 # dev-up first.
 # shellcheck source=lib.sh
@@ -23,6 +24,9 @@ DEMO_CUSTOMER=${DEMO_CUSTOMER:-demo}
 ensure_kind
 ensure_kubectl
 cluster_exists || die "kind cluster $CLUSTER_NAME does not exist; run make dev-up first"
+# A full disk shows up as obscure failures deep in a test, such as the
+# object store refusing tiered storage uploads.
+check_docker_disk
 
 log "Provisioning customer $customer"
 provisioner provision -customer "$customer" -deletion-protection -wait -timeout 10m
@@ -55,5 +59,6 @@ fi
 "$ROOT/hack/console-access-test.sh" "$DEMO_CUSTOMER"
 "$ROOT/hack/console-test.sh"
 "$ROOT/hack/tiered-storage-test.sh" "$DEMO_CUSTOMER"
+"$ROOT/hack/host-access-test.sh" "$DEMO_CUSTOMER"
 "$ROOT/hack/failover-test.sh"
 log "End-to-end test passed"
