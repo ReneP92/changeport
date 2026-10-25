@@ -37,7 +37,12 @@ untenanted=$(metrics_query 'count({__name__=~"kafka_.*", tenant=""})')
 [[ -z "$untenanted" ]] || die "$untenanted Kafka series have no tenant"
 log "Every broker series carries tenant, cluster, node_id, zone and env"
 
-bytes_in=$(metrics_query 'sum(kafka_server_brokertopicmetrics_bytesinpersec_total{tenant!="", topic=""})')
+# The traffic shows after the next scrape, up to 30 seconds after it.
+for _ in $(seq 18); do
+  bytes_in=$(metrics_query 'sum(kafka_server_brokertopicmetrics_bytesinpersec_total{tenant!="", topic=""})')
+  [[ -n "$bytes_in" && ${bytes_in%.*} -gt 0 ]] && break
+  sleep 5
+done
 [[ -n "$bytes_in" && ${bytes_in%.*} -gt 0 ]] || die "no bytes-in traffic was recorded; run this after some traffic"
 
 largest=$(metrics_query 'max(scrape_samples_post_metric_relabeling{job="kafka"})')

@@ -422,11 +422,18 @@ check_named_queries() {
     kill "$pid" 2>/dev/null || true
     die "could not port-forward to VictoriaMetrics:"$'\n'"$(cat "$output")"
   fi
-  if ! CHANGEPORT_METRICS_URL="http://127.0.0.1:$port" CHANGEPORT_METRICS_TENANT="$tenant" \
-    CHANGEPORT_METRICS_EXPECT="$expected" go test -count=1 -run TestQueriesAgainstVictoriaMetrics ./internal/metrics >"$output" 2>&1; then
-    kill "$pid" 2>/dev/null || true
-    die "the console's metrics queries failed for tenant $tenant:"$'\n'"$(cat "$output")"
-  fi
+  # Rates need two scrapes, 30 seconds apart, after the traffic they measure,
+  # so a customer that just served its first messages may take a minute.
+  local attempt
+  for attempt in $(seq 10); do
+    CHANGEPORT_METRICS_URL="http://127.0.0.1:$port" CHANGEPORT_METRICS_TENANT="$tenant" \
+      CHANGEPORT_METRICS_EXPECT="$expected" go test -count=1 -run TestQueriesAgainstVictoriaMetrics ./internal/metrics >"$output" 2>&1 && break
+    if [[ $attempt -eq 10 ]]; then
+      kill "$pid" 2>/dev/null || true
+      die "the console's metrics queries failed for tenant $tenant:"$'\n'"$(cat "$output")"
+    fi
+    sleep 10
+  done
   kill "$pid" 2>/dev/null || true
   rm -f "$output"
   log "The console's metrics queries work for tenant $tenant, with series for $expected"
