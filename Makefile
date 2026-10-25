@@ -131,6 +131,10 @@ dev-up: ## Create the kind cluster, install the platform components, provision t
 dev-down: ## Delete the kind cluster
 	hack/dev-down.sh
 
+.PHONY: ps
+ps: ## List the local setup's containers: kind nodes, customers' load balancers and helpers
+	hack/ps.sh
+
 .PHONY: smoke-test
 smoke-test: CUSTOMER ?= demo
 smoke-test: ## Produce and consume a message on CUSTOMER's cluster (default demo)
