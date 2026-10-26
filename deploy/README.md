@@ -45,8 +45,8 @@ CONFIRM=prod just platform-apply prod
 just platform-check
 ```
 
-`ENV=dev` and `ENV=prod` use the kubectl contexts `changeport-dev` and
-`changeport-prod` (`aws eks update-kubeconfig --name changeport-<env>
+`just platform-apply dev` and `prod` use the kubectl contexts `changeport-dev`
+and `changeport-prod` (`aws eks update-kubeconfig --name changeport-<env>
 --alias changeport-<env>`) and refuse to run against anything that is not an
 EKS cluster.
 

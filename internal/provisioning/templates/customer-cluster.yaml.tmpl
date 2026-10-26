@@ -228,8 +228,10 @@ spec:
     image: {{ . }}
 {{- end }}
 {{- if gt .Profile.Zones 1 }}
+    # broker.rack, which clients set client.rack to, to read from a replica
+    # in their own zone (docs/connecting.md).
     rack:
-      topologyKey: {{ .ZoneTopologyKey }}
+      topologyKey: {{ .Platform.RackLabel }}
 {{- end }}
     listeners:
       # Platform clients inside the cluster, such as the Kafka agent.

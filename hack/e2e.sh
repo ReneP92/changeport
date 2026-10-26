@@ -13,12 +13,12 @@
 # producer's own metrics reach the metrics store, the console access test
 # checks what the console may read and do on a customer's cluster, the console
 # test opens the console as a browser does, the tiered storage test offloads a
-# topic of the demo customer to the object store and reads it back, and the
-# host access test produces and consumes as an application on this machine.
-# The failover suite freezes a zone and drains a broker of a three-zone
-# customer under load. SUITE=core or SUITE=failover runs one (default: both,
-# one after the other). Set KEEP=1 to keep the customers. Run just dev-up
-# first.
+# topic of the demo customer to the object store and reads it back, the host
+# access test produces and consumes as an application on this machine, and the
+# connection guide test runs the examples of docs/connecting.md. The failover
+# suite freezes a zone and drains a broker of a three-zone customer under
+# load. SUITE=core or SUITE=failover runs one (default: both, one after the
+# other). Set KEEP=1 to keep the customers. Run just dev-up first.
 # shellcheck source=lib.sh
 source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 
@@ -74,6 +74,7 @@ core_suite() {
   "$ROOT/hack/console-test.sh"
   "$ROOT/hack/tiered-storage-test.sh" "$DEMO_CUSTOMER"
   "$ROOT/hack/host-access-test.sh" "$DEMO_CUSTOMER"
+  "$ROOT/hack/connecting-guide-test.sh" "$DEMO_CUSTOMER"
 }
 
 [[ $SUITE == failover ]] || core_suite

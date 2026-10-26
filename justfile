@@ -184,6 +184,11 @@ agent-test customer="demo":
 lag-test customer="demo":
     hack/lag-test.sh {{ customer }}
 
+# Run the examples of the customer connection guide (docs/connecting.md) against a customer's cluster
+[group('Local development (kind + Strimzi)')]
+connecting-guide-test customer="demo":
+    hack/connecting-guide-test.sh {{ customer }}
+
 # Check that a producer's own metrics (KIP-714) reach the metrics store with its tenant
 [group('Local development (kind + Strimzi)')]
 client-telemetry-test customer="demo":

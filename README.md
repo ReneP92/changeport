@@ -58,6 +58,12 @@ on kind (see [Local development](#local-development)), and the Terraform
 layout for EKS, not applied yet. The rest is planned; shared clusters behind
 a topic-rewriting proxy follow in Phase 6, then Kafka Connect and CDC.
 
+More on the data plane:
+
+- [docs/architecture/data-plane.md](docs/architecture/data-plane.md): how the customers' clusters run, as built.
+- [docs/connecting.md](docs/connecting.md): the customers' guide to connecting, with examples in Java, Python, Go and Node.js.
+- [docs/runbook.md](docs/runbook.md): the operators' procedures, from provisioning to upgrades.
+
 ## Roadmap
 
 Each phase is a GitHub milestone; see the plan for the scope of each and the
@@ -155,8 +161,8 @@ prints the same `client.properties`.
 Provision more customers from the same template, or run the end-to-end
 check. Its core suite provisions a second customer, protected from deletion,
 smoke tests both clusters, runs the metrics, deletion protection, agent, lag,
-client telemetry, console, tiered storage and host access tests, and removes
-the second customer again; its failover suite freezes a zone and drains a
+client telemetry, console, tiered storage, host access and connection guide
+tests, and removes the second customer again; its failover suite freezes a zone and drains a
 broker of a three-zone customer. CI runs the two on separate clusters at once;
 locally `just e2e` runs both, one after the other:
 

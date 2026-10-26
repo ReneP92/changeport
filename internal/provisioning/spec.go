@@ -53,6 +53,9 @@ const (
 	nodePoolName    = "dual-role"
 	// zoneTopologyKey is the well-known node label holding the availability zone.
 	zoneTopologyKey = "topology.kubernetes.io/zone"
+	// eksZoneIDLabel is the node label holding the availability zone ID on
+	// EKS, which is the same in every AWS account.
+	eksZoneIDLabel = "topology.k8s.aws/zone-id"
 	// maxCustomerIDLength keeps derived Strimzi names such as
 	// "<id>-entity-operator" and "<id>-dual-role-<n>" well inside the
 	// 63-character Kubernetes name limit.
@@ -278,6 +281,12 @@ type Platform struct {
 	StorageClass string
 	// Zones is the number of availability zones the platform's nodes span.
 	Zones int
+	// RackLabel is the node label whose value becomes each broker's
+	// broker.rack, which clients match with client.rack to fetch from a
+	// replica in their own zone. On EKS it is the zone ID (use1-az1), which
+	// names the same zone in every AWS account, unlike the zone name in
+	// topology.kubernetes.io/zone that customers' accounts map differently.
+	RackLabel string
 	// KafkaImage is the broker image: the Changeport Kafka image from
 	// images/kafka, which adds the tiered storage plugin to Strimzi's image.
 	// Empty means Strimzi's own image for KafkaVersion.
@@ -401,6 +410,8 @@ func (p Platform) validate() error {
 		return fmt.Errorf("platform %q: storage class is required", p.Name)
 	case p.Zones < 1:
 		return fmt.Errorf("platform %q: zones must be at least 1", p.Name)
+	case p.RackLabel == "":
+		return fmt.Errorf("platform %q: rack label is required", p.Name)
 	case p.CertificateIssuer == "":
 		return fmt.Errorf("platform %q: certificate issuer is required", p.Name)
 	}
@@ -425,6 +436,7 @@ var KindPlatform = Platform{
 	Name:              "kind",
 	StorageClass:      "standard",
 	Zones:             3,
+	RackLabel:         zoneTopologyKey,
 	KafkaImage:        "changeport/kafka:local",
 	AgentImage:        "changeport/agent:local",
 	KafkaDomain:       "kafka.changeport.test",
@@ -504,6 +516,7 @@ var EKSDevPlatform = Platform{
 	AgentImage:        eksImages.Agent,
 	StorageClass:      "gp3",
 	Zones:             3,
+	RackLabel:         eksZoneIDLabel,
 	KafkaDomain:       "kafka.dev.changeport.invalid",
 	CertificateIssuer: "letsencrypt-staging",
 	LoadBalancer:      eksLoadBalancer,
@@ -520,6 +533,7 @@ var EKSProdPlatform = Platform{
 	AgentImage:        eksImages.Agent,
 	StorageClass:      "gp3",
 	Zones:             3,
+	RackLabel:         eksZoneIDLabel,
 	KafkaDomain:       "kafka.changeport.invalid",
 	CertificateIssuer: "letsencrypt",
 	LoadBalancer:      eksLoadBalancer,

@@ -119,6 +119,7 @@ func TestPlatformValidate(t *testing.T) {
 		{"no name", func(p *Platform) { p.Name = "" }},
 		{"no storage class", func(p *Platform) { p.StorageClass = "" }},
 		{"no zones", func(p *Platform) { p.Zones = 0 }},
+		{"no rack label", func(p *Platform) { p.RackLabel = "" }},
 		{"no certificate issuer", func(p *Platform) { p.CertificateIssuer = "" }},
 		{"no Kafka domain", func(p *Platform) { p.KafkaDomain = "" }},
 		{"invalid Kafka domain", func(p *Platform) { p.KafkaDomain = "Kafka_Example.com" }},
@@ -275,5 +276,16 @@ func TestSpecNames(t *testing.T) {
 	}
 	if got, want := spec.BrokerHostTemplate(), "b{nodeId}.acme.kafka.changeport.test"; got != want {
 		t.Errorf("BrokerHostTemplate() = %q, want %q", got, want)
+	}
+}
+
+// Customers set client.rack from their own account's view of the zones, so
+// on EKS a broker's rack must be the zone ID, which is the same in every
+// account, and not the zone name, which accounts map differently.
+func TestEKSRacksAreZoneIDs(t *testing.T) {
+	for _, platform := range []Platform{EKSDevPlatform, EKSProdPlatform} {
+		if platform.RackLabel != "topology.k8s.aws/zone-id" {
+			t.Errorf("%s racks brokers by %s, want topology.k8s.aws/zone-id", platform.Name, platform.RackLabel)
+		}
 	}
 }
