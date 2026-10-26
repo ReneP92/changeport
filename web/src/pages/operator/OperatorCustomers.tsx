@@ -16,7 +16,7 @@ export function OperatorsOnly({ children }: { children: ReactNode }) {
   if (me.isError || me.data.access !== "operator") {
     return (
       <Notice title="Operators only">
-        Switch to the Changeport staff organization to see every customer.
+        Only Changeport&apos;s operators can see every customer.
       </Notice>
     );
   }
