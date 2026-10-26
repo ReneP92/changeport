@@ -239,6 +239,11 @@ e2e suite="all" customer="acme":
 platform-apply env:
     hack/platform-apply.sh {{ env }}
 
+# Check with the IAM policy simulator that an AWS environment keeps customers' tiered storage apart (needs AWS credentials)
+[group('Platform components')]
+tiered-storage-isolation-test env:
+    hack/tiered-storage-isolation-test.sh {{ env }}
+
 # Apply the kind overlay to kind and server-side dry-run the EKS overlays there
 [group('Platform components')]
 platform-check:
