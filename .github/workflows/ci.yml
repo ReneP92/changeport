@@ -46,20 +46,19 @@ jobs:
       - name: Test
         run: just test
 
+  # The just recipes download the Terraform that hack/lib.sh pins, as on a
+  # laptop.
   terraform:
-    name: Terraform format and validate
+    name: Terraform format, validate and test
     runs-on: ubuntu-26.04
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: extractions/setup-just@53165ef7e734c5c07cb06b3c8e7b647c5aa16db3 # v4
         with:
           just-version: 1.59.0
-      - uses: hashicorp/setup-terraform@dfe3c3f87815947d99a8997f908cb6525fc44e9e # v4.0.1
-        with:
-          terraform_version: 1.16.6
-          terraform_wrapper: false
       - run: just tf-fmt
       - run: just tf-validate
+      - run: just tf-test
 
   shell:
     name: Shell scripts and text

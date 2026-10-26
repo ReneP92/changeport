@@ -18,6 +18,8 @@ ENVTEST_K8S_VERSION=1.37.0
 # packageManager in web/package.json, which CI installs from; ensure_bun
 # checks that they agree.
 BUN_VERSION=1.4.3
+# Terraform formats, validates and tests terraform/, here and in CI.
+TERRAFORM_VERSION=1.16.6
 
 # The Changeport Kafka image from images/kafka, as named by
 # internal/provisioning.KindPlatform. dev-up builds it and loads it into kind.
@@ -69,6 +71,7 @@ KUBE_CONTEXT="kind-${CLUSTER_NAME}"
 BIN_DIR="$ROOT/bin"
 KUBECTL_BIN="$BIN_DIR/kubectl-$KUBECTL_VERSION"
 BUN_BIN="$BIN_DIR/bun-$BUN_VERSION"
+TERRAFORM_BIN="$BIN_DIR/terraform-$TERRAFORM_VERSION"
 
 log() { printf '\033[1m==> %s\033[0m\n' "$*" >&2; }
 die() { printf 'error: %s\n' "$*" >&2; exit 1; }
@@ -194,6 +197,30 @@ ensure_bun() {
   rm -rf "$BIN_DIR/bun-unpack" "$archive"
   chmod +x "$BUN_BIN"
 }
+
+# Downloads the pinned Terraform into bin/, checksum-verified, unless it is
+# there. Checksums: https://releases.hashicorp.com/terraform/$TERRAFORM_VERSION/
+ensure_terraform() {
+  local os arch want archive
+  [[ -x "$TERRAFORM_BIN" ]] && return
+  os=$(uname -s | tr '[:upper:]' '[:lower:]')
+  arch=$(uname -m)
+  case "$arch" in x86_64) arch=amd64 ;; aarch64) arch=arm64 ;; esac
+  case "$os/$arch" in
+    darwin/arm64) want=85e1bc78ab45bdc5f82a7bac3929e37d072834a584d22583a2498dc67bb624cd ;;
+    darwin/amd64) want=794a36c3f7ebf6c58f2089c226068a539d1705ba358a5679b51671c8dc7ebc7b ;;
+    linux/amd64) want=38034b38d03096399a7a1264a14561a8029b2b496fd1f169452656e53968f1b7 ;;
+    linux/arm64) want=a750b5a11038f165846b2658c40c88cd7070aa67a61bab431a14ba27928ea9ea ;;
+    *) die "unsupported platform $os/$arch" ;;
+  esac
+  archive="$BIN_DIR/terraform-$TERRAFORM_VERSION-${os}_$arch.zip"
+  download_verified "https://releases.hashicorp.com/terraform/$TERRAFORM_VERSION/terraform_${TERRAFORM_VERSION}_${os}_$arch.zip" "$want" "$archive"
+  unzip -o -q "$archive" terraform -d "$BIN_DIR/terraform-unpack"
+  mv "$BIN_DIR/terraform-unpack/terraform" "$TERRAFORM_BIN"
+  rm -rf "$BIN_DIR/terraform-unpack" "$archive"
+  chmod +x "$TERRAFORM_BIN"
+}
+terraform() { ensure_terraform && "$TERRAFORM_BIN" "$@"; }
 
 # Downloads every upstream file pinned in deploy/upstream-files.txt.
 fetch_upstream_files() {
