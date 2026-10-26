@@ -47,13 +47,18 @@ sed -n '/BEGIN CERTIFICATE/,/END CERTIFICATE/p' "$properties" |
   sed -E 's/^ssl\.truststore\.certificates=//; s/^ +//; s/ \\$//' >"$work/ca.crt"
 grep -q "BEGIN CERTIFICATE" "$work/ca.crt" || die "no CA certificate in customer $customer's client.properties"
 
+# Runs an example in its image: the container works on a copy of the
+# example, so that what it installs and builds, owned by the container's
+# user, stays out of this machine's directories.
+# Usage: run <language> <image> <command>
 run() {
   local language=$1 topic="guide-$1-$run_id" output
   docker run "${KAFKA_CLIENT[@]}" --entrypoint /opt/kafka/bin/kafka-topics.sh "$KAFKA_IMAGE" \
     --bootstrap-server "$bootstrap" --command-config /config/client.properties --create --topic "$topic" >/dev/null
   log "Running the guide's $language example"
   if ! output=$(docker run "${KAFKA_CLIENT[@]}" -e "KAFKA_BOOTSTRAP=$bootstrap" -e "KAFKA_USERNAME=$username" \
-    -e "KAFKA_PASSWORD=$password" -e KAFKA_CLIENT_RACK=zone-a -e "TOPIC=$topic" -v "$work/$language:/app" -w /app "${@:2}" 2>&1); then
+    -e "KAFKA_PASSWORD=$password" -e KAFKA_CLIENT_RACK=zone-a -e "TOPIC=$topic" -v "$work/$language:/example:ro" "$2" \
+    sh -c "cp -R /example /app && cd /app && $3" 2>&1); then
     die "the guide's $language example failed:"$'\n'"$output"
   fi
   grep -q "consumed: hello from" <<<"$output" || die "the guide's $language example consumed nothing:"$'\n'"$output"
@@ -67,10 +72,10 @@ cp "$properties" "$work/java/client.properties"
 container=$(docker create "$KAFKA_IMAGE")
 docker cp -q "$container:/opt/kafka/libs/." "$work/java/libs/"
 docker rm "$container" >/dev/null
-run java "$JAVA_IMAGE" sh -c 'javac -cp "libs/*" Example.java && java -cp "libs/*:." Example'
+run java "$JAVA_IMAGE" 'javac -cp "libs/*" Example.java && java -cp "libs/*:." Example'
 
 example "### Python" python | sed 's|^topic = |config["ssl.ca.location"] = "/config/ca.crt"\ntopic = |' >"$work/python/example.py"
-run python "$PYTHON_IMAGE" sh -c "pip install -q --root-user-action=ignore --disable-pip-version-check confluent-kafka==$CONFLUENT_KAFKA_PYTHON && python example.py"
+run python "$PYTHON_IMAGE" "pip install -q --root-user-action=ignore --disable-pip-version-check confluent-kafka==$CONFLUENT_KAFKA_PYTHON && python example.py"
 
 example "### Go" go | sed 's|kgo.DialTLSConfig(&tls.Config{MinVersion: tls.VersionTLS12})|kgo.DialTLSConfig(\&tls.Config{MinVersion: tls.VersionTLS12, RootCAs: caPool()})|' >"$work/go/main.go"
 cat >>"$work/go/main.go" <<'GO'
@@ -86,10 +91,10 @@ func caPool() *x509.CertPool {
 }
 GO
 sed -i.bak 's|^	"crypto/tls"$|	"crypto/tls"\n	"crypto/x509"|' "$work/go/main.go"
-run go "$GO_IMAGE" sh -c "go mod init example >/dev/null 2>&1 && go get github.com/twmb/franz-go@$FRANZ_GO >/dev/null 2>&1 && go mod tidy >/dev/null 2>&1 && go run ."
+run go "$GO_IMAGE" "go mod init example >/dev/null 2>&1 && go get github.com/twmb/franz-go@$FRANZ_GO >/dev/null 2>&1 && go mod tidy >/dev/null 2>&1 && go run ."
 
 example "### Node.js" js | sed 's|^  "sasl.password": process.env.KAFKA_PASSWORD,|&\n  "ssl.ca.location": "/config/ca.crt",|' >"$work/node/example.js"
-run node "$NODE_IMAGE" sh -c "npm install --silent --no-audit --no-fund @confluentinc/kafka-javascript@$CONFLUENT_KAFKA_JAVASCRIPT >/dev/null && node example.js"
+run node "$NODE_IMAGE" "npm install --silent --no-audit --no-fund @confluentinc/kafka-javascript@$CONFLUENT_KAFKA_JAVASCRIPT >/dev/null && node example.js"
 
 # The examples' cleanup is the topics'.
 for language in java python go node; do
