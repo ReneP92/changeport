@@ -103,3 +103,9 @@ func (a API) SetRole(ctx context.Context, organizationID, userID, role string) e
 	_, err := a.memberships.Update(ctx, &organizationmembership.UpdateParams{OrganizationID: organizationID, UserID: userID, Role: &role})
 	return err
 }
+
+// RemoveMember implements Clerk.
+func (a API) RemoveMember(ctx context.Context, organizationID, userID string) error {
+	_, err := a.memberships.Delete(ctx, &organizationmembership.DeleteParams{OrganizationID: organizationID, UserID: userID})
+	return err
+}

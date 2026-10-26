@@ -342,16 +342,22 @@ which only operators create, in the operator console. Otherwise Clerk offers
 every user to create one in the organization switcher. The signed-in tests
 check it.
 
-With the keys there, `just dev-up` also sets up your own test user,
-`<you>+clerk_test@example.com`, which Clerk's development instances verify
-with the code 424242. It is an admin of the staff organization, so it lands
-on the operator console, and of an organization of its own, "Demo (<you>)",
-linked to the demo customer, so the organization switcher takes it to the
-demo's overview, topics and consumer groups too. It creates only what is
-missing; `<you>` is `CHANGEPORT_DEV_USER` in `.env`, or else the start of
-your git email address. The signed-in tests' cleanup only removes their own
-`e2e...` users and organizations, so yours stay. To set it up again without
-the rest of dev-up:
+With the keys there, `just dev-up` also sets up two test users of your own,
+which Clerk's development instances verify with the code 424242:
+
+- `<you>+clerk_test@example.com`, an admin of the staff organization, lands on
+  the operator console.
+- `<you>-demo+clerk_test@example.com`, an admin of an organization of your
+  own, "Demo (<you>)", linked to the demo customer, sees exactly what a
+  customer's admin sees: the demo's overview, topics and consumer groups,
+  and nothing of the operator console.
+
+Neither may create organizations, and neither is a member of the other's
+organization. It creates only what is missing; `<you>` is
+`CHANGEPORT_DEV_USER` in `.env`, or else the start of your git email address.
+The signed-in tests' cleanup only removes their own `e2e...` users and
+organizations, so yours stay. To set them up again without the rest of
+dev-up:
 
 ```bash
 just dev-user
