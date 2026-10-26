@@ -49,10 +49,14 @@ module "s3" {
   source = "../../modules/s3"
 
   name = local.name
+  # Old versions of deleted or overwritten segments are kept for a week.
+  versioning = true
 }
 
 module "iam" {
   source = "../../modules/iam"
 
-  name = local.name
+  name                      = local.name
+  cluster_arn               = module.eks.cluster_arn
+  tiered_storage_bucket_arn = module.s3.tiered_storage_bucket_arn
 }

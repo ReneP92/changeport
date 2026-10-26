@@ -48,11 +48,14 @@ module "eks" {
 module "s3" {
   source = "../../modules/s3"
 
-  name = local.name
+  name       = local.name
+  versioning = false
 }
 
 module "iam" {
   source = "../../modules/iam"
 
-  name = local.name
+  name                      = local.name
+  cluster_arn               = module.eks.cluster_arn
+  tiered_storage_bucket_arn = module.s3.tiered_storage_bucket_arn
 }

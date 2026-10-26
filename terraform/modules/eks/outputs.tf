@@ -22,3 +22,8 @@ output "cluster_security_group_id" {
   description = "The cluster security group, tagged changeport.io/customer-nodes=true for the customers' NodeClasses."
   value       = module.eks.cluster_primary_security_group_id
 }
+
+output "cluster_arn" {
+  description = "ARN of the EKS cluster, whose Pod Identity the brokers' role trusts."
+  value       = module.eks.cluster_arn
+}

@@ -3,7 +3,7 @@
 Base infrastructure per environment: VPC, EKS, S3 and IAM. Each environment in
 `environments/` lives in its own AWS account and composes the modules in
 `modules/`. Nothing has been applied yet: that waits for the accounts and the
-state backend (#10). The S3 and IAM modules are still empty (#17).
+state backend (#10).
 
 Per-customer resources are not managed here; the Go provisioning service
 creates them through the Kubernetes API.
@@ -78,4 +78,29 @@ cluster:
 aws sso login
 aws eks update-kubeconfig --region us-east-1 --name "$(terraform -chdir=terraform/environments/dev output -raw cluster_name)"
 kubectl get nodes
+```
+
+## Tiered storage (`modules/s3`, `modules/iam`)
+
+Each environment has one bucket for Kafka tiered storage,
+`changeport-<env>-tiered-storage`, and one role the brokers assume through
+EKS Pod Identity, `changeport-<env>-kafka-broker`, the names
+`eksTieredStorage` in `internal/provisioning/spec.go` expects.
+
+- **The bucket** blocks all public access, has object ACLs off, encrypts at
+  rest (SSE-S3) and refuses requests without TLS or with TLS older than 1.2.
+  Incomplete multipart uploads are aborted after a day. Prod keeps old
+  versions of deleted or overwritten objects for a week; dev is unversioned.
+- **The role** trusts only the Pod Identity of the environment's own cluster.
+  Its policy reaches objects under `${aws:PrincipalTag/kubernetes-namespace}/`
+  only: the provisioner associates each customer's broker service account
+  with the role, with session tags on, so every session carries the pod's
+  namespace, which is also the customer's key prefix (`customer-<id>/`).
+  Sessions of namespaces not named `customer-*` get nothing.
+
+After an apply, check with the IAM policy simulator that two customers cannot
+reach each other's prefix:
+
+```bash
+just tiered-storage-isolation-test dev
 ```
