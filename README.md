@@ -91,7 +91,7 @@ for progress.
 | `cmd/agent` | The Kafka agent next to every customer's cluster: turns on tiered storage for every topic that can use it, keeps the client metrics subscription in place and measures consumer lag in seconds |
 | `internal/provisioning` | The per-customer template and the code that applies it through the Kubernetes API |
 | `web` | The console's React app, built and tested with Bun (see [web/README.md](web/README.md)) |
-| `terraform` | Base infrastructure per environment: VPC, EKS, S3, IAM (empty modules, nothing applied) |
+| `terraform` | Base infrastructure per environment: VPC, EKS, S3, IAM (the VPC module is written; nothing applied) |
 | `deploy` | Kubernetes manifests: the kind cluster, and the platform components (Strimzi, cert-manager) with one overlay per environment |
 | `images` | Container images we build: Strimzi's Kafka image plus the tiered storage plugin and client telemetry, the Kafka agent, the provisioner and the console |
 | `hack` | Local development scripts behind the justfile |
@@ -481,7 +481,7 @@ Strimzi and cert-manager CRDs (envtest), which `just test` downloads into
 generated code.
 
 CI runs the same Go lint and tests, the web app's checks and Playwright
-tests, `just tf-fmt tf-validate`, `just shellcheck`, and `just check-text`,
+tests, `just tf-fmt tf-validate tf-test`, `just shellcheck`, and `just check-text`,
 which fails on any em dash in the repository, and on every pull request the
 whole end-to-end suite on a fresh kind cluster: `just dev-up e2e
 platform-check`, where `platform-check` also server-side dry-runs the EKS

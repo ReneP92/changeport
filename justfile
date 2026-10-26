@@ -252,17 +252,31 @@ shellcheck:
 # Check Terraform formatting
 [group('Terraform')]
 tf-fmt:
-    terraform fmt -check -recursive terraform
+    @source hack/lib.sh && terraform fmt -check -recursive terraform
 
 # Validate every Terraform environment without a backend
 [group('Terraform')]
 tf-validate:
     #!/usr/bin/env bash
     set -euo pipefail
+    source hack/lib.sh
     for env in terraform/environments/*/; do
-      echo "==> $env"
+      log "Validating $env"
       terraform -chdir="$env" init -backend=false -input=false >/dev/null
       terraform -chdir="$env" validate
+    done
+
+# Run the Terraform modules' tests, which plan against a mocked AWS provider
+[group('Terraform')]
+tf-test:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    source hack/lib.sh
+    for tests in terraform/modules/*/tests/; do
+      module=${tests%/tests/}
+      log "Testing $module"
+      terraform -chdir="$module" init -backend=false -input=false >/dev/null
+      terraform -chdir="$module" test
     done
 
 # Remove build output and downloaded tools

@@ -1,5 +1,5 @@
 # Base infrastructure of the prod environment, in its own AWS account.
-# Nothing here has been applied yet; the account, region and state backend are
+# Nothing here has been applied yet; the account and the state backend are
 # chosen in https://github.com/ReneP92/changeport/issues/10.
 
 provider "aws" {
@@ -23,6 +23,10 @@ module "vpc" {
   name               = local.name
   cidr_block         = var.vpc_cidr_block
   availability_zones = var.availability_zones
+
+  # A NAT gateway per zone, so the loss of one zone leaves the others
+  # their way to the internet.
+  nat_gateway_per_zone = true
 }
 
 module "eks" {
