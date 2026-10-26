@@ -57,10 +57,10 @@ func run(ctx context.Context, args []string) error {
 		return err
 	}
 	if len(result.Changes) == 0 {
-		fmt.Printf("%s was already set up\n", result.Email)
+		fmt.Println("everything was already set up")
 	}
 	for _, change := range result.Changes {
-		fmt.Printf("%s: %s\n", result.Email, change)
+		fmt.Println(change)
 	}
 	if result.DemoOrganizationID != "" {
 		fmt.Printf("demo_organization=%s\n", result.DemoOrganizationID)

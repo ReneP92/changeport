@@ -4,7 +4,7 @@
 # platform components (Strimzi, cert-manager, the provisioning controller,
 # the console) and gives the console its Clerk keys from .env, creates the
 # "demo" Customer, which the controller provisions, and runs the smoke test
-# against it, and with .env sets up your dev user for the console
+# against it, and with .env sets up your test users for the console
 # (hack/dev-user.sh). DEMO_CUSTOMER= (empty) leaves the demo out, for runs that
 # bring customers of their own. Safe to run again.
 # shellcheck source=lib.sh

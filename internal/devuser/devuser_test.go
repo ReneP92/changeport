@@ -69,6 +69,12 @@ func (f *fakeClerk) AddMember(_ context.Context, organizationID, userID, role st
 	return nil
 }
 
+func (f *fakeClerk) RemoveMember(_ context.Context, organizationID, userID string) error {
+	delete(f.roles, organizationID+"/"+userID)
+	f.calls = append(f.calls, "remove "+userID+" from "+organizationID)
+	return nil
+}
+
 func (f *fakeClerk) SetRole(_ context.Context, organizationID, userID, role string) error {
 	f.roles[organizationID+"/"+userID] = role
 	f.calls = append(f.calls, "set "+userID+" in "+organizationID+" to "+role)
@@ -87,13 +93,23 @@ func TestEnsureCreatesWhatIsMissing(t *testing.T) {
 		"create user rene+clerk_test@example.com Dev rene",
 		"add user_1 to org_staff as org:admin",
 		"create organization Demo (rene)",
-		"add user_1 to org_3 as org:admin",
+		"create user rene-demo+clerk_test@example.com Demo rene",
+		"add user_2 to org_3 as org:admin",
 	}
 	if !slices.Equal(clerk.calls, want) {
 		t.Errorf("calls =\n%s\nwant\n%s", strings.Join(clerk.calls, "\n"), strings.Join(want, "\n"))
 	}
-	if result.Email != "rene+clerk_test@example.com" || result.UserID != "user_1" || result.DemoOrganizationID != "org_3" || len(result.Changes) != 4 {
+	if result.Operator != (Account{Email: "rene+clerk_test@example.com", UserID: "user_1"}) {
+		t.Errorf("operator = %+v", result.Operator)
+	}
+	if result.Customer == nil || *result.Customer != (Account{Email: "rene-demo+clerk_test@example.com", UserID: "user_2"}) {
+		t.Errorf("customer = %+v", result.Customer)
+	}
+	if result.DemoOrganizationID != "org_3" || len(result.Changes) != 5 {
 		t.Errorf("result = %+v", result)
+	}
+	if result.Changes[0] != "rene+clerk_test@example.com: created the user" {
+		t.Errorf("changes = %q, want each with the user's address", result.Changes)
 	}
 
 	// A second run finds everything in place.
@@ -104,6 +120,34 @@ func TestEnsureCreatesWhatIsMissing(t *testing.T) {
 	}
 	if len(clerk.calls) != 0 || len(again.Changes) != 0 || again.DemoOrganizationID != "org_3" {
 		t.Errorf("a second run made calls %v and changes %v", clerk.calls, again.Changes)
+	}
+}
+
+// Before the split, one user was the operator and the demo customer's admin;
+// it now leaves the demo organization to the customer's admin, and neither is
+// a member of the other's organization.
+func TestEnsureSeparatesTheOperatorAndTheCustomer(t *testing.T) {
+	clerk := newFakeClerk()
+	clerk.users["rene+clerk_test@example.com"] = "user_7"
+	clerk.users["rene-demo+clerk_test@example.com"] = "user_8"
+	clerk.organizations["Demo (rene)"] = "org_demo"
+	clerk.roles["org_staff/user_7"] = AdminRole
+	clerk.roles["org_demo/user_7"] = AdminRole
+	clerk.roles["org_staff/user_8"] = "org:member"
+	result, err := Ensure(t.Context(), clerk, rene)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{
+		"add user_8 to org_demo as org:admin",
+		"remove user_7 from org_demo",
+		"remove user_8 from org_staff",
+	}
+	if !slices.Equal(clerk.calls, want) {
+		t.Errorf("calls =\n%s\nwant\n%s", strings.Join(clerk.calls, "\n"), strings.Join(want, "\n"))
+	}
+	if want := "rene+clerk_test@example.com: took the user out of \"Demo (rene)\""; !slices.Contains(result.Changes, want) {
+		t.Errorf("changes = %q, want %q among them", result.Changes, want)
 	}
 }
 
@@ -118,9 +162,9 @@ func TestEnsureRaisesAMemberToAdmin(t *testing.T) {
 	if !slices.Equal(clerk.calls, []string{"set user_7 in org_staff to org:admin"}) {
 		t.Errorf("calls = %v", clerk.calls)
 	}
-	// Without a demo organization asked for, none is made.
-	if result.DemoOrganizationID != "" {
-		t.Errorf("demo organization %q, want none", result.DemoOrganizationID)
+	// Without a demo organization asked for, neither it nor its admin is made.
+	if result.DemoOrganizationID != "" || result.Customer != nil {
+		t.Errorf("demo organization %q and customer %+v, want none", result.DemoOrganizationID, result.Customer)
 	}
 }
 
@@ -161,7 +205,7 @@ func (f failingClerk) AddMember(ctx context.Context, organizationID, userID, rol
 
 func TestEnsureReportsWhatFailed(t *testing.T) {
 	_, err := Ensure(t.Context(), failingClerk{newFakeClerk(), "add"}, rene)
-	if err == nil || !strings.Contains(err.Error(), "add the user to the staff organization: clerk is down") {
+	if err == nil || !strings.Contains(err.Error(), "add rene+clerk_test@example.com to the staff organization: clerk is down") {
 		t.Errorf("Ensure() = %v, want the failed step", err)
 	}
 }
@@ -181,7 +225,7 @@ func TestEnsureStopsUsersFromCreatingOrganizations(t *testing.T) {
 	if want := []string{"disallow organizations for user_7"}; !slices.Equal(clerk.calls, want) {
 		t.Errorf("calls = %q, want %q", clerk.calls, want)
 	}
-	if want := []string{"stopped the user from creating organizations"}; !slices.Equal(result.Changes, want) {
+	if want := []string{"rene+clerk_test@example.com: stopped the user from creating organizations"}; !slices.Equal(result.Changes, want) {
 		t.Errorf("changes = %q, want %q", result.Changes, want)
 	}
 
