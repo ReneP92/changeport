@@ -21,3 +21,20 @@ variable "kubernetes_version" {
   type        = string
   default     = "1.37"
 }
+
+variable "api_allowed_cidrs" {
+  description = "IPv4 CIDR blocks allowed to reach the EKS cluster's public API endpoint."
+  type        = list(string)
+}
+
+variable "administrator_permission_sets" {
+  description = "IAM Identity Center permission sets whose roles administer the EKS cluster."
+  type        = list(string)
+  default     = ["AdministratorAccess"]
+}
+
+variable "kafka_dns_zone_ids" {
+  description = "Route 53 hosted zone IDs of the environment's kafka.* zones, once the domain is registered (#8)."
+  type        = list(string)
+  default     = []
+}
