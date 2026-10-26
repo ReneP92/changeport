@@ -29,26 +29,34 @@ func NewAPI(secretKey string) API {
 }
 
 // FindUser implements Clerk.
-func (a API) FindUser(ctx context.Context, email string) (string, error) {
+func (a API) FindUser(ctx context.Context, email string) (*User, error) {
 	list, err := a.users.List(ctx, &user.ListParams{EmailAddresses: []string{email}})
 	if err != nil || len(list.Users) == 0 {
-		return "", err
+		return nil, err
 	}
-	return list.Users[0].ID, nil
+	found := list.Users[0]
+	return &User{ID: found.ID, CanCreateOrganizations: found.CreateOrganizationEnabled}, nil
 }
 
 // CreateUser implements Clerk.
 func (a API) CreateUser(ctx context.Context, email, firstName, lastName string) (string, error) {
 	created, err := a.users.Create(ctx, &user.CreateParams{
-		EmailAddresses:          &[]string{email},
-		FirstName:               &firstName,
-		LastName:                &lastName,
-		SkipPasswordRequirement: clerk.Bool(true),
+		EmailAddresses:            &[]string{email},
+		FirstName:                 &firstName,
+		LastName:                  &lastName,
+		SkipPasswordRequirement:   clerk.Bool(true),
+		CreateOrganizationEnabled: clerk.Bool(false),
 	})
 	if err != nil {
 		return "", err
 	}
 	return created.ID, nil
+}
+
+// DisallowOrganizations implements Clerk.
+func (a API) DisallowOrganizations(ctx context.Context, userID string) error {
+	_, err := a.users.Update(ctx, userID, &user.UpdateParams{CreateOrganizationEnabled: clerk.Bool(false)})
+	return err
 }
 
 // FindOrganization implements Clerk. Clerk's query matches parts of names,
