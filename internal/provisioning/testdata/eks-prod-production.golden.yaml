@@ -174,8 +174,10 @@ spec:
   kafka:
     version: 4.3.1
     metadataVersion: 4.3-IV0
+    # broker.rack, which clients set client.rack to, to read from a replica
+    # in their own zone (docs/connecting.md).
     rack:
-      topologyKey: topology.kubernetes.io/zone
+      topologyKey: topology.k8s.aws/zone-id
     listeners:
       # Platform clients inside the cluster, such as the Kafka agent.
       - name: tls
