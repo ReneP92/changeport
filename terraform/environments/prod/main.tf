@@ -60,3 +60,11 @@ module "iam" {
   cluster_arn               = module.eks.cluster_arn
   tiered_storage_bucket_arn = module.s3.tiered_storage_bucket_arn
 }
+
+# The platform's own images, which every account in the organization pulls.
+module "ecr" {
+  source = "../../modules/ecr"
+
+  name              = local.name
+  github_repository = "ReneP92/changeport"
+}

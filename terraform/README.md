@@ -104,3 +104,34 @@ reach each other's prefix:
 ```bash
 just tiered-storage-isolation-test dev
 ```
+
+## Images (`modules/ecr`, prod only)
+
+The platform's own images live in ECR in the prod account: `changeport/kafka`,
+`changeport/agent`, `changeport/provisioner` and `changeport/console`, with
+immutable tags and scan on push. Each repository keeps its newest 200 tagged
+images; untagged manifests, such as the per-architecture images of a
+multi-architecture image, are kept. Every account in the organization may
+pull (`aws:PrincipalOrgID`); only `changeport-prod-image-push` may push, and
+only GitHub Actions runs for pushes to main of `ReneP92/changeport` may assume
+it, through OpenID Connect, with no access key.
+
+`.github/workflows/publish-images.yml` builds each image whose sources changed
+on main (`hack/changed-images.sh`) for amd64 and arm64, pushes it tagged with
+the commit, and opens or updates a pull request from `bot/eks-images` that
+sets the new digests in `internal/provisioning/eks-images.json`, which the EKS
+platforms embed, and `deploy/components/eks-images` (`go run ./cmd/eksimages`).
+Merging that pull request is what changes the images EKS runs; reverting it
+goes back. Pull requests the workflow opens do not run CI, so it runs the
+tests of those files itself.
+
+Once prod is applied, two settings turn publishing on:
+
+1. The repository variable `ECR_PUSH_ROLE_ARN`, from
+   `terraform -chdir=terraform/environments/prod output -raw image_push_role_arn`.
+   Until it is set, the workflow does nothing.
+2. "Allow GitHub Actions to create and approve pull requests" in the
+   repository's Actions settings, for the pull request.
+
+Then run the workflow once by hand (Actions, Publish images, Run workflow) to
+publish every image.

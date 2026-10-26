@@ -91,9 +91,9 @@ for progress.
 | `cmd/agent` | The Kafka agent next to every customer's cluster: turns on tiered storage for every topic that can use it, keeps the client metrics subscription in place and measures consumer lag in seconds |
 | `internal/provisioning` | The per-customer template and the code that applies it through the Kubernetes API |
 | `web` | The console's React app, built and tested with Bun (see [web/README.md](web/README.md)) |
-| `terraform` | Base infrastructure per environment: VPC, EKS, S3, IAM (modules written; nothing applied yet) |
+| `terraform` | Base infrastructure per environment: VPC, EKS, S3, IAM, and ECR in prod (modules written; nothing applied yet; see [terraform/README.md](terraform/README.md)) |
 | `deploy` | Kubernetes manifests: the kind cluster, and the platform components (Strimzi, cert-manager) with one overlay per environment |
-| `images` | Container images we build: Strimzi's Kafka image plus the tiered storage plugin and client telemetry, the Kafka agent, the provisioner and the console |
+| `images` | Container images we build: Strimzi's Kafka image plus the tiered storage plugin and client telemetry, the Kafka agent, the provisioner and the console. `.github/workflows/publish-images.yml` publishes them to ECR from main, and `cmd/eksimages` sets the digests the EKS platforms run |
 | `hack` | Local development scripts behind the justfile |
 | `tools` | Go module pinning the tools (kind, golangci-lint); `just tools` builds them into `bin/` |
 

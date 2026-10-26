@@ -284,7 +284,7 @@ type Platform struct {
 	KafkaImage string
 	// AgentImage is the Kafka agent's image (images/agent), which runs next
 	// to every customer's cluster. Empty means no agent: on EKS until the
-	// images are in ECR (#18).
+	// image is first published to ECR (eks-images.json).
 	AgentImage string
 	// KafkaDomain is the DNS zone the customers' public names live under, as
 	// <customer>.<KafkaDomain>.
@@ -500,6 +500,8 @@ func eksTieredStorage(environment string) TieredStorage {
 // .invalid placeholder until the domain is registered (#8).
 var EKSDevPlatform = Platform{
 	Name:              "eks-dev",
+	KafkaImage:        eksImages.Kafka,
+	AgentImage:        eksImages.Agent,
 	StorageClass:      "gp3",
 	Zones:             3,
 	KafkaDomain:       "kafka.dev.changeport.invalid",
@@ -514,6 +516,8 @@ var EKSDevPlatform = Platform{
 // registered (#8).
 var EKSProdPlatform = Platform{
 	Name:              "eks-prod",
+	KafkaImage:        eksImages.Kafka,
+	AgentImage:        eksImages.Agent,
 	StorageClass:      "gp3",
 	Zones:             3,
 	KafkaDomain:       "kafka.changeport.invalid",
