@@ -1,0 +1,7 @@
+# Written by go run ./cmd/eksimages from internal/provisioning/eks-images.json:
+# the platform components' images in ECR, by digest, as
+# .github/workflows/publish-images.yml last published them from main. Both EKS
+# overlays include it. Change the images with the command rather than here.
+apiVersion: kustomize.config.k8s.io/v1alpha1
+kind: Component
+images: []

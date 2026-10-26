@@ -9,6 +9,9 @@ resources:
   - ../../base/console
   - ../../base/eks-storage
   - ../../base/victoria-metrics
+# The platform's own images in ECR.
+components:
+  - ../../components/eks-images
 patches:
   # Nothing to run until the console's image is in ECR and it has an
   # ingress and a Clerk production instance (#58).
@@ -27,7 +30,8 @@ patches:
       - op: add
         path: /spec/template/spec/containers/0/args/-
         value: -platform=eks-dev
-      # Nothing to run until the provisioner image is in ECR (#18).
+      # Nothing to run until its image is published to ECR (eks-images)
+      # and the environment is brought up (#28).
       - op: replace
         path: /spec/replicas
         value: 0

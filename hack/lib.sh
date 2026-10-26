@@ -220,7 +220,13 @@ ensure_terraform() {
   rm -rf "$BIN_DIR/terraform-unpack" "$archive"
   chmod +x "$TERRAFORM_BIN"
 }
-terraform() { ensure_terraform && "$TERRAFORM_BIN" "$@"; }
+# Every module and environment shares one copy of each provider, which the
+# lock files' checksums still verify.
+terraform() {
+  ensure_terraform
+  mkdir -p "$BIN_DIR/terraform-plugins"
+  TF_PLUGIN_CACHE_DIR="$BIN_DIR/terraform-plugins" "$TERRAFORM_BIN" "$@"
+}
 
 # Downloads every upstream file pinned in deploy/upstream-files.txt.
 fetch_upstream_files() {

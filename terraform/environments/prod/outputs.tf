@@ -27,3 +27,13 @@ output "kafka_broker_role_name" {
   description = "The brokers' role, the RoleName of eksTieredStorage in internal/provisioning/spec.go."
   value       = module.iam.kafka_broker_role_name
 }
+
+output "image_registry" {
+  description = "The registry of the platform's images, which the image workflow publishes to."
+  value       = module.ecr.registry
+}
+
+output "image_push_role_arn" {
+  description = "The role the image workflow assumes: set it as the ECR_PUSH_ROLE_ARN repository variable on GitHub."
+  value       = module.ecr.push_role_arn
+}
