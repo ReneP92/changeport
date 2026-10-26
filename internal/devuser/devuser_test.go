@@ -12,6 +12,7 @@ import (
 // fakeClerk keeps users, organizations and memberships in memory.
 type fakeClerk struct {
 	users         map[string]string // email to ID
+	creators      map[string]bool   // IDs of users who may create organizations
 	organizations map[string]string // name to ID
 	roles         map[string]string // organization/user to role
 	calls         []string          // the changing calls, in order
@@ -20,13 +21,24 @@ type fakeClerk struct {
 func newFakeClerk() *fakeClerk {
 	return &fakeClerk{
 		users:         map[string]string{},
+		creators:      map[string]bool{},
 		organizations: map[string]string{"ChangePort": "org_staff", "Demo (renee)": "org_other"},
 		roles:         map[string]string{},
 	}
 }
 
-func (f *fakeClerk) FindUser(_ context.Context, email string) (string, error) {
-	return f.users[email], nil
+func (f *fakeClerk) FindUser(_ context.Context, email string) (*User, error) {
+	id, ok := f.users[email]
+	if !ok {
+		return nil, nil
+	}
+	return &User{ID: id, CanCreateOrganizations: f.creators[id]}, nil
+}
+
+func (f *fakeClerk) DisallowOrganizations(_ context.Context, userID string) error {
+	f.creators[userID] = false
+	f.calls = append(f.calls, "disallow organizations for "+userID)
+	return nil
 }
 
 func (f *fakeClerk) CreateUser(_ context.Context, email, firstName, lastName string) (string, error) {
@@ -151,5 +163,33 @@ func TestEnsureReportsWhatFailed(t *testing.T) {
 	_, err := Ensure(t.Context(), failingClerk{newFakeClerk(), "add"}, rene)
 	if err == nil || !strings.Contains(err.Error(), "add the user to the staff organization: clerk is down") {
 		t.Errorf("Ensure() = %v, want the failed step", err)
+	}
+}
+
+// A user Clerk lets create organizations, as Clerk's instance setting may
+// still allow for new users, is stopped from it; one already stopped is left
+// alone.
+func TestEnsureStopsUsersFromCreatingOrganizations(t *testing.T) {
+	clerk := newFakeClerk()
+	clerk.users["rene+clerk_test@example.com"] = "user_7"
+	clerk.creators["user_7"] = true
+	clerk.roles["org_staff/user_7"] = AdminRole
+	result, err := Ensure(t.Context(), clerk, Options{Developer: "rene", StaffOrganizationID: "org_staff"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := []string{"disallow organizations for user_7"}; !slices.Equal(clerk.calls, want) {
+		t.Errorf("calls = %q, want %q", clerk.calls, want)
+	}
+	if want := []string{"stopped the user from creating organizations"}; !slices.Equal(result.Changes, want) {
+		t.Errorf("changes = %q, want %q", result.Changes, want)
+	}
+
+	clerk.calls = nil
+	if _, err := Ensure(t.Context(), clerk, Options{Developer: "rene", StaffOrganizationID: "org_staff"}); err != nil {
+		t.Fatal(err)
+	}
+	if len(clerk.calls) != 0 {
+		t.Errorf("a second run made calls %q, want none", clerk.calls)
 	}
 }

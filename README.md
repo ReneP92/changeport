@@ -336,6 +336,12 @@ cp .env.sample .env  # then fill it in
 just console-config
 ```
 
+In the Clerk dashboard, turn off **Allow user-created organizations**
+(Organizations, Settings), in every instance: organizations are customers,
+which only operators create, in the operator console. Otherwise Clerk offers
+every user to create one in the organization switcher. The signed-in tests
+check it.
+
 With the keys there, `just dev-up` also sets up your own test user,
 `<you>+clerk_test@example.com`, which Clerk's development instances verify
 with the code 424242. It is an admin of the staff organization, so it lands

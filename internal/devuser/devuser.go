@@ -5,6 +5,9 @@
 // an organization of its own for the local demo customer, so it sees a
 // customer's side too. Ensure creates what is missing and changes nothing
 // that is already right.
+//
+// Like customers, the user may not create organizations: organizations are
+// customers, which operators create in the operator console.
 package devuser
 
 import (
@@ -20,10 +23,13 @@ const AdminRole = "org:admin"
 
 // Clerk is what Ensure needs of Clerk's Backend API.
 type Clerk interface {
-	// FindUser returns the ID of the user with email, or "".
-	FindUser(ctx context.Context, email string) (string, error)
-	// CreateUser creates a user with email and no password.
+	// FindUser returns the user with email, or nil.
+	FindUser(ctx context.Context, email string) (*User, error)
+	// CreateUser creates a user with email and no password, who may not
+	// create organizations.
 	CreateUser(ctx context.Context, email, firstName, lastName string) (string, error)
+	// DisallowOrganizations stops the user from creating organizations.
+	DisallowOrganizations(ctx context.Context, userID string) error
 	// FindOrganization returns the ID of the organization named exactly
 	// name, or "".
 	FindOrganization(ctx context.Context, name string) (string, error)
@@ -36,6 +42,14 @@ type Clerk interface {
 	AddMember(ctx context.Context, organizationID, userID, role string) error
 	// SetRole changes a member's role.
 	SetRole(ctx context.Context, organizationID, userID, role string) error
+}
+
+// User is a Clerk user.
+type User struct {
+	ID string
+	// CanCreateOrganizations says whether the user may create organizations,
+	// which Clerk then offers in the organization switcher.
+	CanCreateOrganizations bool
 }
 
 // Options say whom to set up.
@@ -91,15 +105,25 @@ func Ensure(ctx context.Context, clerk Clerk, opts Options) (Result, error) {
 	}
 	result := Result{Email: Email(opts.Developer)}
 
-	userID, err := clerk.FindUser(ctx, result.Email)
+	user, err := clerk.FindUser(ctx, result.Email)
 	if err != nil {
 		return result, fmt.Errorf("find user %s: %w", result.Email, err)
 	}
-	if userID == "" {
+	var userID string
+	switch {
+	case user == nil:
 		if userID, err = clerk.CreateUser(ctx, result.Email, "Dev", opts.Developer); err != nil {
 			return result, fmt.Errorf("create user %s: %w", result.Email, err)
 		}
 		result.Changes = append(result.Changes, "created the user")
+	case user.CanCreateOrganizations:
+		userID = user.ID
+		if err := clerk.DisallowOrganizations(ctx, userID); err != nil {
+			return result, fmt.Errorf("stop user %s from creating organizations: %w", result.Email, err)
+		}
+		result.Changes = append(result.Changes, "stopped the user from creating organizations")
+	default:
+		userID = user.ID
 	}
 	result.UserID = userID
 
