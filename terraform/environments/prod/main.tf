@@ -34,6 +34,15 @@ module "eks" {
 
   name               = local.name
   kubernetes_version = var.kubernetes_version
+  vpc_id             = module.vpc.vpc_id
+  subnet_ids         = module.vpc.private_subnet_ids
+
+  api_allowed_cidrs             = var.api_allowed_cidrs
+  administrator_permission_sets = var.administrator_permission_sets
+  kafka_dns_zone_ids            = var.kafka_dns_zone_ids
+
+  # The customers' clusters run here.
+  deletion_protection = true
 }
 
 module "s3" {

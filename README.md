@@ -36,7 +36,7 @@ per customer; see [docs/PROJECT_PLAN.md](docs/PROJECT_PLAN.md).
 |  +-- customer-acme --------------+     +-- customer-globex ------------+  |
 |  | Kafka 4.3, KRaft, RF 3        |     | Kafka 4.3, KRaft, RF 3        |  |
 |  | brokers across 3 AZs          |     | brokers across 3 AZs          |  |
-|  | dedicated nodes (Karpenter)   |     | dedicated nodes (Karpenter)   |  |
+|  | dedicated nodes (Auto Mode)   |     | dedicated nodes (Auto Mode)   |  |
 |  +-------------------------------+     +-------------------------------+  |
 |                  ^                                     |                  |
 +------------------|-------------------------------------|------------------+
@@ -91,7 +91,7 @@ for progress.
 | `cmd/agent` | The Kafka agent next to every customer's cluster: turns on tiered storage for every topic that can use it, keeps the client metrics subscription in place and measures consumer lag in seconds |
 | `internal/provisioning` | The per-customer template and the code that applies it through the Kubernetes API |
 | `web` | The console's React app, built and tested with Bun (see [web/README.md](web/README.md)) |
-| `terraform` | Base infrastructure per environment: VPC, EKS, S3, IAM (the VPC module is written; nothing applied) |
+| `terraform` | Base infrastructure per environment: VPC, EKS, S3, IAM (the VPC and EKS modules are written; nothing applied) |
 | `deploy` | Kubernetes manifests: the kind cluster, and the platform components (Strimzi, cert-manager) with one overlay per environment |
 | `images` | Container images we build: Strimzi's Kafka image plus the tiered storage plugin and client telemetry, the Kafka agent, the provisioner and the console |
 | `hack` | Local development scripts behind the justfile |

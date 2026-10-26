@@ -3,7 +3,7 @@
 Base infrastructure per environment: VPC, EKS, S3 and IAM. Each environment in
 `environments/` lives in its own AWS account and composes the modules in
 `modules/`. Nothing has been applied yet: that waits for the accounts and the
-state backend (#10). The EKS, S3 and IAM modules are still empty (#16, #17).
+state backend (#10). The S3 and IAM modules are still empty (#17).
 
 Per-customer resources are not managed here; the Go provisioning service
 creates them through the Kubernetes API.
@@ -46,3 +46,36 @@ control planes there.
 
 Prod has a NAT gateway per zone, so a zone outage cannot cut the other zones
 off from the internet; dev shares one to save about $65 a month.
+
+## Cluster (`modules/eks`)
+
+Each environment has one EKS cluster in Auto Mode, on Kubernetes 1.37 with
+standard support only, in the private subnets. AWS runs node provisioning, OS
+patching, EBS volumes and load balancers.
+
+- **Nodes:** the platform components run on Auto Mode's built-in `system` and
+  `general-purpose` node pools. Each customer's brokers run on a NodePool and
+  NodeClass of their own, which the provisioning service creates
+  (`eksDedicatedNodes` in `internal/provisioning/spec.go`). Those NodeClasses
+  use the role `changeport-<env>-customer-node` made here, which has an EC2
+  access entry with `AmazonEKSAutoNodePolicy`, and select the cluster security
+  group by its `changeport.io/customer-nodes=true` tag. The cluster role may
+  tag what it launches, for each customer's `changeport.io/tenant`.
+- **Access:** access entries only (`API` mode). The roles IAM Identity Center
+  creates for the `administrator_permission_sets` (`AdministratorAccess` by
+  default) are cluster administrators. The public API endpoint only answers
+  the `api_allowed_cidrs`, which each apply must be given; `0.0.0.0/0` is
+  refused.
+- **DNS:** once the domain is registered (#8), `kafka_dns_zone_ids` gives
+  external-dns and cert-manager Pod Identity roles that may change only the
+  `kafka.*` zones. Without zones, neither role exists.
+- **Deletion protection** is on in prod and off in dev, which can be rebuilt.
+
+After an apply, sign in through single sign-on and point kubectl at the
+cluster:
+
+```bash
+aws sso login
+aws eks update-kubeconfig --region us-east-1 --name "$(terraform -chdir=terraform/environments/dev output -raw cluster_name)"
+kubectl get nodes
+```
