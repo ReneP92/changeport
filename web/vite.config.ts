@@ -15,13 +15,15 @@ export default defineConfig({
     rolldownOptions: {
       output: {
         // Libraries change less often than the app, so they get chunks of
-        // their own that browsers keep across releases.
+        // their own that browsers keep across releases. Clerk's bundled UI
+        // (@clerk/ui) stays out of them, so that its components still load
+        // only when shown.
         codeSplitting: {
           groups: [
             { name: "react", test: /node_modules[\\/](react|react-dom|scheduler)[\\/]/ },
-            { name: "clerk", test: /node_modules[\\/]@clerk[\\/]/ },
+            { name: "clerk", test: /node_modules[\\/]@clerk[\\/](react|shared)[\\/]/ },
             { name: "charts", test: /node_modules[\\/](recharts|d3-[^\\/]+|victory-vendor)[\\/]/ },
-            { name: "vendor", test: /node_modules[\\/]/ },
+            { name: "vendor", test: /node_modules[\\/](?!@clerk[\\/]ui[\\/])/ },
           ],
         },
       },
