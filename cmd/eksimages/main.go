@@ -49,6 +49,8 @@ func run(args []string) error {
 		switch name {
 		case "kafka":
 			images.Kafka = reference
+		case "connect":
+			images.Connect = reference
 		case "agent":
 			images.Agent = reference
 		case "provisioner":
@@ -56,7 +58,7 @@ func run(args []string) error {
 		case "console":
 			images.Console = reference
 		default:
-			return fmt.Errorf("unknown image %q: kafka, agent, provisioner or console", name)
+			return fmt.Errorf("unknown image %q: kafka, connect, agent, provisioner or console", name)
 		}
 	}
 	data, err = json.MarshalIndent(images, "", "  ")

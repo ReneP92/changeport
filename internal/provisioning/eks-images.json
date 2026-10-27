@@ -1,5 +1,6 @@
 {
   "kafka": "",
+  "connect": "",
   "agent": "",
   "provisioner": "",
   "console": ""

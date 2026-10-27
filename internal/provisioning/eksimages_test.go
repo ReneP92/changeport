@@ -20,6 +20,8 @@ func TestParseEKSImages(t *testing.T) {
 	}{
 		{"none published", `{"kafka": "", "agent": "", "provisioner": "", "console": ""}`, ""},
 		{"by digest", `{"kafka": "` + testRegistry + `/changeport/kafka@` + testDigest + `"}`, ""},
+		{"connect by digest", `{"connect": "` + testRegistry + `/changeport/connect@` + testDigest + `"}`, ""},
+		{"connect from another repository", `{"connect": "` + testRegistry + `/changeport/kafka@` + testDigest + `"}`, "not changeport/connect"},
 		{"by tag", `{"agent": "` + testRegistry + `/changeport/agent:abc123"}`, "not changeport/agent in ECR by digest"},
 		{"another repository", `{"kafka": "` + testRegistry + `/changeport/agent@` + testDigest + `"}`, "not changeport/kafka"},
 		{"another registry", `{"console": "quay.io/changeport/console@` + testDigest + `"}`, "not changeport/console"},

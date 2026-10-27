@@ -6,7 +6,7 @@ variable "name" {
 variable "repositories" {
   description = "The images, each pushed to the repository changeport/<image>."
   type        = list(string)
-  default     = ["kafka", "agent", "provisioner", "console"]
+  default     = ["kafka", "connect", "agent", "provisioner", "console"]
 }
 
 variable "github_repository" {

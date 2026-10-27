@@ -108,7 +108,8 @@ just tiered-storage-isolation-test dev
 ## Images (`modules/ecr`, prod only)
 
 The platform's own images live in ECR in the prod account: `changeport/kafka`,
-`changeport/agent`, `changeport/provisioner` and `changeport/console`, with
+`changeport/connect`, `changeport/agent`, `changeport/provisioner` and
+`changeport/console`, with
 immutable tags and scan on push. Each repository keeps its newest 200 tagged
 images; untagged manifests, such as the per-architecture images of a
 multi-architecture image, are kept. Every account in the organization may

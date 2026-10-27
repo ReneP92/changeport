@@ -100,7 +100,7 @@ for progress.
 | `web` | The console's React app, built and tested with Bun (see [web/README.md](web/README.md)) |
 | `terraform` | Base infrastructure per environment: VPC, EKS, S3, IAM, and ECR in prod (modules written; nothing applied yet; see [terraform/README.md](terraform/README.md)) |
 | `deploy` | Kubernetes manifests: the kind cluster, and the platform components (Strimzi, cert-manager) with one overlay per environment |
-| `images` | Container images we build: Strimzi's Kafka image plus the tiered storage plugin and client telemetry, the Kafka agent, the provisioner and the console. `.github/workflows/publish-images.yml` publishes them to ECR from main, and `cmd/eksimages` sets the digests the EKS platforms run |
+| `images` | Container images we build: Strimzi's Kafka image plus the tiered storage plugin and client telemetry, Kafka Connect with Debezium's Postgres connector, the Kafka agent, the provisioner and the console. `.github/workflows/publish-images.yml` publishes them to ECR from main, and `cmd/eksimages` sets the digests the EKS platforms run |
 | `hack` | Local development scripts behind the justfile |
 | `tools` | Go module pinning the tools (kind, golangci-lint); `just tools` builds them into `bin/` |
 

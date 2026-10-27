@@ -89,6 +89,11 @@ check-text:
 kafka-image:
     @source hack/lib.sh && build_kafka_image
 
+# Build the Kafka Connect image (images/connect) for this machine as changeport/connect:local
+[group('Images')]
+connect-image:
+    @source hack/lib.sh && build_connect_image
+
 # Build the Kafka agent image (images/agent) for this machine as changeport/agent:local
 [group('Images')]
 agent-image:
@@ -143,6 +148,11 @@ provisioner-reload:
 [group('Images')]
 kafka-image-test image="":
     hack/kafka-image-test.sh {{ image }}
+
+# Check that the Kafka Connect image loads its plugins (default changeport/connect:local)
+[group('Images')]
+connect-image-test image="":
+    hack/connect-image-test.sh {{ image }}
 
 # Create the kind cluster, install the platform components, provision the demo customer and smoke test it
 [group('Local development (kind + Strimzi)')]

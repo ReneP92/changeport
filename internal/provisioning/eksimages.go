@@ -21,6 +21,9 @@ var eksImagesJSON []byte
 type EKSImages struct {
 	// Kafka is the broker image from images/kafka; empty means Strimzi's own.
 	Kafka string `json:"kafka"`
+	// Connect is the Kafka Connect image from images/connect, which runs the
+	// Postgres CDC source (docs/cdc.md).
+	Connect string `json:"connect"`
 	// Agent is the Kafka agent's image; empty means no agent.
 	Agent string `json:"agent"`
 	// Provisioner and Console are the platform components' images, which the
@@ -30,7 +33,7 @@ type EKSImages struct {
 }
 
 // ecrImage is an image in the platform's ECR registry, by digest.
-var ecrImage = regexp.MustCompile(`^[0-9]{12}\.dkr\.ecr\.[a-z0-9-]+\.amazonaws\.com/changeport/(kafka|agent|provisioner|console)@sha256:[0-9a-f]{64}$`)
+var ecrImage = regexp.MustCompile(`^[0-9]{12}\.dkr\.ecr\.[a-z0-9-]+\.amazonaws\.com/changeport/(kafka|connect|agent|provisioner|console)@sha256:[0-9a-f]{64}$`)
 
 // ParseEKSImages parses and checks a list of images like eks-images.json:
 // every image is empty or its own repository's image by digest.
@@ -41,6 +44,7 @@ func ParseEKSImages(data []byte) (EKSImages, error) {
 	}
 	for name, image := range map[string]string{
 		"kafka":       images.Kafka,
+		"connect":     images.Connect,
 		"agent":       images.Agent,
 		"provisioner": images.Provisioner,
 		"console":     images.Console,

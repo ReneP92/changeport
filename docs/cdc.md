@@ -97,9 +97,14 @@ include, so `Ready` keeps meaning that clients can connect.
   - They resume where they stopped, and do not hold a transaction open long
     enough to hold back vacuum.
   - Snapshot requests and progress travel through Kafka topics.
-- **Heartbeat:** every minute, a logical message with no table
-  (`pg_logical_emit_message`). It lets the slot advance when the published
-  tables are idle while the rest of the database is busy.
+- **Heartbeat:** every minute, a transactional logical message with no table
+  (`pg_logical_emit_message(true, 'changeport-heartbeat', '')`). It lets the
+  slot advance when the published tables are idle while the rest of the
+  database is busy.
+  - Every role may call the function, so the replication role needs no grant
+    for it.
+  - Debezium drops the messages (`message.prefix.exclude.list`), so they never
+    become events.
 - **Topics:**
   - one partition per table, keyed by primary key;
   - replicated and tiered like every topic;
@@ -109,7 +114,8 @@ include, so `Ready` keeps meaning that clients can connect.
 ### Schema registry
 
 - **Registry:** Apicurio Registry 3, one per customer, keeping its schemas in
-  the customer's Kafka.
+  the customer's Kafka in three topics, `changeport.registry.journal`,
+  `.snapshots` and `.events`. It connects over mTLS as `changeport-registry`.
 - **Message format:** the converter writes Confluent's wire format, so
   standard Avro deserializers read the topics.
 - **Access:** customers reach the registry through `registry-gateway`, a small
@@ -181,6 +187,49 @@ worker, and refuses any address that is not public. Checks:
   cannot be deleted while the source keeps them.
 - **Hidden topics:** the platform's own topics and consumer groups, those
   starting with `changeport`, are hidden from the customer.
+
+## What the spike proved
+
+Before anything was built on them, a spike on kind (#101) ran each untried part
+of this design with the Connect image, Apicurio 3.3.3 and Postgres 17:
+
+- **Read-only incremental snapshots work.** A role with only `REPLICATION`
+  and `SELECT` copied a 5,000-row table through a signal on the Kafka signal
+  topic, with no table for signals and nothing written to the database.
+  Inserts, updates and deletes then streamed as they happened.
+- **The heartbeat must be transactional.** With a non-transactional
+  logical message, Debezium 3.7 fails during a read-only incremental snapshot:
+  `PostgresReadOnlyIncrementalSnapshotContext.isTransactionVisible` throws on
+  the message's missing transaction ID.
+  - `pg_logical_emit_message(true, ...)` works.
+  - The function is executable by every role on PostgreSQL 14 and 17.
+  - Without `message.prefix.exclude.list`, the messages become events in a
+    `<source>.message` topic.
+- **Send each snapshot signal once.** A signal sent while the connector's
+  task was failing ran once the task recovered, so it copied the table a
+  second time. The source controller sends a table's signal once and follows
+  its progress in the notification topic.
+- **Apicurio stores its schemas in Kafka over mTLS,** with the PKCS12 key and
+  truststores of Strimzi's Secrets. It needs a third topic, its events
+  (`apicurio.events.kafka.topic`), named under the same prefix.
+- **Standard Confluent clients read the messages.**
+  - `confluent-kafka` 2.16's `AvroDeserializer` decoded keys, values and
+    tombstones through Apicurio's Confluent-compatible API
+    (`/apis/ccompat/v7`).
+  - The converter's defaults (`headers.enabled=false`, 4-byte IDs) match it.
+  - Apicurio registers nested record schemas as subjects of their own, which
+    the topic's schema references.
+- **Kafka's `DirectoryConfigProvider` works under Strimzi 1.3.0 and Kafka
+  4.3.1,** for the database password and for the signal consumer's keystore
+  passwords. No allowlist change was needed.
+- **Strimzi's v1 `KafkaConnect` takes the group and its three topics as spec
+  fields** (`groupId`, `configStorageTopic` and the like), not as worker
+  configuration.
+- **NetworkPolicies are enforced on kind** (kindnet): a deny-all ingress
+  policy blocked a connection that worked without it.
+  - On EKS Auto Mode, enforcement has to be turned on (VPC CNI's network
+    policy agent).
+  - That is checked when the dev environment comes up (#28, #29).
 
 ## Testing
 

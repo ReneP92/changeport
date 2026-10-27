@@ -12,7 +12,7 @@ images_file=internal/provisioning/eks-images.json
 
 images=()
 if [[ -n $proposal ]]; then
-  for image in kafka agent provisioner console; do
+  for image in kafka connect agent provisioner console; do
     proposed=$(git show "$proposal:$images_file" | jq -r ".$image")
     [[ $proposed == "$(jq -r ".$image" "$images_file")" ]] || images+=("$image=$proposed")
   done
