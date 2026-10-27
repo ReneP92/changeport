@@ -75,6 +75,7 @@ for progress.
 | [Phase 0: Design partner and foundations](https://github.com/ReneP92/changeport/milestone/1) | Nov 6, 2026 |
 | [Phase 1: Single-tenant data plane](https://github.com/ReneP92/changeport/milestone/2) | Dec 25, 2026 |
 | [Phase 2: Observability](https://github.com/ReneP92/changeport/milestone/3) | Mar 5, 2027 |
+| [Postgres CDC source](https://github.com/ReneP92/changeport/milestone/11), pulled forward from Phase 7 ([docs/cdc.md](docs/cdc.md)) | No date yet |
 | [Phase 3: Guidance layer](https://github.com/ReneP92/changeport/milestone/4) | Apr 16, 2027 |
 | [Phase 4: Replay, hardening and design-partner launch](https://github.com/ReneP92/changeport/milestone/5) | Jun 11, 2027 |
 | [Phase 5: Grow to 50 customers](https://github.com/ReneP92/changeport/milestone/6) | Oct 15, 2027 |
