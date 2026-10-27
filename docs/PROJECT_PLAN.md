@@ -181,7 +181,7 @@ Dates assume a solo engineer starting Oct 19, 2026, using the upper end of each 
 1. **After Phase 0:** design partner committed and their data volume known.
 2. **After Phase 4:** design partner in production.
 3. **After Phase 5:** about 50 paying customers, which triggers multi-tenancy (target Oct 2027).
-4. **After Phase 6:** self-serve signup and the free allowance live, and the managed Connect trigger met.
+4. **After Phase 6:** self-serve signup and the free allowance live, and the managed Connect trigger met: Phase 7 starts on Jan 3, 2028 at the latest, or earlier as soon as 3 paying customers ask for the same connector.
 
 ### Milestones
 
@@ -220,7 +220,7 @@ The biggest risk is getting stuck in stage 1: managed Kafka can absorb all avail
 
 | Risk | Impact | Mitigation |
 | --- | --- | --- |
-| Stuck in stage 1 | CDC product never ships | Explicit triggers: multi-tenancy at about 50 paying customers (Oct 2027), managed Connect at a trigger set in Phase 0 |
+| Stuck in stage 1 | CDC product never ships | Explicit triggers: multi-tenancy at about 50 paying customers (Oct 2027), managed Connect on Jan 3, 2028 at the latest or once 3 paying customers ask for the same connector; the Postgres CDC source is pulled forward ahead of both |
 | Operating many dedicated clusters | Upgrades and incidents across up to 50 clusters consume founder time | Fully automated provisioning and upgrades in Phase 5, one fleet view across clusters, identical cluster configs |
 | Dedicated clusters for small customers | A 3-broker cluster costs more than a small customer's usage brings in | Set usage rates or a minimum charge from real cluster costs before customer 2; move small customers to shared clusters in Phase 6 |
 | Usage-based bills surprise newcomers | Undercuts the "no surprise bills" positioning | Live usage and projected bill in the UI, budget alerts, plain-language usage explanations |
@@ -240,7 +240,7 @@ Phase 0 is about finding the design partner and setting up the foundations. Each
 
 - [ ] [Set up the AWS organization, dev and prod accounts and the Terraform state backend](https://github.com/ReneP92/changeport/issues/10) (region decided: us-east-1)
 - [x] [Wireframe onboarding, the topology map and time-based lag views](https://github.com/ReneP92/changeport/issues/5): the first console is built instead ([docs/console.md](console.md)), with lag in time; the [topology map](https://github.com/ReneP92/changeport/issues/71) and the [first ten minutes](https://github.com/ReneP92/changeport/issues/72) are still to design
-- [ ] [Set the trigger for starting managed Connect](https://github.com/ReneP92/changeport/issues/7)
+- [x] [Managed Connect trigger](https://github.com/ReneP92/changeport/issues/7): Phase 7 (connectors beyond the Postgres source) starts on Jan 3, 2028 at the latest, or as soon as 3 paying customers ask for the same connector, whichever comes first. The date keeps stage 1 from absorbing the time meant for CDC; demand can pull it forward
 - [ ] [Secure a domain for Changeport](https://github.com/ReneP92/changeport/issues/8), with DNS zones for the customer endpoints
 
 Decided:
