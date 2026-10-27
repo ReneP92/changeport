@@ -1,4 +1,5 @@
 import { ClerkProvider } from "@clerk/react";
+import { ui } from "@clerk/ui";
 import { useQuery } from "@tanstack/react-query";
 import { fetchConfig } from "@/api/config";
 import { Console } from "@/Console";
@@ -7,7 +8,9 @@ import { Notice } from "@/components/Notice";
 /**
  * The Changeport console. It learns the Clerk instance from the console's
  * API, so one build serves every environment, and fails closed: without a
- * configuration there is nothing to sign in to.
+ * configuration there is nothing to sign in to. Clerk's components are
+ * bundled rather than loaded from Clerk's CDN at sign-in, where one hung
+ * request left the sign-in form blank.
  */
 export function App() {
   const config = useQuery({
@@ -35,7 +38,7 @@ export function App() {
     );
   }
   return (
-    <ClerkProvider publishableKey={config.data.publishableKey} afterSignOutUrl="/">
+    <ClerkProvider publishableKey={config.data.publishableKey} ui={ui} afterSignOutUrl="/">
       <Console />
     </ClerkProvider>
   );

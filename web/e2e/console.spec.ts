@@ -42,15 +42,24 @@ test("a configured console offers Clerk's sign-in", async ({ page, request }) =>
   const config = await request.get("/api/config");
   test.skip(config.status() !== 200, "this console is not configured");
   const violations = cspViolations(page);
+  // Clerk's components are bundled with the app (@clerk/ui), not loaded from
+  // Clerk's CDN, where one hung request once left the form blank.
+  const cdnComponents: string[] = [];
+  page.on("request", (request) => {
+    if (request.url().includes("/npm/@clerk/ui")) {
+      cdnComponents.push(request.url());
+    }
+  });
   await page.goto("/");
   await expect(page.getByRole("heading", { name: "Changeport", exact: true })).toBeVisible();
-  // Clerk's sign-in form, loaded from the instance's Frontend API.
+  // Clerk's sign-in form, talking to the instance's Frontend API.
   await expect(page.getByLabel(/email address/i)).toBeVisible({ timeout: 20_000 });
   // Clerk's bot protection reaches out after the form shows.
   await page.waitForLoadState("networkidle");
   await page.getByLabel(/email address/i).fill("someone@example.com");
   await page.waitForLoadState("networkidle");
   expect(violations).toEqual([]);
+  expect(cdnComponents).toEqual([]);
 });
 
 test("a console that cannot reach Clerk says so", async ({ page, request }) => {
