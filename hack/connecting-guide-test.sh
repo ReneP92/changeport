@@ -96,9 +96,11 @@ run go "$GO_IMAGE" "go mod init example >/dev/null 2>&1 && go get github.com/twm
 example "### Node.js" js | sed 's|^  "sasl.password": process.env.KAFKA_PASSWORD,|&\n  "ssl.ca.location": "/config/ca.crt",|' >"$work/node/example.js"
 run node "$NODE_IMAGE" "npm install --silent --no-audit --no-fund @confluentinc/kafka-javascript@$CONFLUENT_KAFKA_JAVASCRIPT >/dev/null && node example.js"
 
-# The examples' cleanup is the topics'.
+# The examples leave a topic and a consumer group each behind.
 for language in java python go node; do
   docker run "${KAFKA_CLIENT[@]}" --entrypoint /opt/kafka/bin/kafka-topics.sh "$KAFKA_IMAGE" \
     --bootstrap-server "$bootstrap" --command-config /config/client.properties --delete --topic "guide-$language-$run_id" >/dev/null
+  docker run "${KAFKA_CLIENT[@]}" --entrypoint /opt/kafka/bin/kafka-consumer-groups.sh "$KAFKA_IMAGE" \
+    --bootstrap-server "$bootstrap" --command-config /config/client.properties --delete --group "example-$language" >/dev/null
 done
 log "Connection guide test passed: the Java, Python, Go and Node.js examples produce and consume on customer $customer's cluster"

@@ -1,6 +1,6 @@
 # The container registry of the platform's own images, in the prod account:
-# the Kafka broker image (images/kafka), the Kafka agent, the provisioner and
-# the console. Every account in the organization pulls from it, and only the
+# the Kafka broker image (images/kafka), Kafka Connect (images/connect), the
+# Kafka agent, the provisioner and the console. Every account in the organization pulls from it, and only the
 # image workflow on main (.github/workflows/publish-images.yml) pushes, by
 # commit tag; the EKS platforms use the images by digest.
 

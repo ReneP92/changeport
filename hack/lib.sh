@@ -24,6 +24,9 @@ TERRAFORM_VERSION=1.16.6
 # The Changeport Kafka image from images/kafka, as named by
 # internal/provisioning.KindPlatform. dev-up builds it and loads it into kind.
 KAFKA_IMAGE=changeport/kafka:local
+# The Kafka Connect image from images/connect, which runs the Postgres CDC
+# source (docs/cdc.md). dev-up builds it and loads it into kind.
+CONNECT_IMAGE=changeport/connect:local
 # The Kafka agent's image from images/agent, as named by
 # internal/provisioning.KindPlatform. dev-up builds it and loads it into kind.
 AGENT_IMAGE=changeport/agent:local
@@ -264,6 +267,13 @@ build_kafka_image() {
   # shellcheck disable=SC2046 # the cache arguments are separate words
   retry_registry docker buildx build --load --quiet $(build_cache_args kafka) -t "$KAFKA_IMAGE" images/kafka >/dev/null
   tag_content "$KAFKA_IMAGE"
+}
+
+build_connect_image() {
+  log "Building $CONNECT_IMAGE"
+  # shellcheck disable=SC2046 # the cache arguments are separate words
+  retry_registry docker buildx build --load --quiet $(build_cache_args connect) -t "$CONNECT_IMAGE" images/connect >/dev/null
+  tag_content "$CONNECT_IMAGE"
 }
 
 build_agent_image() {

@@ -74,9 +74,9 @@ jobs:
           IMAGE: ${{ matrix.image }}
           REPOSITORY: ${{ steps.ecr.outputs.registry }}/changeport/${{ matrix.image }}
         run: |
-          # The Kafka image builds from its own directory, the others from
-          # the repository root.
-          if [[ $IMAGE == kafka ]]; then build=(images/kafka); else build=(-f "images/$IMAGE/Dockerfile" .); fi
+          # The Kafka and Connect images build from their own directories,
+          # the others from the repository root.
+          if [[ $IMAGE == kafka || $IMAGE == connect ]]; then build=("images/$IMAGE"); else build=(-f "images/$IMAGE/Dockerfile" .); fi
           docker buildx build --platform linux/amd64,linux/arm64 --push \
             -t "$REPOSITORY:$GITHUB_SHA" --metadata-file metadata.json "${build[@]}"
           digest=$(jq -r '."containerimage.digest"' metadata.json)

@@ -29,7 +29,7 @@ run "repositories" {
   command = apply
 
   assert {
-    condition     = toset([for repository in aws_ecr_repository.image : repository.name]) == toset(["changeport/kafka", "changeport/agent", "changeport/provisioner", "changeport/console"])
+    condition     = toset([for repository in aws_ecr_repository.image : repository.name]) == toset(["changeport/kafka", "changeport/connect", "changeport/agent", "changeport/provisioner", "changeport/console"])
     error_message = "Every image the platform builds gets a repository."
   }
   assert {

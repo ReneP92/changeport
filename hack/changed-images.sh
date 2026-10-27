@@ -7,15 +7,16 @@
 # The images the EKS platforms run (internal/provisioning/eks-images.json and
 # deploy/components/eks-images) change with every publish, so they do not count
 # as sources, or every publish would cause another. The provisioner is the
-# exception: it embeds the Kafka and agent images it provisions customers
-# with, so it is published again when those change, and that publish settles.
+# exception: it embeds the Kafka, Connect and agent images it provisions
+# customers with, so it is published again when those change, and that
+# publish settles.
 # Usage: hack/changed-images.sh [<from-commit>] <to-commit>
 set -euo pipefail
 
 to=${2:-${1:?usage: hack/changed-images.sh [<from-commit>] <to-commit>}}
 from=${2:+$1}
 images_file=internal/provisioning/eks-images.json
-all='["kafka","agent","provisioner","console"]'
+all='["kafka","connect","agent","provisioner","console"]'
 
 if [[ -z $from || $from =~ ^0+$ ]] || ! git cat-file -e "$from^{commit}" 2>/dev/null; then
   echo "$all"
@@ -33,12 +34,13 @@ touches() {
   return 1
 }
 
-# The Kafka and agent images in the images file at a commit.
-provisioned_images() { git show "$1:$images_file" 2>/dev/null | grep -E '^ *"(kafka|agent)":' || true; }
+# The images the provisioner provisions with, in the images file at a commit.
+provisioned_images() { git show "$1:$images_file" 2>/dev/null | grep -E '^ *"(kafka|connect|agent)":' || true; }
 
 go_sources=(cmd/ internal/ go.mod go.sum)
 changed=()
 touches images/kafka/ && changed+=(kafka)
+touches images/connect/ && changed+=(connect)
 touches images/agent/ "${go_sources[@]}" && changed+=(agent)
 if touches images/provisioner/ api/ "${go_sources[@]}" ||
   [[ $(provisioned_images "$from") != "$(provisioned_images "$to")" ]]; then
