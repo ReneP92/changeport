@@ -19,7 +19,9 @@ it are in [PROJECT_PLAN.md](PROJECT_PLAN.md).
 2. **Run our first SQL:** creates a replication user for Changeport with a
    password the console generated. The console shows the exact SQL for the
    customer's provider (RDS and Aurora, Cloud SQL, Azure, Supabase, Neon, or
-   plain Postgres), and lists the outbound IP addresses to allowlist.
+   plain Postgres), with the steps outside SQL before it, and lists the
+   outbound IP addresses to allowlist. On Neon, the role is created in Neon's
+   console instead, and the customer enters the password Neon shows.
 3. **Pick tables:** chooses the tables to sync. Tables without a primary key
    or a unique index as replica identity are listed but cannot be picked, with
    the reason.
@@ -90,7 +92,11 @@ include, so `Ready` keeps meaning that clients can connect.
   Postgres connector and Apicurio's Avro converter, pinned and checksummed.
 - **Replication:** with `pgoutput`.
   - The publication is the one the customer created.
-  - The slot, `changeport_<source>_<id>`, is the connector's own.
+  - The slot is the connector's own.
+  - The role, the publication and the slot share one name,
+    `changeport_<source>_<id>`, with the source's dashes as underscores. The
+    ID is 6 random characters chosen when the source is created, so two
+    sources never share a slot, even with the same name.
 - **Snapshots:** read-only incremental snapshots.
   - Tables are copied in chunks while changes keep streaming.
   - Snapshots take no locks and write nothing to the customer's database.
@@ -160,20 +166,62 @@ So:
   too much WAL, the source fails, saying so plainly. Recovery is a new slot
   and a new snapshot.
 
+## Providers
+
+The setup differs by provider. The console's instructions
+(`internal/cdc/sql.go`) cover these:
+
+- **Plain PostgreSQL:** `wal_level = logical` in `postgresql.conf`, and a
+  `hostssl` line in `pg_hba.conf` per Changeport address.
+- **Amazon RDS and Aurora:**
+  - `rds.logical_replication = 1` in the parameter group;
+  - the role gets `rds_replication` rather than `REPLICATION`;
+  - RDS certificates come from Amazon's own CA, so the customer adds the
+    region's certificate bundle.
+- **Google Cloud SQL:**
+  - the `cloudsql.logical_decoding` flag;
+  - an instance whose certificate does not name its host needs `verify-ca`
+    with the instance's server CA.
+- **Azure Database for PostgreSQL:** the `wal_level` server parameter. On
+  PostgreSQL 16 and newer, the admin needs `REPLICATION` itself before it can
+  give it to a new role.
+- **Supabase:**
+  - logical replication is on by default;
+  - the direct connection is IPv6 only without the IPv4 add-on, and
+    Changeport connects over IPv4;
+  - the pooler cannot replicate.
+- **Neon:**
+  - logical replication is turned on in the project's settings;
+  - roles created with SQL cannot replicate, so the role is created in Neon's
+    console. That makes it a member of `neon_superuser`, more than Changeport
+    needs;
+  - the pooler cannot replicate;
+  - Neon removes slots inactive for about 40 hours, so a source stopped for
+    longer needs a new snapshot.
+
 ## The console's checks
 
-The console runs these checks before a source starts and again on request.
-It runs them itself, from the same outbound IP addresses as the Connect
-worker, and refuses any address that is not public. Checks:
+The console runs these checks before a source starts and again on request
+(`internal/cdc/checks.go`). It runs them itself, from the same outbound IP
+addresses as the Connect worker. Each result says what was found and, when
+it failed, what to do. The checks:
 
 - reachability, TLS and the certificate, and authentication;
-- the server version, `wal_level`, the replication privilege, and a free slot
-  and WAL sender;
+- the server version, `wal_level`, the replication privilege (a superuser
+  passes with a warning), and a free slot and WAL sender;
 - a replication connection (`IDENTIFY_SYSTEM`), which catches a missing
   `pg_hba.conf` entry;
-- the publication's tables and operations;
-- read access to every table;
-- `max_slot_wal_keep_size`.
+- the chosen tables: each exists, has a primary key or a unique replica
+  identity, and is readable by the role;
+- the publication: inserts, updates and deletes, partitioned tables published
+  as themselves, and every chosen table in it;
+- `max_slot_wal_keep_size`, which only warns.
+
+They only connect to public addresses. The console resolves the host once,
+refuses it if any of its addresses is not public, and connects only to the
+addresses it resolved, while checking the certificate against the host's
+name. A name cannot resolve to a public address for the check and to an
+internal one for the connection.
 
 ## Guardrails
 
@@ -233,6 +281,12 @@ of this design with the Connect image, Apicurio 3.3.3 and Postgres 17:
 
 ## Testing
 
+- **`internal/cdc`'s tests** run against Postgres 13, 14 and 18 in Docker.
+  - They run the SQL the console generates, as a customer would, and check
+    the database after each step: creating the role, choosing, adding and
+    removing tables, a new password, the connector's slot and cleaning up.
+  - They also cover a certificate for another name, another CA, a wrong
+    password, `wal_level = replica`, and a server that is too old.
 - **On kind:** a Postgres 17 in the namespace `source-postgres`
   (`deploy/base/source-postgres`) stands in for a customer's database.
   - It runs with `wal_level = logical` and `max_slot_wal_keep_size`, and takes
