@@ -133,7 +133,9 @@ three workers, one per zone like the three availability zones on EKS, with
 for load balancers. It then installs the platform components from
 `deploy/overlays/kind` (Strimzi 1.3.0 watching all namespaces, cert-manager
 with a local CA, Strimzi Drain Cleaner, SeaweedFS as the S3 store for tiered
-storage, and VictoriaMetrics for metrics), provisions the `demo` customer
+storage, VictoriaMetrics for metrics, and a Postgres 17 in `source-postgres`
+that stands in for a customer's database for the Postgres CDC source),
+provisions the `demo` customer
 (namespace `customer-demo`, a single-node KRaft cluster on Kafka 4.3.1) with
 the provisioning service, and runs the smoke test. It is safe to run again. If
 the cluster was created from an older `deploy/kind/cluster.yaml`, it says so;
@@ -162,8 +164,8 @@ prints the same `client.properties`.
 Provision more customers from the same template, or run the end-to-end
 check. Its core suite provisions a second customer, protected from deletion,
 smoke tests both clusters, runs the metrics, deletion protection, agent, lag,
-client telemetry, console, tiered storage, host access and connection guide
-tests, and removes the second customer again; its failover suite freezes a zone and drains a
+client telemetry, console, tiered storage, host access, connection guide and
+Postgres tests, and removes the second customer again; its failover suite freezes a zone and drains a
 broker of a three-zone customer. CI runs the two on separate clusters at once;
 locally `just e2e` runs both, one after the other:
 

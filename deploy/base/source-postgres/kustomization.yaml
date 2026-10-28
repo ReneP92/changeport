@@ -1,0 +1,13 @@
+# A Postgres standing in for a customer's database on kind, for the Postgres
+# CDC source (docs/cdc.md): logical replication on, and reachable only over
+# TLS with a certificate from the local CA, as a cloud database is. On EKS,
+# customers bring their own. Its certificate needs cert-manager, so the kind
+# overlay applies it with the configuration (deploy/overlays/kind/config).
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: source-postgres
+labels:
+  - pairs:
+      changeport.io/platform: source-postgres
+resources:
+  - postgres.yaml

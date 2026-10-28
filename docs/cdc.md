@@ -233,8 +233,17 @@ of this design with the Connect image, Apicurio 3.3.3 and Postgres 17:
 
 ## Testing
 
-- **On kind:** a Postgres 17 runs with logical replication, TLS from the local
-  CA, and seed tables with and without primary keys.
+- **On kind:** a Postgres 17 in the namespace `source-postgres`
+  (`deploy/base/source-postgres`) stands in for a customer's database.
+  - It runs with `wal_level = logical` and `max_slot_wal_keep_size`, and takes
+    clients over TLS only, with a certificate from the local CA for
+    `postgres.source-postgres.svc`.
+  - Its database `app` has seed tables: `customers` and `orders` with primary
+    keys, `notes` without one, and `events`, partitioned by year.
+  - `hack/postgres-test.sh` (`just postgres-test`, in the core suite) checks
+    the seed, opens a replication connection with `verify-full`, and checks
+    that a client without TLS, or verifying the certificate against the
+    service's address, is refused.
 - **`hack/cdc-test.sh`,** in its own CI suite, creates a source as the console
   does and takes it through its whole life:
   1. snapshot;

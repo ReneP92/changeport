@@ -67,6 +67,7 @@ KIND_PRELOAD_IMAGES=(
   quay.io/jetstack/cert-manager-cainjector:v1.21.2
   quay.io/jetstack/cert-manager-controller:v1.21.2
   quay.io/jetstack/cert-manager-webhook:v1.21.2
+  postgres:17.11
 )
 
 CLUSTER_NAME=${CLUSTER_NAME:-changeport}
