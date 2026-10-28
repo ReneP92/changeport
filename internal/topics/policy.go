@@ -188,6 +188,12 @@ func Reserved(name string) bool {
 	return slices.ContainsFunc(ReservedPrefixes, func(prefix string) bool { return strings.HasPrefix(lower, prefix) })
 }
 
+// Collide reports whether two different topic names collide: Kafka's metrics
+// replace dots with underscores, so names that differ only there clash.
+func Collide(a, b string) bool {
+	return a != b && strings.ReplaceAll(a, ".", "_") == strings.ReplaceAll(b, ".", "_")
+}
+
 // checkName applies the naming guardrails against the existing topics.
 func checkName(name string, existing []string) error {
 	switch {
@@ -206,15 +212,11 @@ func checkName(name string, existing []string) error {
 			return invalid("name", "names starting with %q are reserved for the platform", prefix)
 		}
 	}
-	// Kafka's metrics replace dots with underscores, so such names collide.
-	collides := func(a, b string) bool {
-		return strings.ReplaceAll(a, ".", "_") == strings.ReplaceAll(b, ".", "_")
-	}
 	for _, other := range existing {
 		if other == name {
 			return &FieldError{Field: "name", Message: fmt.Sprintf("topic %s exists", name), kind: ErrConflict}
 		}
-		if collides(other, name) {
+		if Collide(other, name) {
 			return &FieldError{Field: "name", Message: fmt.Sprintf("it collides with topic %s, as dots and underscores count as equal", other), kind: ErrConflict}
 		}
 	}
