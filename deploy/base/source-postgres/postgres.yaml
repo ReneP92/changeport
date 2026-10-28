@@ -1,0 +1,175 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: source-postgres
+---
+# Its server certificate, for the name clients connect to and verify
+# (sslmode=verify-full).
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: postgres-tls
+spec:
+  secretName: postgres-tls
+  dnsNames:
+    - postgres.source-postgres.svc
+    - postgres.source-postgres.svc.cluster.local
+  privateKey:
+    algorithm: ECDSA
+    size: 256
+  issuerRef:
+    group: cert-manager.io
+    kind: ClusterIssuer
+    name: local-ca
+---
+# What the database holds when it starts: an application's tables, seeded.
+# Who may replicate them is up to the CDC source's setup SQL, which the tests
+# run as a customer would.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: postgres-init
+data:
+  10-app.sql: |
+    CREATE DATABASE app;
+    \c app
+    -- Tables with a primary key, which a CDC source can sync.
+    CREATE TABLE customers (
+      id bigint PRIMARY KEY,
+      name text NOT NULL,
+      email text NOT NULL UNIQUE,
+      created_at timestamptz NOT NULL DEFAULT now()
+    );
+    CREATE TABLE orders (
+      id bigint PRIMARY KEY,
+      customer_id bigint NOT NULL REFERENCES customers (id),
+      amount numeric(10, 2) NOT NULL,
+      status text NOT NULL DEFAULT 'new',
+      created_at timestamptz NOT NULL DEFAULT now()
+    );
+    -- A table without a primary key or replica identity, which a CDC source
+    -- must refuse.
+    CREATE TABLE notes (body text NOT NULL, created_at timestamptz NOT NULL DEFAULT now());
+    -- A partitioned table, whose changes a publication with
+    -- publish_via_partition_root reports under the table's own name.
+    CREATE TABLE events (
+      id bigint NOT NULL,
+      happened_at timestamptz NOT NULL,
+      kind text NOT NULL,
+      PRIMARY KEY (id, happened_at)
+    ) PARTITION BY RANGE (happened_at);
+    CREATE TABLE events_2026 PARTITION OF events FOR VALUES FROM ('2026-01-01') TO ('2027-01-01');
+    CREATE TABLE events_2027 PARTITION OF events FOR VALUES FROM ('2027-01-01') TO ('2028-01-01');
+
+    INSERT INTO customers (id, name, email)
+      SELECT i, 'Customer ' || i, 'customer' || i || '@example.com' FROM generate_series(1, 100) AS i;
+    INSERT INTO orders (id, customer_id, amount)
+      SELECT i, 1 + i % 100, (i % 1000) / 10.0 FROM generate_series(1, 1000) AS i;
+    INSERT INTO notes (body) SELECT 'Note ' || i FROM generate_series(1, 10) AS i;
+    INSERT INTO events (id, happened_at, kind)
+      SELECT i, timestamptz '2026-06-01' + i * interval '1 day', 'kind-' || i % 5 FROM generate_series(1, 400) AS i;
+  # Clients connect over TLS only, as to a cloud database. The image's
+  # initialization scripts run over the local socket.
+  pg_hba.conf: |
+    local   all          all                trust
+    hostssl all          all          all   scram-sha-256
+    hostssl replication  all          all   scram-sha-256
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: postgres
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: postgres
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: postgres
+    spec:
+      securityContext:
+        # The image's postgres group, so that the server can read its key,
+        # which Postgres accepts from root with group read only.
+        fsGroup: 999
+      containers:
+        - name: postgres
+          image: postgres:17.11
+          args:
+            - -c
+            - wal_level=logical
+            - -c
+            - max_replication_slots=10
+            - -c
+            - max_wal_senders=10
+            # A slot nobody reads keeps WAL only up to this, as the setup
+            # guide recommends.
+            - -c
+            - max_slot_wal_keep_size=1GB
+            - -c
+            - ssl=on
+            - -c
+            - ssl_cert_file=/etc/postgres/tls/tls.crt
+            - -c
+            - ssl_key_file=/etc/postgres/tls/tls.key
+            - -c
+            - hba_file=/etc/postgres/config/pg_hba.conf
+          env:
+            - name: POSTGRES_PASSWORD
+              value: changeport-local-only
+          ports:
+            - name: postgres
+              containerPort: 5432
+          readinessProbe:
+            exec:
+              command: [pg_isready, -h, 127.0.0.1, -U, postgres]
+            periodSeconds: 5
+          resources:
+            requests:
+              cpu: 50m
+              memory: 128Mi
+            limits:
+              memory: 512Mi
+          volumeMounts:
+            - name: init
+              mountPath: /docker-entrypoint-initdb.d
+            - name: config
+              mountPath: /etc/postgres/config
+            - name: tls
+              mountPath: /etc/postgres/tls
+            - name: data
+              mountPath: /var/lib/postgresql/data
+      volumes:
+        - name: init
+          configMap:
+            name: postgres-init
+            items:
+              - key: 10-app.sql
+                path: 10-app.sql
+        - name: config
+          configMap:
+            name: postgres-init
+            items:
+              - key: pg_hba.conf
+                path: pg_hba.conf
+        - name: tls
+          secret:
+            secretName: postgres-tls
+            defaultMode: 0640
+        # A throwaway database: a new pod starts from the seed again.
+        - name: data
+          emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: postgres
+spec:
+  selector:
+    app.kubernetes.io/name: postgres
+  ports:
+    - name: postgres
+      port: 5432

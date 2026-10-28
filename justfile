@@ -194,6 +194,11 @@ agent-test customer="demo":
 lag-test customer="demo":
     hack/lag-test.sh {{ customer }}
 
+# Check the Postgres on kind that stands in for a customer's database: seed, logical replication, TLS only
+[group('Local development (kind + Strimzi)')]
+postgres-test:
+    hack/postgres-test.sh
+
 # Run the examples of the customer connection guide (docs/connecting.md) against a customer's cluster
 [group('Local development (kind + Strimzi)')]
 connecting-guide-test customer="demo":

@@ -5,3 +5,6 @@ kind: Kustomization
 resources:
   - local-ca.yaml
   - ../../../base/drain-cleaner
+  # A customer's database for the Postgres CDC source, with a certificate
+  # from the local CA.
+  - ../../../base/source-postgres
