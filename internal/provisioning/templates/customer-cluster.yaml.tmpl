@@ -1058,9 +1058,9 @@ spec:
         - namespaceSelector: {matchLabels: {kubernetes.io/metadata.name: {{ . }}}}
 {{- end }}
 ---
-# Only the Connect worker reaches the registry, and the source controller,
-# which decodes the snapshot notifications with its schemas; the registry
-# reaches only DNS and the brokers.
+# Only the Connect worker reaches the registry, the source controller, which
+# decodes the snapshot notifications with its schemas, and the registry
+# gateway; the registry reaches only DNS and the brokers.
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
@@ -1076,6 +1076,9 @@ spec:
         - podSelector: {{ template "connect-selector" . }}
         - namespaceSelector: {matchLabels: {kubernetes.io/metadata.name: {{ .ConsoleNamespace }}}}
           podSelector: {matchLabels: {app.kubernetes.io/name: changeport-provisioner}}
+{{- with .CDC.Gateway }}
+        - podSelector: {matchLabels: {app.kubernetes.io/name: {{ .Name }}}}
+{{- end }}
       ports:
         - {protocol: TCP, port: {{ .CDC.RegistryPort }}}
   egress:
@@ -1086,4 +1089,137 @@ spec:
         - podSelector: {matchLabels: {strimzi.io/cluster: {{ quote .ClusterName }}, strimzi.io/kind: Kafka}}
       ports:
         - {protocol: TCP, port: {{ .InternalPort }}}
+{{- with .CDC.Gateway }}
+---
+# The registry gateway (cmd/registry-gateway): customers' clients reach their
+# schema registry through it from the internet, at {{ .Host }}, over TLS
+# on the cluster's certificate, with their Kafka credentials. It refuses
+# changes to the sources' schemas.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ .Name }}
+  namespace: {{ $.Namespace }}
+  labels:
+    app.kubernetes.io/name: {{ .Name }}
+{{- template "cdc-labels" $ }}
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: {{ .Name }}
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: {{ .Name }}
+        changeport.io/tenant: {{ quote $.Tenant }}
+    spec:
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
+{{- template "cdc-placement" $ }}
+      containers:
+        - name: gateway
+          image: {{ .Image }}
+          args:
+            - "-upstream=http://{{ $.CDC.Registry }}:{{ $.CDC.RegistryPort }}/apis/ccompat/v7"
+            - "-username={{ $.AdminUser }}"
+            - "-sources={{ .Sources }}"
+          ports:
+            - name: https
+              containerPort: 8443
+            - name: health
+              containerPort: 8080
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: health
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: health
+            periodSeconds: 30
+          resources:
+            requests:
+              cpu: 10m
+              memory: 32Mi
+            limits:
+              memory: 64Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: [ALL]
+          volumeMounts:
+            - name: kafka-user
+              mountPath: /etc/changeport/kafka-user
+              readOnly: true
+            - name: tls
+              mountPath: /etc/changeport/tls
+              readOnly: true
+      volumes:
+        # The customer's Kafka user's password, which the gateway checks.
+        - name: kafka-user
+          secret:
+            secretName: {{ $.AdminUser }}
+            items: [{key: password, path: password}]
+        # The public listener's certificate, whose wildcard name covers the
+        # gateway's.
+        - name: tls
+          secret:
+            secretName: {{ $.ExternalListenerSecret }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ .Name }}
+  namespace: {{ $.Namespace }}
+  labels:
+{{- template "cdc-labels" $ }}
+  annotations:
+{{- range $key, $value := .Annotations }}
+    {{ $key }}: {{ printf "%q" $value }}
+{{- end }}
+spec:
+  type: LoadBalancer
+{{- with $.Platform.LoadBalancer.Class }}
+  loadBalancerClass: {{ . }}
+{{- end }}
+{{- with $.Platform.LoadBalancer.ExternalTrafficPolicy }}
+  externalTrafficPolicy: {{ . }}
+{{- end }}
+  selector:
+    app.kubernetes.io/name: {{ .Name }}
+  ports:
+    - name: https
+      port: {{ $.CDC.RegistryGatewayPort }}
+      targetPort: https
+---
+# The gateway takes customers' connections from anywhere, and reaches only
+# DNS and the registry.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ .Name }}
+  namespace: {{ $.Namespace }}
+  labels:
+{{- template "cdc-labels" $ }}
+spec:
+  podSelector: {matchLabels: {app.kubernetes.io/name: {{ .Name }}}}
+  policyTypes: [Ingress, Egress]
+  ingress:
+    - ports:
+        - {protocol: TCP, port: 8443}
+  egress:
+    - ports:
+        - {protocol: UDP, port: 53}
+        - {protocol: TCP, port: 53}
+    - to:
+        - podSelector: {{ template "registry-selector" $ }}
+      ports:
+        - {protocol: TCP, port: {{ $.CDC.RegistryPort }}}
+{{- end }}
 {{- end }}

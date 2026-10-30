@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
-# Builds the Kafka, agent, Connect, provisioner and console images, creates the local
-# kind cluster with cloud-provider-kind for load balancers, installs the
-# platform components (Strimzi, cert-manager, the provisioning controller,
-# the console) and gives the console its Clerk keys from .env, creates the
-# "demo" Customer, which the controller provisions, and runs the smoke test
-# against it, and with .env sets up your test users for the console
-# (hack/dev-user.sh). DEMO_CUSTOMER= (empty) leaves the demo out, for runs that
-# bring customers of their own. Safe to run again.
+# Builds the Kafka, agent, Connect, registry gateway, provisioner and console
+# images, creates the local kind cluster with cloud-provider-kind for load
+# balancers, installs the platform components (Strimzi, cert-manager, the
+# provisioning controller, the console) and gives the console its Clerk keys
+# from .env, creates the "demo" Customer, which the controller provisions,
+# and runs the smoke test against it, and with .env sets up your test users
+# for the console (hack/dev-user.sh). DEMO_CUSTOMER= (empty) leaves the demo
+# out, for runs that bring customers of their own. Safe to run again.
 # shellcheck source=lib.sh
 source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 
@@ -19,6 +19,7 @@ ensure_kubectl
 build_kafka_image
 build_agent_image
 build_connect_image
+build_registry_gateway_image
 build_provisioner_image
 build_console_image
 check_docker_disk

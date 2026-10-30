@@ -67,11 +67,14 @@ var (
 
 // publishedConnectImage stands in for the Connect image once it is published
 // to ECR.
-const publishedConnectImage = "123456789012.dkr.ecr.us-east-1.amazonaws.com/changeport/connect@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+const (
+	publishedConnectImage = "123456789012.dkr.ecr.us-east-1.amazonaws.com/changeport/connect@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+	publishedGatewayImage = "123456789012.dkr.ecr.us-east-1.amazonaws.com/changeport/registry-gateway@sha256:fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210"
+)
 
 func withSourcesGoldenSpecs() []Spec {
 	eks := EKSProdPlatform
-	eks.ConnectImage = publishedConnectImage
+	eks.ConnectImage, eks.RegistryGatewayImage = publishedConnectImage, publishedGatewayImage
 	return []Spec{
 		{CustomerID: "acme", Profile: DevProfile, Platform: KindPlatform, Sources: sources, KubernetesAPI: kindAPIServer},
 		{CustomerID: "acme", Profile: ProductionProfile, Platform: eks, Sources: sources, KubernetesAPI: eksAPIServer, DeletionProtection: true},

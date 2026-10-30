@@ -58,6 +58,7 @@ func TestRenderCDCRuntimeOnlyWithSources(t *testing.T) {
 		"KafkaTopic changeport.cdc.signals.billing", "KafkaTopic changeport.cdc.notifications.billing",
 		"Deployment changeport-registry", "Service changeport-registry",
 		"NetworkPolicy changeport-connect-egress", "NetworkPolicy changeport-registry",
+		"Deployment changeport-registry-gateway", "Service changeport-registry-gateway", "NetworkPolicy changeport-registry-gateway",
 	}
 	if !slices.Equal(kinds, want) {
 		t.Errorf("CDC objects = %v, want %v", kinds, want)
@@ -159,7 +160,7 @@ func TestRenderCDCPlacementAndNetwork(t *testing.T) {
 		t.Errorf("NodePool CPU limit = %q, want 10: three brokers, the CDC node and a replacement", limit)
 	}
 	connect := objectOfKind(t, objects, "KafkaConnect")
-	registry := objectOfKind(t, cdcObjects(objects), "Deployment")
+	registry := objectNamed(t, objects, "Deployment", Registry)
 	for name, pod := range map[string][]string{
 		"KafkaConnect": {"spec", "template", "pod"},
 		"Deployment":   {"spec", "template", "spec"},
@@ -347,8 +348,10 @@ func TestReconcileReportsTheCDCRuntimeApart(t *testing.T) {
 	if progress, _ = p.Reconcile(t.Context(), spec); progress.CDC.Object != "Deployment customer-acme/changeport-registry" {
 		t.Errorf("CDC = %+v, want it waiting for the registry", progress.CDC)
 	}
-	registry := cluster.objects[fakeKey(deploymentGVK, spec.Namespace(), Registry)]
-	registry.Object["status"] = map[string]any{"observedGeneration": int64(0), "updatedReplicas": int64(1), "availableReplicas": int64(1)}
+	for _, name := range []string{Registry, RegistryGateway} {
+		deployment := cluster.objects[fakeKey(deploymentGVK, spec.Namespace(), name)]
+		deployment.Object["status"] = map[string]any{"observedGeneration": int64(0), "updatedReplicas": int64(1), "availableReplicas": int64(1)}
+	}
 	if progress, _ = p.Reconcile(t.Context(), spec); !progress.CDC.Ready || progress.CDC.Status != "Kafka Connect and the schema registry run for 2 sources" {
 		t.Errorf("CDC = %+v, want it ready", progress.CDC)
 	}
@@ -418,11 +421,12 @@ func TestReconcilePrunesTheCDCRuntime(t *testing.T) {
 	provision(t, p, spec)
 	slices.Sort(cluster.deleted)
 	want := []string{
-		"Deployment:customer-acme/changeport-registry", "KafkaConnect:customer-acme/changeport-connect", "KafkaConnector:customer-acme/app-x1y2z3",
+		"Deployment:customer-acme/changeport-registry", "Deployment:customer-acme/changeport-registry-gateway", "KafkaConnect:customer-acme/changeport-connect", "KafkaConnector:customer-acme/app-x1y2z3",
 		"KafkaTopic:customer-acme/changeport.cdc.notifications.app", "KafkaTopic:customer-acme/changeport.cdc.signals.app",
 		"KafkaUser:customer-acme/changeport-connect", "KafkaUser:customer-acme/changeport-registry",
 		"NetworkPolicy:customer-acme/changeport-connect-egress", "NetworkPolicy:customer-acme/changeport-registry",
-		"Service:customer-acme/changeport-registry",
+		"NetworkPolicy:customer-acme/changeport-registry-gateway",
+		"Service:customer-acme/changeport-registry", "Service:customer-acme/changeport-registry-gateway",
 	}
 	if !slices.Equal(cluster.deleted, want) {
 		t.Errorf("deleted %v, want %v", cluster.deleted, want)
@@ -535,5 +539,53 @@ func stringifyValue(value any) any {
 		return strconv.FormatFloat(v, 'f', -1, 64)
 	default:
 		return fmt.Sprint(v)
+	}
+}
+
+func objectNamed(t *testing.T, objects []*unstructured.Unstructured, kind, name string) *unstructured.Unstructured {
+	t.Helper()
+	for _, obj := range objects {
+		if obj.GetKind() == kind && obj.GetName() == name {
+			return obj
+		}
+	}
+	t.Fatalf("no %s %s", kind, name)
+	return nil
+}
+
+// The registry gateway serves the registry at the customer's registry name
+// on its own load balancer, which keeps clients' addresses, with the
+// customer's Kafka user's password and the listener's certificate.
+func TestRenderRegistryGateway(t *testing.T) {
+	eks := Spec{CustomerID: "acme", Profile: ProductionProfile, Platform: EKSProdPlatform, Sources: sources, KubernetesAPI: eksAPIServer}
+	eks.Platform.ConnectImage, eks.Platform.RegistryGatewayImage = publishedConnectImage, publishedGatewayImage
+	objects := renderSpec(t, eks)
+	service := objectNamed(t, objects, "Service", RegistryGateway)
+	annotations := service.GetAnnotations()
+	if annotations[externalDNSHostname] != "registry.acme.kafka.changeport.invalid" ||
+		annotations["service.beta.kubernetes.io/aws-load-balancer-target-group-attributes"] != "preserve_client_ip.enabled=true" ||
+		annotations["service.beta.kubernetes.io/aws-load-balancer-scheme"] != "internet-facing" {
+		t.Errorf("gateway Service annotations = %v", annotations)
+	}
+	if class, _, _ := unstructured.NestedString(service.Object, "spec", "loadBalancerClass"); class != "eks.amazonaws.com/nlb" {
+		t.Errorf("gateway Service class = %q", class)
+	}
+	deployment := objectNamed(t, objects, "Deployment", RegistryGateway)
+	containers, _, _ := unstructured.NestedSlice(deployment.Object, "spec", "template", "spec", "containers")
+	args, _, _ := unstructured.NestedStringSlice(containers[0].(map[string]any), "args")
+	if strings.Join(args, " ") != "-upstream=http://changeport-registry:8080/apis/ccompat/v7 -username=admin -sources=app,billing" {
+		t.Errorf("gateway args = %v", args)
+	}
+	volumes := strings.Join(mapStrings(deployment.Object["spec"]), " ")
+	if !strings.Contains(volumes, "external-listener-tls") || !strings.Contains(volumes, "admin") {
+		t.Errorf("the gateway does not mount the listener's certificate and the admin user's password: %s", volumes)
+	}
+
+	// Without a published image, there is no gateway.
+	eks.Platform.RegistryGatewayImage = ""
+	for _, obj := range renderSpec(t, eks) {
+		if obj.GetName() == RegistryGateway {
+			t.Errorf("a platform without the gateway's image renders %s %s", obj.GetKind(), obj.GetName())
+		}
 	}
 }

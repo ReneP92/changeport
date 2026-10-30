@@ -204,12 +204,28 @@ include, so `Ready` keeps meaning that clients can connect.
     reach only DNS and the brokers.
 - **Message format:** the converter writes Confluent's wire format, so
   standard Avro deserializers read the topics.
-- **Access:** customers reach the registry through `registry-gateway`, a small
-  Go service of ours.
-  - TLS uses the cluster's existing certificate, and the gateway has its own
-    load balancer.
-  - It checks the customer's Kafka credentials and limits failed attempts.
-  - It refuses deleting a source's schemas or changing their compatibility.
+- **Access:** customers reach the registry through the registry gateway
+  (`cmd/registry-gateway`, `images/registry-gateway`), one per customer with
+  sources, at `https://registry.<customer>.<domain>`.
+  - It serves the registry's Confluent-compatible API at its root, so a
+    Confluent client's `schema.registry.url` is that address.
+  - TLS uses the cluster's wildcard certificate, which it reloads when
+    cert-manager renews it. It has its own load balancer, which keeps
+    clients' addresses.
+  - It takes the customer's Kafka user and password (basic auth), compared
+    as digests in constant time. The password is read from the user's Secret
+    for every check, so a new one takes effect at once.
+  - After ten failures within five minutes, a client address is refused for
+    the rest of those five minutes, even with the right password.
+  - It refuses changing the schemas of the customer's sources: their new
+    versions, deletions, compatibility and mode. It also refuses the
+    registry's global compatibility and mode. Reading and looking schemas up
+    stay open.
+  - It hides the platform's own subjects (`changeport.*`).
+  - Only the gateway, the Connect worker and the source controller reach the
+    registry; the gateway reaches only the registry.
+  - A platform without the gateway's image, such as EKS until it is first
+    published, runs no gateway.
 
 ### The database password
 
@@ -421,7 +437,10 @@ of this design with the Connect image, Apicurio 3.3.3 and Postgres 17:
   - An added table, a partitioned one, arrives in full, and no other table
     is copied again.
   - A removed table's changes no longer reach its topic.
-  - Still to come: decoding through the registry gateway (#108).
+  - A Confluent client decodes the messages through the registry gateway
+    with the customer's credentials. It sees the gateway refuse deleting the
+    source's schemas, changing their compatibility, a wrong password, and
+    then the right one after ten failures.
 - **A Playwright spec** runs the console's wizard against the same database.
 
 ## Steps

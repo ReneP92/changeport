@@ -9,6 +9,7 @@ import (
 	"maps"
 	"net/netip"
 	"strconv"
+	"strings"
 	"text/template"
 
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -103,6 +104,21 @@ type cdcValues struct {
 	RegistryManagementPort int
 	// SnapshotChunkSize is how many rows a snapshot copies at a time.
 	SnapshotChunkSize int
+	// RegistryGatewayPort is the registry gateway's public port.
+	RegistryGatewayPort int
+	// Gateway is the registry gateway, when the platform has its image.
+	Gateway *gatewayValues
+}
+
+// gatewayValues are the template's values for the registry gateway.
+type gatewayValues struct {
+	Name        string
+	Image       string
+	Host        string
+	Annotations map[string]string
+	// Sources are the customer's sources, comma-separated, whose schemas
+	// customers may not change.
+	Sources string
 }
 
 // apiEndpoint is an address of the Kubernetes API server.
@@ -146,6 +162,19 @@ func RenderYAML(spec Spec) ([]byte, error) {
 			PrivateRanges:          privateRanges,
 			RegistryManagementPort: registryManagementPort,
 			SnapshotChunkSize:      SnapshotChunkSize,
+			RegistryGatewayPort:    RegistryGatewayPort,
+		}
+		if image := spec.Platform.RegistryGatewayImage; image != "" {
+			names := make([]string, len(spec.Sources))
+			for i, source := range spec.Sources {
+				names[i] = source.Name
+			}
+			annotations := loadBalancerAnnotations(spec.Platform, spec.RegistryHost())
+			maps.Copy(annotations, spec.Platform.LoadBalancer.ClientAddressAnnotations)
+			cdc.Gateway = &gatewayValues{
+				Name: RegistryGateway, Image: image, Host: spec.RegistryHost(), Annotations: annotations,
+				Sources: strings.Join(names, ","),
+			}
 		}
 		for _, endpoint := range spec.KubernetesAPI {
 			prefix := netip.PrefixFrom(endpoint.Addr(), endpoint.Addr().BitLen())
