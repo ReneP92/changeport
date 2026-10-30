@@ -591,6 +591,70 @@ spec:
         - name: cluster-ca
           mountPath: /mnt/cluster-ca
 ---
+# Source app's Debezium connector: it streams the changes of the
+# source's tables from the customer's database, through its publication and
+# its own replication slot, into a topic per table, as Avro.
+apiVersion: kafka.strimzi.io/v1
+kind: KafkaConnector
+metadata:
+  name: app-x1y2z3
+  namespace: customer-acme
+  labels:
+    strimzi.io/cluster: changeport-connect
+    changeport.io/source: app
+    changeport.io/part: cdc
+    app.kubernetes.io/managed-by: changeport-provisioner
+    changeport.io/tenant: "acme"
+spec:
+  class: io.debezium.connector.postgresql.PostgresConnector
+  tasksMax: 1
+  state: running
+  autoRestart:
+    enabled: true
+  config:
+    database.hostname: "app.abc123.us-east-1.rds.amazonaws.com"
+    database.port: 5432
+    database.dbname: "app"
+    database.user: "changeport_app_x1y2z3"
+    database.password: "${directory:/mnt/sources:app}"
+    database.sslmode: verify-full
+    database.sslrootcert: /mnt/sources/app.ca
+    # Changes as the credentials do, which restarts the connector with them.
+    changeport.credentials.version: "postgres-password-app-1/0a1b2c3d"
+    topic.prefix: app
+    plugin.name: pgoutput
+    publication.name: changeport_app_x1y2z3
+    publication.autocreate.mode: disabled
+    slot.name: changeport_app_x1y2z3
+    table.include.list: "public\\.orders,Sales\\.Order\\ Lines"
+    # Existing rows arrive through read-only incremental snapshots.
+    snapshot.mode: no_data
+    # A transactional logical message every minute lets the slot advance
+    # while the source's tables are idle; Debezium drops the messages.
+    heartbeat.interval.ms: 60000
+    heartbeat.action.query: "SELECT pg_logical_emit_message(true, 'changeport-heartbeat', '')"
+    message.prefix.exclude.list: changeport-heartbeat
+    topic.heartbeat.prefix: changeport.cdc.heartbeat
+    tombstones.on.delete: true
+    # Avro names allow fewer characters than Postgres's.
+    schema.name.adjustment.mode: avro
+    field.name.adjustment.mode: avro
+    key.converter: io.apicurio.registry.utils.converter.AvroConverter
+    key.converter.apicurio.registry.url: http://changeport-registry.customer-acme.svc:8080/apis/registry/v3
+    key.converter.apicurio.registry.auto-register: true
+    key.converter.apicurio.registry.headers.enabled: false
+    value.converter: io.apicurio.registry.utils.converter.AvroConverter
+    value.converter.apicurio.registry.url: http://changeport-registry.customer-acme.svc:8080/apis/registry/v3
+    value.converter.apicurio.registry.auto-register: true
+    value.converter.apicurio.registry.headers.enabled: false
+    # One partition per table, keyed by the primary key, with the source's
+    # retention.
+    topic.creation.default.partitions: 1
+    topic.creation.default.replication.factor: 3
+    topic.creation.default.cleanup.policy: delete
+    topic.creation.default.retention.ms: "3600000"
+    topic.creation.default.local.retention.ms: "3600000"
+---
 # The schema registry, Apicurio Registry, which keeps the Avro schemas of the
 # sources' topics in the customer's Kafka. Customers reach it through the
 # registry gateway; the Connect worker inside the cluster.

@@ -658,17 +658,9 @@ ORDER BY n.nspname, c.relname`
 // ListTables lists the database's tables for the table picker, with whether
 // each can be synced. It needs the role, not the tables' grants.
 func (c Checker) ListTables(ctx context.Context, connection Connection) ([]TableInfo, error) {
-	if err := connection.Validate(); err != nil {
+	conn, err := c.open(ctx, connection)
+	if err != nil {
 		return nil, err
-	}
-	conn, results := c.connect(ctx, connection, false)
-	if conn == nil {
-		for _, result := range results {
-			if result.Status == Fail {
-				return nil, errors.New(result.Message)
-			}
-		}
-		return nil, errors.New("connecting failed")
 	}
 	defer func() { _ = conn.Close(context.WithoutCancel(ctx)) }()
 	return listTables(ctx, conn, nil)

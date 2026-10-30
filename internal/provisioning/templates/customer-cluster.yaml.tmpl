@@ -745,6 +745,80 @@ spec:
           mountPath: /mnt/connect-user
         - name: cluster-ca
           mountPath: /mnt/cluster-ca
+{{- range .CDC.Sources }}
+{{- $source := .Name }}
+{{- with .Connector }}
+---
+# Source {{ $source }}'s Debezium connector: it streams the changes of the
+# source's tables from the customer's database, through its publication and
+# its own replication slot, into a topic per table, as Avro.
+apiVersion: kafka.strimzi.io/v1
+kind: KafkaConnector
+metadata:
+  name: {{ .Name }}
+  namespace: {{ $.Namespace }}
+  labels:
+    strimzi.io/cluster: {{ $.CDC.ConnectCluster }}
+    changeport.io/source: {{ $source }}
+{{- template "cdc-labels" $ }}
+spec:
+  class: io.debezium.connector.postgresql.PostgresConnector
+  tasksMax: 1
+  state: {{ if .Running }}running{{ else }}stopped{{ end }}
+  autoRestart:
+    enabled: true
+  config:
+    database.hostname: {{ quote .Host }}
+    database.port: {{ .Port }}
+    database.dbname: {{ quote .Database }}
+    database.user: {{ quote .Role }}
+    database.password: "${directory:/mnt/sources:{{ $source }}}"
+    database.sslmode: {{ .TLSMode }}
+{{- if .CA }}
+    database.sslrootcert: /mnt/sources/{{ $source }}.ca
+{{- else }}
+    # The public authorities the JVM trusts.
+    database.sslfactory: org.postgresql.ssl.DefaultJavaSSLFactory
+{{- end }}
+    # Changes as the credentials do, which restarts the connector with them.
+    changeport.credentials.version: {{ quote .CredentialsVersion }}
+    topic.prefix: {{ $source }}
+    plugin.name: pgoutput
+    publication.name: {{ .Publication }}
+    publication.autocreate.mode: disabled
+    slot.name: {{ .Slot }}
+    table.include.list: {{ quote .TableIncludeList }}
+    # Existing rows arrive through read-only incremental snapshots.
+    snapshot.mode: no_data
+    # A transactional logical message every minute lets the slot advance
+    # while the source's tables are idle; Debezium drops the messages.
+    heartbeat.interval.ms: 60000
+    heartbeat.action.query: "SELECT pg_logical_emit_message(true, 'changeport-heartbeat', '')"
+    message.prefix.exclude.list: changeport-heartbeat
+    topic.heartbeat.prefix: changeport.cdc.heartbeat
+    tombstones.on.delete: true
+    # Avro names allow fewer characters than Postgres's.
+    schema.name.adjustment.mode: avro
+    field.name.adjustment.mode: avro
+    key.converter: io.apicurio.registry.utils.converter.AvroConverter
+    key.converter.apicurio.registry.url: {{ $.CDC.RegistryURL }}
+    key.converter.apicurio.registry.auto-register: true
+    key.converter.apicurio.registry.headers.enabled: false
+    value.converter: io.apicurio.registry.utils.converter.AvroConverter
+    value.converter.apicurio.registry.url: {{ $.CDC.RegistryURL }}
+    value.converter.apicurio.registry.auto-register: true
+    value.converter.apicurio.registry.headers.enabled: false
+    # One partition per table, keyed by the primary key, with the source's
+    # retention.
+    topic.creation.default.partitions: 1
+    topic.creation.default.replication.factor: {{ $.Profile.ReplicationFactor }}
+    topic.creation.default.cleanup.policy: delete
+    topic.creation.default.retention.ms: "{{ .RetentionMs }}"
+{{- with .LocalRetentionMs }}
+    topic.creation.default.local.retention.ms: "{{ . }}"
+{{- end }}
+{{- end }}
+{{- end }}
 ---
 # The schema registry, Apicurio Registry, which keeps the Avro schemas of the
 # sources' topics in the customer's Kafka. Customers reach it through the

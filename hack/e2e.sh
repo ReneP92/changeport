@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
-# Proves the per-customer approach end to end on kind, in two suites that need
-# separate clusters, as the failover test freezes a zone. The core suite: the
+# Proves the per-customer approach end to end on kind, in three suites that
+# CI runs on separate clusters, as the failover test freezes a zone. The core
+# suite: the
 # provisioning service creates a second customer's namespace and Kafka cluster
 # from the same template as the demo cluster, protected from deletion, while
 # the demo cluster is smoke tested; both clusters pass the smoke test side by
@@ -19,9 +20,10 @@
 # Postgres test checks the database that stands in for a customer's in the
 # Postgres CDC source, and the CDC runtime test checks that a customer's
 # first source brings Kafka Connect and the schema registry, and the last
-# takes them. The failover
-# suite freezes a zone and drains a broker of a three-zone customer under
-# load. SUITE=core or SUITE=failover runs one (default: both, one after the
+# takes them. The failover suite freezes a zone and drains a broker of a
+# three-zone customer under load. The cdc suite takes a Postgres CDC source
+# of the demo customer from created through streaming and paused to deleted.
+# SUITE=core, failover or cdc runs one (default: all three, one after the
 # other). Set KEEP=1 to keep the customers. Run just dev-up first.
 # shellcheck source=lib.sh
 source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
@@ -38,8 +40,8 @@ check_docker_disk
 
 SUITE=${SUITE:-all}
 case $SUITE in
-core | failover | all) ;;
-*) die "SUITE must be core, failover or all, not $SUITE" ;;
+core | failover | cdc | all) ;;
+*) die "SUITE must be core, failover, cdc or all, not $SUITE" ;;
 esac
 
 core_suite() {
@@ -83,6 +85,7 @@ core_suite() {
   "$ROOT/hack/cdc-runtime-test.sh" "$DEMO_CUSTOMER"
 }
 
-[[ $SUITE == failover ]] || core_suite
-[[ $SUITE == core ]] || "$ROOT/hack/failover-test.sh"
+if [[ $SUITE == core || $SUITE == all ]]; then core_suite; fi
+if [[ $SUITE == failover || $SUITE == all ]]; then "$ROOT/hack/failover-test.sh"; fi
+if [[ $SUITE == cdc || $SUITE == all ]]; then "$ROOT/hack/cdc-test.sh" "$DEMO_CUSTOMER"; fi
 log "End-to-end test passed ($SUITE)"

@@ -110,7 +110,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        suite: [core, failover]
+        suite: [core, failover, cdc]
     env:
       BUILD_CACHE: gha
     steps:
@@ -139,7 +139,7 @@ jobs:
       # The failover suite brings its own customer.
       - run: just dev-up
         env:
-          DEMO_CUSTOMER: ${{ matrix.suite == 'core' && 'demo' || '' }}
+          DEMO_CUSTOMER: ${{ matrix.suite != 'failover' && 'demo' || '' }}
       - run: just e2e ${{ matrix.suite }}
       - if: matrix.suite == 'core'
         run: just platform-check

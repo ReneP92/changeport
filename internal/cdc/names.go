@@ -100,6 +100,10 @@ type Names struct {
 	SignalTopic string
 	// NotificationTopic carries the connector's snapshot progress.
 	NotificationTopic string
+	// Connector names the source's KafkaConnector, <name>-<id>. Kafka
+	// Connect keeps a connector's offsets by its name, so a new source of
+	// the same name never resumes from an old one's.
+	Connector string
 }
 
 // NamesFor returns the names of the source with the given name and ID. In the
@@ -120,6 +124,7 @@ func NamesFor(name, id string) (Names, error) {
 		Slot:              database,
 		SignalTopic:       "changeport.cdc.signals." + name,
 		NotificationTopic: "changeport.cdc.notifications." + name,
+		Connector:         name + "-" + id,
 	}, nil
 }
 
@@ -220,4 +225,38 @@ func Topics(source string, tables []Table, existing []string) []TableTopic {
 		}
 	}
 	return result
+}
+
+// TableIncludeList is Debezium's table.include.list for tables: a regular
+// expression per table matching exactly its schema.table, comma-separated.
+// Every ASCII character but letters and digits is escaped, and commas also
+// for Debezium's list.
+func TableIncludeList(tables []Table) string {
+	patterns := make([]string, len(tables))
+	for i, table := range tables {
+		patterns[i] = quoteRegex(table.Schema) + `\.` + quoteRegex(table.Name)
+	}
+	return strings.Join(patterns, ",")
+}
+
+func quoteRegex(name string) string {
+	var b strings.Builder
+	for _, r := range name {
+		switch {
+		case r == ',':
+			// Debezium splits the list on commas a backslash does not
+			// escape, and the regular expression then gets a comma.
+			b.WriteString(`\,`)
+		case r < 128 && !asciiAlphanumeric(r):
+			b.WriteByte('\\')
+			b.WriteRune(r)
+		default:
+			b.WriteRune(r)
+		}
+	}
+	return b.String()
+}
+
+func asciiAlphanumeric(r rune) bool {
+	return 'a' <= r && r <= 'z' || 'A' <= r && r <= 'Z' || '0' <= r && r <= '9'
 }

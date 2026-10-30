@@ -53,7 +53,7 @@ metadata:
   name: $source_name
   namespace: $namespace
 spec:
-  id: $(LC_ALL=C tr -dc a-z0-9 </dev/urandom | head -c 6)
+  id: $(random_string a-z0-9 6)
   provider: generic
   connection: {host: postgres.source-postgres.svc, database: app, passwordSecret: postgres-password-$source_name}
   tables: [{schema: public, name: orders}]
@@ -72,7 +72,7 @@ expect "$connect" 169.254.169.254 80 blocked
 # The brokers reach the same service, which shows that the policy blocks it.
 expect "$namespace/$customer-dual-role-0" victoria-metrics.metrics.svc 8428 reachable
 log "Only the Connect worker reaches the registry"
-expect source-postgres/"$(kubectl -n source-postgres get pod -l app.kubernetes.io/name=postgres -o name | head -1 | cut -d/ -f2)" \
+expect source-postgres/"$(kubectl -n source-postgres get pod -l app.kubernetes.io/name=postgres -o name | sed -n 1p | cut -d/ -f2)" \
   "changeport-registry.$namespace.svc" 8080 blocked
 
 log "Removing source $source_name removes the CDC runtime"

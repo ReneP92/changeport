@@ -63,6 +63,7 @@ func TestNamesFor(t *testing.T) {
 		Slot:              "changeport_app_db_x1y2z3",
 		SignalTopic:       "changeport.cdc.signals.app-db",
 		NotificationTopic: "changeport.cdc.notifications.app-db",
+		Connector:         "app-db-x1y2z3",
 	}
 	if names != want {
 		t.Errorf("NamesFor() = %+v, want %+v", names, want)
@@ -176,5 +177,17 @@ func TestProvisioningAcceptsEverySourceName(t *testing.T) {
 		if provisioning.ValidateSourceName(name) == nil && !strings.HasPrefix(name, "changeport") && ValidateName(name) != nil {
 			t.Errorf("the provisioner accepts %q, but internal/cdc does not", name)
 		}
+	}
+}
+
+func TestTableIncludeList(t *testing.T) {
+	got := TableIncludeList([]Table{{"public", "orders"}, {"Sales", "Order Lines"}, {"odd", "a,b.c$"}, {"données", "café"}})
+	want := `public\.orders,Sales\.Order\ Lines,odd\.a\,b\.c\$,données\.café`
+	if got != want {
+		t.Errorf("TableIncludeList() = %s, want %s", got, want)
+	}
+	names, _ := NamesFor("app", "x1y2z3")
+	if names.Connector != "app-x1y2z3" {
+		t.Errorf("Connector = %q", names.Connector)
 	}
 }

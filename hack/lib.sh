@@ -124,6 +124,16 @@ tag_content() {
   done < <(docker images --format '{{.Repository}}:{{.Tag}}' "${image%:*}")
 }
 
+# Prints count random characters of a tr set, such as a-z0-9. It reads a
+# fixed amount of randomness, so that no pipe closes early under pipefail.
+# Usage: random_string <set> <count>
+random_string() {
+  local chars
+  chars=$(head -c 2048 /dev/urandom | LC_ALL=C tr -dc "$1")
+  [[ ${#chars} -ge $2 ]] || die "too few random characters of $1"
+  echo "${chars:0:$2}"
+}
+
 sha256_of() {
   if command -v sha256sum >/dev/null; then sha256sum "$1" | cut -d' ' -f1; else shasum -a 256 "$1" | cut -d' ' -f1; fi
 }

@@ -1,9 +1,11 @@
 package provisioning
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -52,7 +54,7 @@ func TestRenderCDCRuntimeOnlyWithSources(t *testing.T) {
 	}
 	want := []string{
 		"KafkaUser changeport-connect", "KafkaUser changeport-registry", "KafkaConnect changeport-connect",
-		"Deployment changeport-registry", "Service changeport-registry",
+		"KafkaConnector app-x1y2z3", "Deployment changeport-registry", "Service changeport-registry",
 		"NetworkPolicy changeport-connect-egress", "NetworkPolicy changeport-registry",
 	}
 	if !slices.Equal(kinds, want) {
@@ -251,7 +253,7 @@ func TestProvisionerMayPruneTheCDCRuntime(t *testing.T) {
 			}
 		}
 	}
-	resources := map[string]string{"KafkaUser": "kafkausers", "KafkaConnect": "kafkaconnects", "Deployment": "deployments", "Service": "services", "NetworkPolicy": "networkpolicies"}
+	resources := map[string]string{"KafkaUser": "kafkausers", "KafkaConnect": "kafkaconnects", "KafkaConnector": "kafkaconnectors", "Deployment": "deployments", "Service": "services", "NetworkPolicy": "networkpolicies"}
 	for _, kind := range prunedKinds {
 		resource, ok := resources[kind.Kind]
 		if !ok {
@@ -411,7 +413,7 @@ func TestReconcilePrunesTheCDCRuntime(t *testing.T) {
 	provision(t, p, spec)
 	slices.Sort(cluster.deleted)
 	want := []string{
-		"Deployment:customer-acme/changeport-registry", "KafkaConnect:customer-acme/changeport-connect",
+		"Deployment:customer-acme/changeport-registry", "KafkaConnect:customer-acme/changeport-connect", "KafkaConnector:customer-acme/app-x1y2z3",
 		"KafkaUser:customer-acme/changeport-connect", "KafkaUser:customer-acme/changeport-registry",
 		"NetworkPolicy:customer-acme/changeport-connect-egress", "NetworkPolicy:customer-acme/changeport-registry",
 		"Service:customer-acme/changeport-registry",
@@ -434,5 +436,98 @@ func TestReconcilePrunesTheCDCRuntime(t *testing.T) {
 	provision(t, p, spec)
 	if len(cluster.deleted) != 0 {
 		t.Errorf("a second reconcile deleted %v", cluster.deleted)
+	}
+}
+
+// A source's connector renders once its credentials reach the worker, with
+// the source's settings, and stops with the source.
+func TestRenderConnector(t *testing.T) {
+	spec := acme
+	spec.Sources = []Source{{Name: "app", Connector: appConnector()}}
+	connector := objectOfKind(t, renderSpec(t, spec), "KafkaConnector")
+	config, _, _ := unstructured.NestedStringMap(stringify(connector.Object), "spec", "config")
+	for key, want := range map[string]string{
+		"database.hostname": "app.abc123.us-east-1.rds.amazonaws.com", "database.port": "5432", "database.user": "changeport_app_x1y2z3",
+		"database.password": "${directory:/mnt/sources:app}", "database.sslmode": "verify-full", "database.sslrootcert": "/mnt/sources/app.ca",
+		"slot.name": "changeport_app_x1y2z3", "publication.name": "changeport_app_x1y2z3", "publication.autocreate.mode": "disabled",
+		"table.include.list": `public\.orders,Sales\.Order\ Lines`, "topic.prefix": "app", "tombstones.on.delete": "true",
+		"topic.creation.default.retention.ms": "3600000", "topic.creation.default.local.retention.ms": "3600000",
+		"message.prefix.exclude.list": "changeport-heartbeat",
+	} {
+		if config[key] != want {
+			t.Errorf("%s = %q, want %q", key, config[key], want)
+		}
+	}
+	if state, _, _ := unstructured.NestedString(connector.Object, "spec", "state"); state != "running" {
+		t.Errorf("state = %q", state)
+	}
+
+	// A week's retention keeps the brokers' local day, and a source without
+	// a CA trusts the public authorities; a stopped source stops.
+	spec.Sources[0].Connector.RetentionMs, spec.Sources[0].Connector.CA, spec.Sources[0].Connector.Running = 604800000, false, false
+	connector = objectOfKind(t, renderSpec(t, spec), "KafkaConnector")
+	config, _, _ = unstructured.NestedStringMap(stringify(connector.Object), "spec", "config")
+	if _, ok := config["topic.creation.default.local.retention.ms"]; ok || config["database.sslfactory"] != "org.postgresql.ssl.DefaultJavaSSLFactory" || config["database.sslrootcert"] != "" {
+		t.Errorf("config = %v, want no local retention and the JVM's authorities", config)
+	}
+	if state, _, _ := unstructured.NestedString(connector.Object, "spec", "state"); state != "stopped" {
+		t.Errorf("state = %q, want stopped", state)
+	}
+
+	// Before its credentials reach the worker, a source has no connector.
+	spec.Sources[0].Connector = nil
+	for _, obj := range renderSpec(t, spec) {
+		if obj.GetKind() == "KafkaConnector" {
+			t.Error("a source without credentials has a connector")
+		}
+	}
+}
+
+func TestSpecValidatesConnectors(t *testing.T) {
+	for name, change := range map[string]func(*Connector){
+		"another source's name": func(c *Connector) { c.Name = "billing-x1y2z3" },
+		"a host with a slash":   func(c *Connector) { c.Host = "db/x" },
+		"a port of 0":           func(c *Connector) { c.Port = 0 },
+		"no tables":             func(c *Connector) { c.TableIncludeList = "" },
+		"an unknown TLS mode":   func(c *Connector) { c.TLSMode = "require" },
+		"verify-ca without CA":  func(c *Connector) { c.TLSMode, c.CA = "verify-ca", false },
+	} {
+		connector := appConnector()
+		change(connector)
+		spec := acme
+		spec.Sources = []Source{{Name: "app", Connector: connector}}
+		if spec.Validate() == nil {
+			t.Errorf("Validate() accepted a connector with %s", name)
+		}
+	}
+}
+
+// stringify turns a rendered object's numbers and booleans into strings, as
+// Kafka Connect reads connector configurations.
+func stringify(value any) map[string]any {
+	object, _ := stringifyValue(value).(map[string]any)
+	return object
+}
+
+func stringifyValue(value any) any {
+	switch v := value.(type) {
+	case map[string]any:
+		result := map[string]any{}
+		for key, inner := range v {
+			result[key] = stringifyValue(inner)
+		}
+		return result
+	case []any:
+		result := make([]any, len(v))
+		for i, inner := range v {
+			result[i] = stringifyValue(inner)
+		}
+		return result
+	case string:
+		return v
+	case float64:
+		return strconv.FormatFloat(v, 'f', -1, 64)
+	default:
+		return fmt.Sprint(v)
 	}
 }

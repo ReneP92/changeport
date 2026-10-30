@@ -194,6 +194,11 @@ agent-test customer="demo":
 lag-test customer="demo":
     hack/lag-test.sh {{ customer }}
 
+# Take a Postgres CDC source of a customer from created through streaming and paused to deleted
+[group('Local development (kind + Strimzi)')]
+cdc-test customer="demo":
+    hack/cdc-test.sh {{customer}}
+
 # Check that a customer's first Postgres source brings Kafka Connect and the schema registry, and the last takes them
 [group('Local development (kind + Strimzi)')]
 cdc-runtime-test customer="demo":
