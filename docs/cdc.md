@@ -58,20 +58,35 @@ customer's namespace. It exists only while the customer has a source.
 ### Sources
 
 A namespaced `PostgresSource` resource in `customer-<id>` describes each
-source. Its name is the topic prefix.
+source (`api/v1alpha1/postgressource_types.go`). Its name is the topic prefix,
+following the same rules as `internal/cdc`: at most 40 lowercase letters,
+digits and dashes, not starting with a reserved prefix.
 
 - **Spec:**
-  - connection: host, port, database, user, and a reference to the password;
-  - TLS mode and an optional CA;
-  - provider;
-  - tables, at most 200;
-  - retention, from the topic presets of 1 hour to 30 days, 7 days by
+  - `id`: the 6 characters that make the source's role, publication and slot
+    names unique. The console chooses it, and it cannot change;
+  - `provider`;
+  - `connection`:
+    - `host`, `port` (5432 by default), and `database`, which cannot
+      change;
+    - `passwordSecret`, the Secret the console wrote the password into.
+      Naming another one gives the role a new password;
+    - `tls`: `verify-full` (the default) or `verify-ca`, which needs `ca`;
+  - `tables`, from 1 to 200, each once;
+  - `retentionMs`: one of the topic presets from 1 hour to 30 days, 7 days by
     default;
-  - state: running or stopped.
+  - `state`: `Running` (the default) or `Stopped`.
 - **Status:**
-  - phase: Pending, Snapshotting, Streaming, Stopped, Failed or Deleting;
-  - the replication slot's health;
-  - each table's snapshot progress, as rows copied of estimated.
+  - `phase`: Pending, Snapshotting, Streaming, Stopped, Failed or Deleting;
+  - `passwordSecret`, the Secret whose password the source uses;
+  - `slot`: whether it is active, the WAL it retains, its `wal_status` and
+    `safe_wal_size`;
+  - `tables`: each table's topic and snapshot state, as rows copied of
+    estimated;
+  - conditions.
+
+A test keeps the resource's limits equal to `internal/cdc`'s and the topic
+presets, and envtest tests check its validation.
 
 The provisioning controller renders the runtime and a `KafkaConnector` per
 source. A second controller, for sources, does everything else: credentials,

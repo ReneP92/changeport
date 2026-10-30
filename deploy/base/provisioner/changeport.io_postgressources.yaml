@@ -1,0 +1,402 @@
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.23.0
+  name: postgressources.changeport.io
+spec:
+  group: changeport.io
+  names:
+    kind: PostgresSource
+    listKind: PostgresSourceList
+    plural: postgressources
+    shortNames:
+    - pgsource
+    singular: postgressource
+  scope: Namespaced
+  versions:
+  - additionalPrinterColumns:
+    - jsonPath: .spec.provider
+      name: Provider
+      type: string
+    - jsonPath: .spec.connection.host
+      name: Host
+      type: string
+    - jsonPath: .spec.state
+      name: State
+      type: string
+    - jsonPath: .status.phase
+      name: Phase
+      type: string
+    - jsonPath: .metadata.creationTimestamp
+      name: Age
+      type: date
+    name: v1alpha1
+    schema:
+      openAPIV3Schema:
+        description: |-
+          PostgresSource streams tables of a customer's Postgres database into
+          topics, one per table, over logical replication (docs/cdc.md). It lives in
+          the customer's namespace, and its name is its topics' prefix, so it
+          follows the rules of cdc.ValidateName.
+        properties:
+          apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+            type: string
+          kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+            type: string
+          metadata:
+            type: object
+          spec:
+            description: |-
+              PostgresSourceSpec is a customer's Postgres database and the tables
+              Changeport syncs from it.
+            properties:
+              connection:
+                description: Connection is how Changeport reaches the database.
+                properties:
+                  database:
+                    description: |-
+                      Database is the database the source's tables are in. It cannot
+                      change: the source's slot and publication belong to it.
+                    maxLength: 63
+                    minLength: 1
+                    type: string
+                    x-kubernetes-validations:
+                    - message: the database cannot change
+                      rule: self == oldSelf
+                  host:
+                    description: Host is the database's public host name or address,
+                      without a port.
+                    maxLength: 253
+                    minLength: 1
+                    pattern: ^[A-Za-z0-9.:-]+$
+                    type: string
+                  passwordSecret:
+                    description: |-
+                      PasswordSecret names the Secret in the source's namespace that holds
+                      the role's password under the key password. The console writes it,
+                      and the source controller moves the password into Connect's own
+                      Secret and deletes it; naming another Secret gives the role a new
+                      password. The role itself is changeport_<name>_<id>.
+                    maxLength: 253
+                    minLength: 1
+                    pattern: ^[a-z0-9]([-a-z0-9.]*[a-z0-9])?$
+                    type: string
+                  port:
+                    default: 5432
+                    description: Port is the database's port.
+                    format: int32
+                    maximum: 65535
+                    minimum: 1
+                    type: integer
+                  tls:
+                    default: {}
+                    description: TLS is how Changeport checks the database's certificate.
+                    properties:
+                      ca:
+                        description: |-
+                          CA is the PEM certificates of the authorities that sign the
+                          database's certificate. Without it, verify-full trusts the public
+                          authorities.
+                        maxLength: 65536
+                        minLength: 1
+                        type: string
+                        x-kubernetes-validations:
+                        - message: the CA is PEM certificates
+                          rule: self.contains('-----BEGIN CERTIFICATE-----')
+                      mode:
+                        default: verify-full
+                        description: |-
+                          Mode is verify-full, which checks the certificate's authority and
+                          host, or verify-ca, which checks only that the given CA signed it.
+                        enum:
+                        - verify-full
+                        - verify-ca
+                        type: string
+                    type: object
+                    x-kubernetes-validations:
+                    - message: verify-ca needs the database's CA
+                      rule: '!has(self.mode) || self.mode != ''verify-ca'' || has(self.ca)'
+                required:
+                - database
+                - host
+                - passwordSecret
+                type: object
+              id:
+                description: |-
+                  ID makes the names the source leaves in the database unique to it:
+                  its role, publication and replication slot are
+                  changeport_<name>_<id>. The console chooses it, and it cannot change.
+                pattern: ^[a-z0-9]{6}$
+                type: string
+                x-kubernetes-validations:
+                - message: the ID cannot change
+                  rule: self == oldSelf
+              provider:
+                description: |-
+                  Provider is where the database runs, which decides the instructions
+                  the console shows.
+                enum:
+                - generic
+                - rds
+                - cloudsql
+                - azure
+                - supabase
+                - neon
+                type: string
+              retentionMs:
+                default: 604800000
+                description: |-
+                  RetentionMs is how long the source's topics keep messages, one of the
+                  topic retention presets from an hour to 30 days.
+                enum:
+                - 3600000
+                - 21600000
+                - 43200000
+                - 86400000
+                - 259200000
+                - 604800000
+                - 1209600000
+                - 2592000000
+                format: int64
+                type: integer
+              state:
+                default: Running
+                description: State is Running, or Stopped to pause the source.
+                enum:
+                - Running
+                - Stopped
+                type: string
+              tables:
+                description: Tables are the tables the source syncs, each into its
+                  own topic.
+                items:
+                  description: |-
+                    PostgresTable is a table a source syncs into its own topic,
+                    <source>.<schema>.<table>.
+                  properties:
+                    name:
+                      description: Name is the table's name, as Postgres spells it.
+                      maxLength: 63
+                      minLength: 1
+                      type: string
+                    schema:
+                      description: Schema is the table's schema, as Postgres spells
+                        it.
+                      maxLength: 63
+                      minLength: 1
+                      type: string
+                  required:
+                  - name
+                  - schema
+                  type: object
+                maxItems: 200
+                minItems: 1
+                type: array
+                x-kubernetes-list-map-keys:
+                - schema
+                - name
+                x-kubernetes-list-type: map
+            required:
+            - connection
+            - id
+            - provider
+            - tables
+            type: object
+          status:
+            description: PostgresSourceStatus is how far the source is.
+            properties:
+              conditions:
+                description: Conditions say what the source waits for, or why it failed.
+                items:
+                  description: Condition contains details for one aspect of the current
+                    state of this API Resource.
+                  properties:
+                    lastTransitionTime:
+                      description: |-
+                        lastTransitionTime is the last time the condition transitioned from one status to another.
+                        This should be when the underlying condition changed.  If that is not known, then using the time when the API field changed is acceptable.
+                      format: date-time
+                      type: string
+                    message:
+                      description: |-
+                        message is a human readable message indicating details about the transition.
+                        This may be an empty string.
+                      maxLength: 32768
+                      type: string
+                    observedGeneration:
+                      description: |-
+                        observedGeneration represents the .metadata.generation that the condition was set based upon.
+                        For instance, if .metadata.generation is currently 12, but the .status.conditions[x].observedGeneration is 9, the condition is out of date
+                        with respect to the current state of the instance.
+                      format: int64
+                      minimum: 0
+                      type: integer
+                    reason:
+                      description: |-
+                        reason contains a programmatic identifier indicating the reason for the condition's last transition.
+                        Producers of specific condition types may define expected values and meanings for this field,
+                        and whether the values are considered a guaranteed API.
+                        The value should be a CamelCase string.
+                        This field may not be empty.
+                      maxLength: 1024
+                      minLength: 1
+                      pattern: ^[A-Za-z]([A-Za-z0-9_,:]*[A-Za-z0-9_])?$
+                      type: string
+                    status:
+                      description: status of the condition, one of True, False, Unknown.
+                      enum:
+                      - "True"
+                      - "False"
+                      - Unknown
+                      type: string
+                    type:
+                      description: type of condition in CamelCase or in foo.example.com/CamelCase.
+                      maxLength: 316
+                      pattern: ^([a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*/)?(([A-Za-z0-9][-A-Za-z0-9_.]*)?[A-Za-z0-9])$
+                      type: string
+                  required:
+                  - lastTransitionTime
+                  - message
+                  - reason
+                  - status
+                  - type
+                  type: object
+                type: array
+                x-kubernetes-list-map-keys:
+                - type
+                x-kubernetes-list-type: map
+              observedGeneration:
+                description: |-
+                  ObservedGeneration is the generation of the source the status
+                  describes.
+                format: int64
+                type: integer
+              passwordSecret:
+                description: |-
+                  PasswordSecret is the password Secret whose password the source
+                  uses, once the controller has moved it.
+                type: string
+              phase:
+                description: |-
+                  Phase is Pending, Snapshotting, Streaming, Stopped, Failed or
+                  Deleting.
+                enum:
+                - Pending
+                - Snapshotting
+                - Streaming
+                - Stopped
+                - Failed
+                - Deleting
+                type: string
+              slot:
+                description: Slot is the health of the source's replication slot.
+                properties:
+                  active:
+                    description: Active reports whether the connector is reading from
+                      the slot.
+                    type: boolean
+                  checkedAt:
+                    description: CheckedAt is when the controller read the slot.
+                    format: date-time
+                    type: string
+                  name:
+                    description: Name is the slot's name.
+                    type: string
+                  retainedWALBytes:
+                    description: RetainedWALBytes is the WAL the database keeps for
+                      the slot.
+                    format: int64
+                    type: integer
+                  safeWALSizeBytes:
+                    description: |-
+                      SafeWALSizeBytes is how much more WAL the slot may hold back before
+                      the database invalidates it; absent without max_slot_wal_keep_size.
+                    format: int64
+                    type: integer
+                  walStatus:
+                    description: |-
+                      WALStatus is Postgres's wal_status of the slot: reserved, extended,
+                      unreserved, or lost once the database removed WAL the slot needed.
+                    type: string
+                required:
+                - active
+                - checkedAt
+                - name
+                - retainedWALBytes
+                type: object
+              tables:
+                description: Tables is how far each table is.
+                items:
+                  description: TableStatus is how far one of a source's tables is.
+                  properties:
+                    name:
+                      description: Name is the table's name.
+                      type: string
+                    rowsCopied:
+                      description: RowsCopied is how many existing rows the snapshot
+                        has copied.
+                      format: int64
+                      type: integer
+                    rowsEstimated:
+                      description: |-
+                        RowsEstimated is Postgres's estimate of the table's rows when its
+                        snapshot started.
+                      format: int64
+                      type: integer
+                    schema:
+                      description: Schema is the table's schema.
+                      type: string
+                    snapshot:
+                      description: |-
+                        Snapshot is Pending, Running, Done or Failed: how far copying the
+                        table's existing rows is.
+                      enum:
+                      - Pending
+                      - Running
+                      - Done
+                      - Failed
+                      type: string
+                    topic:
+                      description: Topic is the table's topic.
+                      type: string
+                  required:
+                  - name
+                  - schema
+                  - snapshot
+                  - topic
+                  type: object
+                type: array
+                x-kubernetes-list-map-keys:
+                - schema
+                - name
+                x-kubernetes-list-type: map
+            type: object
+        required:
+        - spec
+        type: object
+        x-kubernetes-validations:
+        - message: 'the name is the source''s topic prefix: at most 40 lowercase letters,
+            digits and dashes, starting with a letter and ending with a letter or
+            digit'
+          rule: size(self.metadata.name) <= 40 && self.metadata.name.matches('^[a-z]([-a-z0-9]*[a-z0-9])?$')
+        - message: names starting with changeport, strimzi or connect- are reserved
+            for the platform
+          rule: '!self.metadata.name.startsWith(''changeport'') && !self.metadata.name.startsWith(''strimzi'')
+            && !self.metadata.name.startsWith(''connect-'')'
+    served: true
+    storage: true
+    subresources:
+      status: {}
