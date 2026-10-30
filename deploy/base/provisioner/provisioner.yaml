@@ -27,6 +27,16 @@ rules:
   - apiGroups: [changeport.io]
     resources: [customers/finalizers]
     verbs: [update]
+  # The Postgres CDC sources in customers' namespaces (docs/cdc.md).
+  - apiGroups: [changeport.io]
+    resources: [postgressources]
+    verbs: [get, list, watch, patch, update]
+  - apiGroups: [changeport.io]
+    resources: [postgressources/status]
+    verbs: [get, patch, update]
+  - apiGroups: [changeport.io]
+    resources: [postgressources/finalizers]
+    verbs: [update]
   # Server-side apply creates and changes objects with patch, and needs
   # create for objects that do not exist yet.
   - apiGroups: [""]
