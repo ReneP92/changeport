@@ -554,6 +554,11 @@ spec:
       memory: "1Gi"
     limits:
       memory: "1Gi"
+  # Strimzi's default heap of three quarters of the memory leaves too little
+  # for the rest of the worker.
+  jvmOptions:
+    "-Xms": "512m"
+    "-Xmx": "512m"
   template:
     pod:
       affinity:
@@ -583,6 +588,54 @@ spec:
           mountPath: /mnt/connect-user
         - name: cluster-ca
           mountPath: /mnt/cluster-ca
+---
+# Source app's snapshot signals: the source controller asks for the
+# existing rows of its tables here, and the connector reads them.
+apiVersion: kafka.strimzi.io/v1
+kind: KafkaTopic
+metadata:
+  name: changeport.cdc.signals.app
+  namespace: customer-acme
+  labels:
+    strimzi.io/cluster: "acme"
+    changeport.io/source: app
+    changeport.io/part: cdc
+    app.kubernetes.io/managed-by: changeport-provisioner
+    changeport.io/tenant: "acme"
+spec:
+  topicName: changeport.cdc.signals.app
+  partitions: 1
+  replicas: 1
+  config:
+    cleanup.policy: delete
+    retention.ms: "604800000"
+    # The Kafka agent tiers every topic that can be; saying so here keeps
+    # the Topic Operator from trying to undo it.
+    remote.storage.enable: "true"
+---
+# Source app's snapshot progress, which the connector reports and
+# the source controller follows.
+apiVersion: kafka.strimzi.io/v1
+kind: KafkaTopic
+metadata:
+  name: changeport.cdc.notifications.app
+  namespace: customer-acme
+  labels:
+    strimzi.io/cluster: "acme"
+    changeport.io/source: app
+    changeport.io/part: cdc
+    app.kubernetes.io/managed-by: changeport-provisioner
+    changeport.io/tenant: "acme"
+spec:
+  topicName: changeport.cdc.notifications.app
+  partitions: 1
+  replicas: 1
+  config:
+    cleanup.policy: delete
+    retention.ms: "604800000"
+    # The Kafka agent tiers every topic that can be; saying so here keeps
+    # the Topic Operator from trying to undo it.
+    remote.storage.enable: "true"
 ---
 # Source app's Debezium connector: it streams the changes of the
 # source's tables from the customer's database, through its publication and
@@ -620,8 +673,25 @@ spec:
     publication.autocreate.mode: disabled
     slot.name: changeport_app_x1y2z3
     table.include.list: "public\\.orders,Sales\\.Order\\ Lines"
-    # Existing rows arrive through read-only incremental snapshots.
+    # Existing rows arrive through read-only incremental snapshots, which
+    # the source controller asks for on the signal topic: in chunks, while
+    # changes stream, without locks or writes to the customer's database.
     snapshot.mode: no_data
+    read.only: true
+    incremental.snapshot.chunk.size: 1024
+    signal.enabled.channels: kafka
+    signal.kafka.topic: changeport.cdc.signals.app
+    signal.kafka.groupId: changeport.cdc.signals.app
+    signal.kafka.bootstrap.servers: "acme-kafka-bootstrap:9093"
+    signal.consumer.security.protocol: SSL
+    signal.consumer.ssl.keystore.type: PKCS12
+    signal.consumer.ssl.keystore.location: /mnt/connect-user/user.p12
+    signal.consumer.ssl.keystore.password: "${directory:/mnt/connect-user:user.password}"
+    signal.consumer.ssl.truststore.type: PKCS12
+    signal.consumer.ssl.truststore.location: /mnt/cluster-ca/ca.p12
+    signal.consumer.ssl.truststore.password: "${directory:/mnt/cluster-ca:ca.password}"
+    notification.enabled.channels: sink
+    notification.sink.topic.name: changeport.cdc.notifications.app
     # A transactional logical message every minute lets the slot advance
     # while the source's tables are idle; Debezium drops the messages.
     heartbeat.interval.ms: 60000
@@ -647,6 +717,54 @@ spec:
     topic.creation.default.cleanup.policy: delete
     topic.creation.default.retention.ms: "3600000"
     topic.creation.default.local.retention.ms: "3600000"
+---
+# Source billing's snapshot signals: the source controller asks for the
+# existing rows of its tables here, and the connector reads them.
+apiVersion: kafka.strimzi.io/v1
+kind: KafkaTopic
+metadata:
+  name: changeport.cdc.signals.billing
+  namespace: customer-acme
+  labels:
+    strimzi.io/cluster: "acme"
+    changeport.io/source: billing
+    changeport.io/part: cdc
+    app.kubernetes.io/managed-by: changeport-provisioner
+    changeport.io/tenant: "acme"
+spec:
+  topicName: changeport.cdc.signals.billing
+  partitions: 1
+  replicas: 1
+  config:
+    cleanup.policy: delete
+    retention.ms: "604800000"
+    # The Kafka agent tiers every topic that can be; saying so here keeps
+    # the Topic Operator from trying to undo it.
+    remote.storage.enable: "true"
+---
+# Source billing's snapshot progress, which the connector reports and
+# the source controller follows.
+apiVersion: kafka.strimzi.io/v1
+kind: KafkaTopic
+metadata:
+  name: changeport.cdc.notifications.billing
+  namespace: customer-acme
+  labels:
+    strimzi.io/cluster: "acme"
+    changeport.io/source: billing
+    changeport.io/part: cdc
+    app.kubernetes.io/managed-by: changeport-provisioner
+    changeport.io/tenant: "acme"
+spec:
+  topicName: changeport.cdc.notifications.billing
+  partitions: 1
+  replicas: 1
+  config:
+    cleanup.policy: delete
+    retention.ms: "604800000"
+    # The Kafka agent tiers every topic that can be; saying so here keeps
+    # the Topic Operator from trying to undo it.
+    remote.storage.enable: "true"
 ---
 # The schema registry, Apicurio Registry, which keeps the Avro schemas of the
 # sources' topics in the customer's Kafka. Customers reach it through the
@@ -836,8 +954,9 @@ spec:
     - to:
         - namespaceSelector: {matchLabels: {kubernetes.io/metadata.name: source-postgres}}
 ---
-# Only the Connect worker reaches the registry, and the registry reaches only
-# DNS and the brokers.
+# Only the Connect worker reaches the registry, and the source controller,
+# which decodes the snapshot notifications with its schemas; the registry
+# reaches only DNS and the brokers.
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
@@ -853,6 +972,8 @@ spec:
   ingress:
     - from:
         - podSelector: {matchLabels: {strimzi.io/cluster: changeport-connect, strimzi.io/kind: KafkaConnect}}
+        - namespaceSelector: {matchLabels: {kubernetes.io/metadata.name: changeport}}
+          podSelector: {matchLabels: {app.kubernetes.io/name: changeport-provisioner}}
       ports:
         - {protocol: TCP, port: 8080}
   egress:

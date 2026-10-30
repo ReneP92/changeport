@@ -114,8 +114,8 @@ const (
 	ReplicationConnection CheckID = "replication_connection"
 	// Tables: the chosen tables exist.
 	Tables CheckID = "tables"
-	// Keys: each chosen table has a primary key or a unique replica
-	// identity.
+	// Keys: each chosen table has a primary key that Changeport can key
+	// its messages and copy its rows by.
 	Keys CheckID = "keys"
 	// ReadAccess: the role may read each chosen table.
 	ReadAccess CheckID = "read_access"
@@ -624,8 +624,8 @@ type TableInfo struct {
 	EstimatedRows int64 `json:"estimatedRows"`
 	// Readable reports whether the role may read the table yet.
 	Readable bool `json:"readable"`
-	// Keyed reports whether the table has a primary key or a unique replica
-	// identity, which v1 needs to key its messages.
+	// Keyed reports whether the table has a primary key that Changeport
+	// can key its messages and copy its existing rows by.
 	Keyed bool `json:"keyed"`
 	// Reason says why a table is not keyed.
 	Reason string `json:"reason,omitempty"`
@@ -644,7 +644,14 @@ SELECT n.nspname,
             ELSE c.reltuples END::bigint,
        has_schema_privilege(n.oid, 'USAGE') AND has_table_privilege(c.oid, 'SELECT'),
        c.relreplident::text,
-       EXISTS (SELECT 1 FROM pg_index i WHERE i.indrelid = c.oid AND i.indisprimary)
+       EXISTS (SELECT 1 FROM pg_index i WHERE i.indrelid = c.oid AND i.indisprimary),
+       coalesce((SELECT array_agg(base.typname::text ORDER BY k.ord)
+                 FROM pg_index i
+                 CROSS JOIN LATERAL unnest(i.indkey::int2[]) WITH ORDINALITY AS k(attnum, ord)
+                 JOIN pg_attribute a ON a.attrelid = c.oid AND a.attnum = k.attnum
+                 JOIN pg_type t ON t.oid = a.atttypid
+                 JOIN pg_type base ON base.oid = CASE WHEN t.typtype = 'd' THEN t.typbasetype ELSE t.oid END
+                 WHERE i.indrelid = c.oid AND i.indisprimary), '{}')
 FROM pg_class c
 JOIN pg_namespace n ON n.oid = c.relnamespace
 WHERE c.relkind IN ('r', 'p')
@@ -682,26 +689,37 @@ func listTables(ctx context.Context, conn *pgx.Conn, only []Table) ([]TableInfo,
 		var t TableInfo
 		var identity string
 		var primaryKey bool
-		if err := row.Scan(&t.Schema, &t.Name, &t.Partitioned, &t.EstimatedRows, &t.Readable, &identity, &primaryKey); err != nil {
+		var keyTypes []string
+		if err := row.Scan(&t.Schema, &t.Name, &t.Partitioned, &t.EstimatedRows, &t.Readable, &identity, &primaryKey, &keyTypes); err != nil {
 			return t, err
 		}
-		t.Keyed, t.Reason = keyed(identity, primaryKey)
+		t.Keyed, t.Reason = keyed(identity, primaryKey, keyTypes)
 		return t, nil
 	})
 }
 
-// keyed reports whether a table with the given replica identity can key its
-// messages, and why not. Debezium keys a table's messages by its primary key,
-// or by its replica identity's index.
-func keyed(identity string, primaryKey bool) (bool, string) {
+// keyTypes are the types of primary key columns that Debezium's read-only
+// incremental snapshots copy tables by. It compares the last chunk's key
+// with a parameter it binds as text or a number, which Postgres refuses for
+// timestamps and enums, among others; these were tried on kind.
+var keyTypes = []string{"int2", "int4", "int8", "numeric", "text", "varchar", "bpchar", "uuid", "date"}
+
+// keyed reports whether a table can be synced: Debezium keys its messages,
+// and copies its existing rows, by its primary key. The types are the key
+// columns' types, domains as their base type.
+func keyed(identity string, primaryKey bool, types []string) (bool, string) {
 	switch {
 	case identity == "n":
 		return false, "Its replica identity is NOTHING, so Postgres publishes none of its updates and deletes."
-	case identity == "i", primaryKey:
-		return true, ""
-	default:
-		return false, "It has no primary key. Add one, or make a unique index on columns that are NOT NULL its replica identity (ALTER TABLE ... REPLICA IDENTITY USING INDEX ...)."
+	case !primaryKey:
+		return false, "It has no primary key, which Changeport keys its messages by. Add one."
 	}
+	for _, t := range types {
+		if !slices.Contains(keyTypes, t) {
+			return false, fmt.Sprintf("Its primary key has a column of type %s, by which Changeport cannot copy the table's existing rows yet. Keys of integers, numeric, text, uuid and date work.", t)
+		}
+	}
+	return true, ""
 }
 
 // publicationState is the source's publication.
@@ -744,9 +762,9 @@ func (c Checker) checkTables(ctx context.Context, conn *pgx.Conn, target Target,
 	}
 	report.add(Tables, Pass, "All %d tables exist.", len(target.Tables))
 	if len(unkeyed) > 0 {
-		report.add(Keys, Fail, "Changeport syncs only tables with a key. %s", strings.Join(unkeyed, " "))
+		report.add(Keys, Fail, "Changeport syncs only tables with a primary key it can copy them by. %s", strings.Join(unkeyed, " "))
 	} else {
-		report.add(Keys, Pass, "Every table has a primary key or a unique replica identity.")
+		report.add(Keys, Pass, "Every table has a primary key Changeport can copy it by.")
 	}
 	if len(unreadable) > 0 {
 		report.add(ReadAccess, Fail, "%s may not read %s. Run the second step's SQL.", target.Connection.User, strings.Join(unreadable, ", "))

@@ -234,9 +234,15 @@ func Topics(source string, tables []Table, existing []string) []TableTopic {
 func TableIncludeList(tables []Table) string {
 	patterns := make([]string, len(tables))
 	for i, table := range tables {
-		patterns[i] = quoteRegex(table.Schema) + `\.` + quoteRegex(table.Name)
+		patterns[i] = TablePattern(table)
 	}
 	return strings.Join(patterns, ",")
+}
+
+// TablePattern is the regular expression that matches exactly a table's
+// schema.table in Debezium's lists and snapshot signals.
+func TablePattern(table Table) string {
+	return quoteRegex(table.Schema) + `\.` + quoteRegex(table.Name)
 }
 
 func quoteRegex(name string) string {

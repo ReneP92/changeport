@@ -70,10 +70,12 @@ func TestCustomerSourcesBringTheCDCRuntime(t *testing.T) {
 		_, err := getObject(t, c, connectGVK, namespace, "changeport-connect")
 		return apierrors.IsNotFound(err), fmt.Sprint(err)
 	})
+	// The provisioner deletes the runtime's objects one after another.
 	for _, gvk := range []schema.GroupVersionKind{kafkaUserGVK, deploymentGVK} {
-		if _, err := getObject(t, c, gvk, namespace, "changeport-registry"); !apierrors.IsNotFound(err) {
-			t.Errorf("%s changeport-registry: %v, want deleted", gvk.Kind, err)
-		}
+		eventually(t, gvk.Kind+" changeport-registry is deleted", func() (bool, string) {
+			_, err := getObject(t, c, gvk, namespace, "changeport-registry")
+			return apierrors.IsNotFound(err), fmt.Sprint(err)
+		})
 	}
 	cdcReady(t, c, name, metav1.ConditionTrue, "No Postgres CDC sources")
 

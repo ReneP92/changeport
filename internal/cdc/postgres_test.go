@@ -217,6 +217,8 @@ CREATE TABLE public.notes (body text);
 CREATE TABLE public.codes (code text NOT NULL, label text);
 CREATE UNIQUE INDEX codes_code ON public.codes (code);
 ALTER TABLE public.codes REPLICA IDENTITY USING INDEX codes_code;
+CREATE TABLE public.invoices (id uuid PRIMARY KEY, total numeric(10, 2));
+CREATE TABLE public.readings (taken_at timestamptz PRIMARY KEY, value double precision);
 CREATE TABLE public.events (id bigint, happened_at date, PRIMARY KEY (id, happened_at)) PARTITION BY RANGE (happened_at);
 CREATE TABLE public.events_2026 PARTITION OF public.events FOR VALUES FROM ('2026-01-01') TO ('2027-01-01');
 CREATE TABLE public.events_2027 PARTITION OF public.events FOR VALUES FROM ('2027-01-01') TO ('2028-01-01');
@@ -306,14 +308,20 @@ func sourceLifecycle(t *testing.T, port int, certs pki, keepSize Status) {
 		listed[info.Table] = info
 	}
 	orders, lines, notes, codes, events := Table{"public", "orders"}, Table{"Sales", "Order Lines"}, Table{"public", "notes"}, Table{"public", "codes"}, Table{"public", "events"}
-	if len(tables) != 5 || !listed[orders].Keyed || !listed[lines].Keyed || !listed[codes].Keyed || listed[notes].Keyed ||
+	invoices, readings := Table{"public", "invoices"}, Table{"public", "readings"}
+	// A unique replica identity alone, or a key Debezium cannot copy by,
+	// leaves a table out.
+	if len(tables) != 7 || !listed[orders].Keyed || !listed[lines].Keyed || !listed[invoices].Keyed || listed[codes].Keyed || listed[readings].Keyed || listed[notes].Keyed ||
 		!listed[events].Keyed || !listed[events].Partitioned || listed[orders].Readable {
-		t.Errorf("ListTables() = %+v, want 5 tables, all but notes keyed, events partitioned, none readable yet", tables)
+		t.Errorf("ListTables() = %+v, want 7 tables, all but notes, codes and readings keyed, events partitioned, none readable yet", tables)
+	}
+	if !strings.HasPrefix(listed[readings].Reason, "Its primary key has a column of type timestamptz,") || !strings.HasPrefix(listed[codes].Reason, "It has no primary key") {
+		t.Errorf("reasons of readings and codes = %q and %q", listed[readings].Reason, listed[codes].Reason)
 	}
 	if listed[orders].EstimatedRows != 1000 || listed[events].EstimatedRows != 2000 {
 		t.Errorf("estimated rows of orders and events = %d and %d, want 1000 and 2000", listed[orders].EstimatedRows, listed[events].EstimatedRows)
 	}
-	if !strings.HasPrefix(listed[notes].Reason, "It has no primary key.") {
+	if !strings.HasPrefix(listed[notes].Reason, "It has no primary key,") {
 		t.Errorf("notes's reason = %q", listed[notes].Reason)
 	}
 
@@ -344,21 +352,21 @@ func sourceLifecycle(t *testing.T, port int, certs pki, keepSize Status) {
 	expect(t, "after the tables' SQL", local.Check(t.Context(), target), map[CheckID]Status{WALKeepSize: keepSize})
 
 	// Adding and removing tables.
-	add, err := AddTablesSQL(names, []Table{codes})
+	add, err := AddTablesSQL(names, []Table{invoices})
 	if err != nil {
 		t.Fatal(err)
 	}
 	admin(t, port, certs, add.SQL)
-	target.Tables = append(target.Tables, codes)
+	target.Tables = append(target.Tables, invoices)
 	expect(t, "after adding a table", local.Check(t.Context(), target), map[CheckID]Status{WALKeepSize: keepSize})
-	remove, err := RemoveTablesSQL(names, []Table{lines}, []Table{orders, events, codes})
+	remove, err := RemoveTablesSQL(names, []Table{lines}, []Table{orders, events, invoices})
 	if err != nil {
 		t.Fatal(err)
 	}
 	admin(t, port, certs, remove.SQL)
 	report = local.Check(t.Context(), target)
 	expect(t, "checking a removed table", report, map[CheckID]Status{WALKeepSize: keepSize, ReadAccess: Fail, Published: Fail})
-	target.Tables = []Table{orders, events, codes}
+	target.Tables = []Table{orders, events, invoices}
 	expect(t, "after removing a table", local.Check(t.Context(), target), map[CheckID]Status{WALKeepSize: keepSize})
 
 	// The connector creates the slot, which the checks then find, and

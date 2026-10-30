@@ -278,6 +278,12 @@ spec:
                 x-kubernetes-list-map-keys:
                 - type
                 x-kubernetes-list-type: map
+              notificationsOffset:
+                description: |-
+                  NotificationsOffset is how far the source controller has read the
+                  connector's notifications of snapshot progress.
+                format: int64
+                type: integer
               observedGeneration:
                 description: |-
                   ObservedGeneration is the generation of the source the status
@@ -342,6 +348,9 @@ spec:
                 items:
                   description: TableStatus is how far one of a source's tables is.
                   properties:
+                    message:
+                      description: Message says why the snapshot waits or failed.
+                      type: string
                     name:
                       description: Name is the table's name.
                       type: string
@@ -352,8 +361,8 @@ spec:
                       type: integer
                     rowsEstimated:
                       description: |-
-                        RowsEstimated is Postgres's estimate of the table's rows when its
-                        snapshot started.
+                        RowsEstimated is how many rows the table had when its snapshot
+                        started.
                       format: int64
                       type: integer
                     schema:

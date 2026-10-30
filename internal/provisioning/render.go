@@ -101,6 +101,8 @@ type cdcValues struct {
 	KubernetesAPI []apiEndpoint
 	// RegistryManagementPort serves the registry's health checks.
 	RegistryManagementPort int
+	// SnapshotChunkSize is how many rows a snapshot copies at a time.
+	SnapshotChunkSize int
 }
 
 // apiEndpoint is an address of the Kubernetes API server.
@@ -143,6 +145,7 @@ func RenderYAML(spec Spec) ([]byte, error) {
 			RegistryURL:            spec.RegistryURL(),
 			PrivateRanges:          privateRanges,
 			RegistryManagementPort: registryManagementPort,
+			SnapshotChunkSize:      SnapshotChunkSize,
 		}
 		for _, endpoint := range spec.KubernetesAPI {
 			prefix := netip.PrefixFrom(endpoint.Addr(), endpoint.Addr().BitLen())

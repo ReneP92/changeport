@@ -85,7 +85,7 @@ rules:
     resources: [kafkas, kafkanodepools]
     verbs: [get, create, patch]
   - apiGroups: [kafka.strimzi.io]
-    resources: [kafkausers, kafkaconnects, kafkaconnectors]
+    resources: [kafkausers, kafkaconnects, kafkaconnectors, kafkatopics]
     verbs: [get, create, patch, list, watch, delete]
   # Each customer's dedicated nodes on EKS Auto Mode.
   - apiGroups: [karpenter.sh]

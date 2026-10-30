@@ -54,7 +54,9 @@ func TestRenderCDCRuntimeOnlyWithSources(t *testing.T) {
 	}
 	want := []string{
 		"KafkaUser changeport-connect", "KafkaUser changeport-registry", "KafkaConnect changeport-connect",
-		"KafkaConnector app-x1y2z3", "Deployment changeport-registry", "Service changeport-registry",
+		"KafkaTopic changeport.cdc.signals.app", "KafkaTopic changeport.cdc.notifications.app", "KafkaConnector app-x1y2z3",
+		"KafkaTopic changeport.cdc.signals.billing", "KafkaTopic changeport.cdc.notifications.billing",
+		"Deployment changeport-registry", "Service changeport-registry",
 		"NetworkPolicy changeport-connect-egress", "NetworkPolicy changeport-registry",
 	}
 	if !slices.Equal(kinds, want) {
@@ -253,7 +255,7 @@ func TestProvisionerMayPruneTheCDCRuntime(t *testing.T) {
 			}
 		}
 	}
-	resources := map[string]string{"KafkaUser": "kafkausers", "KafkaConnect": "kafkaconnects", "KafkaConnector": "kafkaconnectors", "Deployment": "deployments", "Service": "services", "NetworkPolicy": "networkpolicies"}
+	resources := map[string]string{"KafkaUser": "kafkausers", "KafkaConnect": "kafkaconnects", "KafkaConnector": "kafkaconnectors", "KafkaTopic": "kafkatopics", "Deployment": "deployments", "Service": "services", "NetworkPolicy": "networkpolicies"}
 	for _, kind := range prunedKinds {
 		resource, ok := resources[kind.Kind]
 		if !ok {
@@ -398,12 +400,15 @@ func TestReconcilePrunesTheCDCRuntime(t *testing.T) {
 	owned.SetOwnerReferences([]metav1.OwnerReference{{APIVersion: "v1", Kind: "ConfigMap", Name: "someone", UID: "2"}})
 	cluster.objects[fakeKey(serviceGVK, spec.Namespace(), owned.GetName())] = owned
 
-	// Removing one source keeps the runtime, without that source's ACL.
+	// Removing one source keeps the runtime, without that source's ACL and
+	// topics.
 	spec.Sources = sources[:1]
 	provision(t, p, spec)
-	if len(cluster.deleted) != 0 {
-		t.Errorf("removing one of two sources deleted %v", cluster.deleted)
+	slices.Sort(cluster.deleted)
+	if want := []string{"KafkaTopic:customer-acme/changeport.cdc.notifications.billing", "KafkaTopic:customer-acme/changeport.cdc.signals.billing"}; !slices.Equal(cluster.deleted, want) {
+		t.Errorf("removing one of two sources deleted %v, want %v", cluster.deleted, want)
 	}
+	cluster.deleted = nil
 	connect := acls(t, cluster.objects[fakeKey(kafkaUserGVK, spec.Namespace(), ConnectUser)])
 	if slices.Contains(connect, "Write topic prefix billing.") {
 		t.Error("the Connect user may still write the removed source's topics")
@@ -414,6 +419,7 @@ func TestReconcilePrunesTheCDCRuntime(t *testing.T) {
 	slices.Sort(cluster.deleted)
 	want := []string{
 		"Deployment:customer-acme/changeport-registry", "KafkaConnect:customer-acme/changeport-connect", "KafkaConnector:customer-acme/app-x1y2z3",
+		"KafkaTopic:customer-acme/changeport.cdc.notifications.app", "KafkaTopic:customer-acme/changeport.cdc.signals.app",
 		"KafkaUser:customer-acme/changeport-connect", "KafkaUser:customer-acme/changeport-registry",
 		"NetworkPolicy:customer-acme/changeport-connect-egress", "NetworkPolicy:customer-acme/changeport-registry",
 		"Service:customer-acme/changeport-registry",

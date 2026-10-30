@@ -720,6 +720,11 @@ spec:
       memory: "{{ .Profile.ConnectMemory }}"
     limits:
       memory: "{{ .Profile.ConnectMemory }}"
+  # Strimzi's default heap of three quarters of the memory leaves too little
+  # for the rest of the worker.
+  jvmOptions:
+    "-Xms": "{{ .Profile.ConnectHeap }}"
+    "-Xmx": "{{ .Profile.ConnectHeap }}"
   template:
     pod:
 {{- template "cdc-placement" . }}
@@ -747,6 +752,50 @@ spec:
           mountPath: /mnt/cluster-ca
 {{- range .CDC.Sources }}
 {{- $source := .Name }}
+---
+# Source {{ $source }}'s snapshot signals: the source controller asks for the
+# existing rows of its tables here, and the connector reads them.
+apiVersion: kafka.strimzi.io/v1
+kind: KafkaTopic
+metadata:
+  name: changeport.cdc.signals.{{ $source }}
+  namespace: {{ $.Namespace }}
+  labels:
+    strimzi.io/cluster: {{ quote $.ClusterName }}
+    changeport.io/source: {{ $source }}
+{{- template "cdc-labels" $ }}
+spec:
+  topicName: changeport.cdc.signals.{{ $source }}
+  partitions: 1
+  replicas: {{ $.Profile.ReplicationFactor }}
+  config:
+    cleanup.policy: delete
+    retention.ms: "604800000"
+    # The Kafka agent tiers every topic that can be; saying so here keeps
+    # the Topic Operator from trying to undo it.
+    remote.storage.enable: "true"
+---
+# Source {{ $source }}'s snapshot progress, which the connector reports and
+# the source controller follows.
+apiVersion: kafka.strimzi.io/v1
+kind: KafkaTopic
+metadata:
+  name: changeport.cdc.notifications.{{ $source }}
+  namespace: {{ $.Namespace }}
+  labels:
+    strimzi.io/cluster: {{ quote $.ClusterName }}
+    changeport.io/source: {{ $source }}
+{{- template "cdc-labels" $ }}
+spec:
+  topicName: changeport.cdc.notifications.{{ $source }}
+  partitions: 1
+  replicas: {{ $.Profile.ReplicationFactor }}
+  config:
+    cleanup.policy: delete
+    retention.ms: "604800000"
+    # The Kafka agent tiers every topic that can be; saying so here keeps
+    # the Topic Operator from trying to undo it.
+    remote.storage.enable: "true"
 {{- with .Connector }}
 ---
 # Source {{ $source }}'s Debezium connector: it streams the changes of the
@@ -788,8 +837,25 @@ spec:
     publication.autocreate.mode: disabled
     slot.name: {{ .Slot }}
     table.include.list: {{ quote .TableIncludeList }}
-    # Existing rows arrive through read-only incremental snapshots.
+    # Existing rows arrive through read-only incremental snapshots, which
+    # the source controller asks for on the signal topic: in chunks, while
+    # changes stream, without locks or writes to the customer's database.
     snapshot.mode: no_data
+    read.only: true
+    incremental.snapshot.chunk.size: {{ $.CDC.SnapshotChunkSize }}
+    signal.enabled.channels: kafka
+    signal.kafka.topic: changeport.cdc.signals.{{ $source }}
+    signal.kafka.groupId: changeport.cdc.signals.{{ $source }}
+    signal.kafka.bootstrap.servers: "{{ $.ClusterName }}-kafka-bootstrap:{{ $.InternalPort }}"
+    signal.consumer.security.protocol: SSL
+    signal.consumer.ssl.keystore.type: PKCS12
+    signal.consumer.ssl.keystore.location: /mnt/connect-user/user.p12
+    signal.consumer.ssl.keystore.password: "${directory:/mnt/connect-user:user.password}"
+    signal.consumer.ssl.truststore.type: PKCS12
+    signal.consumer.ssl.truststore.location: /mnt/cluster-ca/ca.p12
+    signal.consumer.ssl.truststore.password: "${directory:/mnt/cluster-ca:ca.password}"
+    notification.enabled.channels: sink
+    notification.sink.topic.name: changeport.cdc.notifications.{{ $source }}
     # A transactional logical message every minute lets the slot advance
     # while the source's tables are idle; Debezium drops the messages.
     heartbeat.interval.ms: 60000
@@ -992,8 +1058,9 @@ spec:
         - namespaceSelector: {matchLabels: {kubernetes.io/metadata.name: {{ . }}}}
 {{- end }}
 ---
-# Only the Connect worker reaches the registry, and the registry reaches only
-# DNS and the brokers.
+# Only the Connect worker reaches the registry, and the source controller,
+# which decodes the snapshot notifications with its schemas; the registry
+# reaches only DNS and the brokers.
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
@@ -1007,6 +1074,8 @@ spec:
   ingress:
     - from:
         - podSelector: {{ template "connect-selector" . }}
+        - namespaceSelector: {matchLabels: {kubernetes.io/metadata.name: {{ .ConsoleNamespace }}}}
+          podSelector: {matchLabels: {app.kubernetes.io/name: changeport-provisioner}}
       ports:
         - {protocol: TCP, port: {{ .CDC.RegistryPort }}}
   egress:
