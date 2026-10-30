@@ -232,6 +232,14 @@ include, so `Ready` keeps meaning that clients can connect.
 - **The console writes it once:** as an immutable Secret of its own type. An
   admission policy allows the console only that, so it can never read,
   change or delete a Secret.
+  - The console creates the source first, then the Secret, which names the
+    source as its owner: should anything fail in between, Kubernetes deletes
+    the Secret with the source.
+  - The policy, `changeport-console-secrets` (`deploy/base/console`), allows
+    the console's service account to create Secrets only in a customer's
+    namespace, named `postgres-password-`, of type
+    `changeport.io/postgres-password`, immutable, and holding only the
+    password. RBAC cannot narrow creating by name, so the policy does.
 - **The controller keeps it:** the source controller moves the password into
   `changeport-connect-sources`, a Secret only it and the Connect worker use,
   then deletes the console's copy.
@@ -348,6 +356,41 @@ addresses it resolved, while checking the certificate against the host's
 name. A name cannot resolve to a public address for the check and to an
 internal one for the connection.
 
+## The console's API
+
+The console's pages use these routes, under `/api/customer` (`api/openapi.yaml`,
+`internal/console/source_handlers.go`). Members of the customer's
+organization read sources; only its admins change them, and each change is
+in the audit log.
+
+| Route | What it does |
+| --- | --- |
+| `GET source-options` | The providers, the retention presets, the most tables, the egress addresses, and the registry's URL |
+| `POST sources/setup-sql` | The SQL of a new source's two steps. The first chooses the source's ID and its role's password, which only this answer holds |
+| `POST sources/checks` | Runs the checks against a database, without keeping anything |
+| `POST sources/tables` | The table picker: each table with its row estimate, whether it can be synced and why not, its topic, and what stops the topic |
+| `GET`, `POST sources` | Lists sources, or creates one once every check passes |
+| `GET`, `PATCH sources/{source}` | A source with each table's snapshot progress and the slot's health; or changes its tables, retention or state |
+| `DELETE sources/{source}?confirm={source}` | Deletes a source, with its name typed |
+| `POST sources/{source}/sql` | The SQL of a change: adding or removing tables, a new password, cleaning up, or dropping the slot |
+| `PUT sources/{source}/password` | Uses a new password, once it logs in |
+| `POST sources/{source}/slot-dropped` | Records that the customer dropped a deleted source's slot themselves, when Changeport cannot reach the database |
+
+- **Passwords:** the console keeps no password. It returns a generated
+  password once, writes a password the admin enters straight into its
+  write-once Secret, and logs neither.
+- **Egress addresses:** customers allowlist the addresses Changeport
+  connects from: the NAT gateways' public addresses, Terraform's output
+  `nat_public_ips`. `hack/platform-apply.sh` writes them into the ConfigMap
+  `changeport-egress`, which the console reads as `CHANGEPORT_EGRESS_IPS`
+  when it starts. kind has none, and its console may check databases on
+  private addresses (`-allow-private-databases`), as its stand-in database
+  is one.
+- **Access:** the console's service account may read and change
+  `PostgresSource` resources, and create the password Secrets the admission
+  policy allows, but no other Secret. `hack/console-access-test.sh` checks
+  that on kind.
+
 ## Guardrails
 
 - **Names:** a source reserves its prefix `<source>.`, and nobody may create
@@ -355,7 +398,8 @@ internal one for the connection.
   and checked before it starts: valid characters, at most 200 characters, no
   collisions.
 - **Capacity:** a source and every table added later count against the
-  cluster's replica budget.
+  cluster's replica budget, each table's topic from the moment it is chosen,
+  though Connect creates it only with the table's first record.
 - **Ownership:** a source's topics are marked as its own in the console, and
   cannot be deleted while the source keeps them.
 - **Hidden topics:** the platform's own topics and consumer groups, those
@@ -427,7 +471,9 @@ of this design with the Connect image, Apicurio 3.3.3 and Postgres 17:
   takes a source of the demo customer through its whole life.
   - It runs the setup SQL from `internal/cdc` (`cmd/cdcsql`) against the
     stand-in database, as a customer would.
-  - It writes the password Secret and the source, as the console does.
+  - It creates, changes and deletes the source as the console's service
+    account, and writes its password Secret as the console does, through
+    the console's RBAC and admission policy.
   - Inserts, updates and deletes reach the tables' topics, deletes with a
     tombstone. Each topic has one partition and the source's retention.
   - The slot's health is reported in the source's status.
@@ -441,6 +487,10 @@ of this design with the Connect image, Apicurio 3.3.3 and Postgres 17:
     with the customer's credentials. It sees the gateway refuse deleting the
     source's schemas, changing their compatibility, a wrong password, and
     then the right one after ten failures.
+- **The console's tests** (`internal/console`) cover each route of the API
+  and the guardrails, and run the console's Kubernetes calls against a real
+  API server (envtest) as its service account, with its ClusterRole and its
+  admission policy.
 - **A Playwright spec** runs the console's wizard against the same database.
 
 ## Steps

@@ -175,6 +175,179 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/customer/source-options": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** What a new Postgres CDC source may be, and where Changeport connects from */
+        get: operations["getSourceOptions"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/customer/sources": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** The customer's Postgres CDC sources */
+        get: operations["listSources"];
+        put?: never;
+        /** Creates a source once its database passes the checks, for organization admins */
+        post: operations["createSource"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/customer/sources/setup-sql": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * The SQL and steps that set a database up for a new source, for organization admins
+         * @description The role step chooses the source's ID and, unless the customer's
+         *     provider makes the password, a password, which only this answer
+         *     holds.
+         */
+        post: operations["getSetupSQL"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/customer/sources/checks": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Checks a database for a source, as Changeport will connect to it, for organization admins */
+        post: operations["checkSource"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/customer/sources/tables": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** The tables of a database a source may sync, for organization admins */
+        post: operations["listSourceTables"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/customer/sources/{source}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The source's name, which prefixes its topics */
+                source: components["parameters"]["SourceName"];
+            };
+            cookie?: never;
+        };
+        /** A source, with each table's progress and its slot's health */
+        get: operations["getSource"];
+        put?: never;
+        post?: never;
+        /** Deletes a source, which drops its slot; for organization admins */
+        delete: operations["deleteSource"];
+        options?: never;
+        head?: never;
+        /** Changes a source's tables, retention or state, for organization admins */
+        patch: operations["changeSource"];
+        trace?: never;
+    };
+    "/api/customer/sources/{source}/sql": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The source's name, which prefixes its topics */
+                source: components["parameters"]["SourceName"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** The SQL for a change to a source's database, for organization admins */
+        post: operations["getSourceSQL"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/customer/sources/{source}/password": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The source's name, which prefixes its topics */
+                source: components["parameters"]["SourceName"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        /** Gives a source the role's new password, once it logs in; for organization admins */
+        put: operations["setSourcePassword"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/customer/sources/{source}/slot-dropped": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The source's name, which prefixes its topics */
+                source: components["parameters"]["SourceName"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Confirms that the customer dropped a deleted source's slot themselves; for organization admins */
+        post: operations["confirmSlotDropped"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/customer/throughput": {
         parameters: {
             query?: never;
@@ -337,6 +510,8 @@ export interface components {
             remoteBytes?: number;
             bytesInPerSecond?: number;
             bytesOutPerSecond?: number;
+            /** @description The Postgres source that writes the topic, which keeps it from being deleted */
+            source?: string;
         };
         TopicPolicy: {
             maxNameLength: number;
@@ -353,6 +528,181 @@ export interface components {
             min: number;
             max: number;
             default: number;
+        };
+        TableRef: {
+            schema: string;
+            name: string;
+        };
+        /**
+         * @description Where the database runs
+         * @enum {string}
+         */
+        Provider: "generic" | "rds" | "cloudsql" | "azure" | "supabase" | "neon";
+        ProviderOption: {
+            id: components["schemas"]["Provider"];
+            title: string;
+            /** @description Whether the customer brings the role's password, made in the provider's own console */
+            passwordFromCustomer: boolean;
+        };
+        SourceOptions: {
+            providers: components["schemas"]["ProviderOption"][];
+            /** @description The addresses Changeport connects to databases from, which they allowlist */
+            egressAddresses: string[];
+            maxTables: number;
+            maxNameLength: number;
+            retentionPresets: components["schemas"]["RetentionPreset"][];
+            /** Format: int64 */
+            defaultRetentionMs: number;
+            /** @description Where clients reach the schema registry, once the customer has a source */
+            registryURL?: string;
+        };
+        SetupSQLRequest: {
+            /** @enum {string} */
+            step: "role" | "tables";
+            name: string;
+            provider: components["schemas"]["Provider"];
+            /** @description The source's ID from the role step, for the tables step */
+            id?: string;
+            tables?: components["schemas"]["TableRef"][];
+        };
+        SourceSQLRequest: {
+            /** @enum {string} */
+            step: "add" | "remove" | "password" | "cleanup" | "dropSlot";
+            /** @description The tables to add or remove */
+            tables?: components["schemas"]["TableRef"][];
+        };
+        SourceSQL: {
+            id: string;
+            /** @description The role Changeport logs in as */
+            role: string;
+            /** @description A new password for the role, which only this answer holds */
+            password?: string;
+            /** @description What to do outside SQL, before the SQL */
+            steps: string[];
+            /** @description The SQL to run in the source's database; empty when there is none */
+            sql: string;
+        };
+        SourceConnection: {
+            host: string;
+            port: number;
+            database: string;
+            /** @enum {string} */
+            tlsMode: "verify-full" | "verify-ca";
+            /** @description The PEM certificates of the database's CA; without them, verify-full trusts the public authorities */
+            ca?: string;
+            password: string;
+        };
+        SourceCheckRequest: {
+            name: string;
+            id: string;
+            provider: components["schemas"]["Provider"];
+            connection: components["schemas"]["SourceConnection"];
+            /** @description The chosen tables; without them, the checks of tables and the publication do not run */
+            tables?: components["schemas"]["TableRef"][];
+        };
+        CheckResult: {
+            check: string;
+            /** @enum {string} */
+            status: "pass" | "warn" | "fail" | "skipped";
+            message: string;
+        };
+        CheckReport: {
+            /** @description Whether every check passed, warnings included */
+            ok: boolean;
+            results: components["schemas"]["CheckResult"][];
+        };
+        SourceTable: {
+            schema: string;
+            name: string;
+            partitioned: boolean;
+            /**
+             * Format: int64
+             * @description Postgres's estimate, or -1 before the table was first analyzed
+             */
+            estimatedRows: number;
+            readable: boolean;
+            /** @description Whether the table can be synced */
+            keyed: boolean;
+            /** @description Why the table cannot be synced */
+            reason?: string;
+            /** @description The table's topic, if it is synced */
+            topic: string;
+            /** @description Why the table's topic cannot be created, such as a name that collides */
+            topicProblem?: string;
+        };
+        SourceTableList: {
+            tables: components["schemas"]["SourceTable"][];
+        };
+        NewSource: {
+            name: string;
+            id: string;
+            provider: components["schemas"]["Provider"];
+            connection: components["schemas"]["SourceConnection"];
+            tables: components["schemas"]["TableRef"][];
+            /** Format: int64 */
+            retentionMs: number;
+        };
+        SourceChange: {
+            tables?: components["schemas"]["TableRef"][];
+            /** Format: int64 */
+            retentionMs?: number;
+            /** @enum {string} */
+            state?: "Running" | "Stopped";
+        };
+        SourcePassword: {
+            password: string;
+        };
+        SourceTableStatus: {
+            schema: string;
+            name: string;
+            topic: string;
+            /** @enum {string} */
+            snapshot: "Pending" | "Running" | "Done" | "Failed";
+            /** Format: int64 */
+            rowsCopied?: number;
+            /** Format: int64 */
+            rowsEstimated?: number;
+            message?: string;
+        };
+        SlotHealth: {
+            name: string;
+            active: boolean;
+            /** Format: int64 */
+            retainedWALBytes: number;
+            walStatus?: string;
+            /** Format: int64 */
+            safeWALSizeBytes?: number;
+            /** Format: date-time */
+            checkedAt: string;
+        };
+        Source: {
+            name: string;
+            id: string;
+            provider: components["schemas"]["Provider"];
+            role: string;
+            host: string;
+            port: number;
+            database: string;
+            tlsMode: string;
+            tables: components["schemas"]["SourceTableStatus"][];
+            /** Format: int64 */
+            retentionMs: number;
+            /** @enum {string} */
+            state: "Running" | "Stopped";
+            /** @description Pending, Snapshotting, Streaming, Stopped, Failed or Deleting */
+            phase: string;
+            ready: boolean;
+            reason: string;
+            message: string;
+            slot?: components["schemas"]["SlotHealth"];
+            /** @description The SQL to drop the slot, while a deleted source cannot reach its database */
+            dropSlotSQL?: string;
+            /** Format: date-time */
+            createdAt: string;
+            deleting?: boolean;
+        };
+        SourceList: {
+            sources: components["schemas"]["Source"][];
         };
         RetentionPreset: {
             label: string;
@@ -521,6 +871,8 @@ export interface components {
     parameters: {
         /** @description The topic's name */
         TopicName: string;
+        /** @description The source's name, which prefixes its topics */
+        SourceName: string;
         /** @description The customer ID, such as acme */
         CustomerID: string;
     };
@@ -796,6 +1148,350 @@ export interface operations {
                 };
             };
             400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            503: components["responses"]["NotConfigured"];
+        };
+    };
+    getSourceOptions: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The options */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SourceOptions"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            503: components["responses"]["NotConfigured"];
+        };
+    };
+    listSources: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The sources, by name */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SourceList"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            503: components["responses"]["NotConfigured"];
+        };
+    };
+    createSource: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["NewSource"];
+            };
+        };
+        responses: {
+            /** @description The source is created */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Source"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            503: components["responses"]["NotConfigured"];
+        };
+    };
+    getSetupSQL: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SetupSQLRequest"];
+            };
+        };
+        responses: {
+            /** @description What the customer runs */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SourceSQL"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            503: components["responses"]["NotConfigured"];
+        };
+    };
+    checkSource: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SourceCheckRequest"];
+            };
+        };
+        responses: {
+            /** @description The checks' results, in order */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CheckReport"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            503: components["responses"]["NotConfigured"];
+        };
+    };
+    listSourceTables: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SourceCheckRequest"];
+            };
+        };
+        responses: {
+            /** @description The tables, with whether each can be synced and its topic */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SourceTableList"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            503: components["responses"]["NotConfigured"];
+        };
+    };
+    getSource: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The source's name, which prefixes its topics */
+                source: components["parameters"]["SourceName"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The source */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Source"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            503: components["responses"]["NotConfigured"];
+        };
+    };
+    deleteSource: {
+        parameters: {
+            query: {
+                /** @description The source's name, typed again */
+                confirm: string;
+            };
+            header?: never;
+            path: {
+                /** @description The source's name, which prefixes its topics */
+                source: components["parameters"]["SourceName"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The source is being deleted */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            503: components["responses"]["NotConfigured"];
+        };
+    };
+    changeSource: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The source's name, which prefixes its topics */
+                source: components["parameters"]["SourceName"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SourceChange"];
+            };
+        };
+        responses: {
+            /** @description The source as changed */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Source"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            503: components["responses"]["NotConfigured"];
+        };
+    };
+    getSourceSQL: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The source's name, which prefixes its topics */
+                source: components["parameters"]["SourceName"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SourceSQLRequest"];
+            };
+        };
+        responses: {
+            /** @description What the customer runs */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SourceSQL"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            503: components["responses"]["NotConfigured"];
+        };
+    };
+    setSourcePassword: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The source's name, which prefixes its topics */
+                source: components["parameters"]["SourceName"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SourcePassword"];
+            };
+        };
+        responses: {
+            /** @description The source uses the new password */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            503: components["responses"]["NotConfigured"];
+        };
+    };
+    confirmSlotDropped: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The source's name, which prefixes its topics */
+                source: components["parameters"]["SourceName"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The source goes */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
             401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
             404: components["responses"]["NotFound"];

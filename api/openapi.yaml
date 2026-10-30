@@ -234,6 +234,306 @@ paths:
           $ref: "#/components/responses/NotReady"
         "503":
           $ref: "#/components/responses/NotConfigured"
+  /api/customer/source-options:
+    get:
+      operationId: getSourceOptions
+      summary: What a new Postgres CDC source may be, and where Changeport connects from
+      responses:
+        "200":
+          description: The options
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SourceOptions"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "503":
+          $ref: "#/components/responses/NotConfigured"
+  /api/customer/sources:
+    get:
+      operationId: listSources
+      summary: The customer's Postgres CDC sources
+      responses:
+        "200":
+          description: The sources, by name
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SourceList"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "503":
+          $ref: "#/components/responses/NotConfigured"
+    post:
+      operationId: createSource
+      summary: Creates a source once its database passes the checks, for organization admins
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/NewSource"
+      responses:
+        "201":
+          description: The source is created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Source"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "503":
+          $ref: "#/components/responses/NotConfigured"
+  /api/customer/sources/setup-sql:
+    post:
+      operationId: getSetupSQL
+      summary: The SQL and steps that set a database up for a new source, for organization admins
+      description: |
+        The role step chooses the source's ID and, unless the customer's
+        provider makes the password, a password, which only this answer
+        holds.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SetupSQLRequest"
+      responses:
+        "200":
+          description: What the customer runs
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SourceSQL"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "503":
+          $ref: "#/components/responses/NotConfigured"
+  /api/customer/sources/checks:
+    post:
+      operationId: checkSource
+      summary: Checks a database for a source, as Changeport will connect to it, for organization admins
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SourceCheckRequest"
+      responses:
+        "200":
+          description: The checks' results, in order
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CheckReport"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "503":
+          $ref: "#/components/responses/NotConfigured"
+  /api/customer/sources/tables:
+    post:
+      operationId: listSourceTables
+      summary: The tables of a database a source may sync, for organization admins
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SourceCheckRequest"
+      responses:
+        "200":
+          description: The tables, with whether each can be synced and its topic
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SourceTableList"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "503":
+          $ref: "#/components/responses/NotConfigured"
+  /api/customer/sources/{source}:
+    parameters:
+      - $ref: "#/components/parameters/SourceName"
+    get:
+      operationId: getSource
+      summary: A source, with each table's progress and its slot's health
+      responses:
+        "200":
+          description: The source
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Source"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "503":
+          $ref: "#/components/responses/NotConfigured"
+    patch:
+      operationId: changeSource
+      summary: Changes a source's tables, retention or state, for organization admins
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SourceChange"
+      responses:
+        "200":
+          description: The source as changed
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Source"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "503":
+          $ref: "#/components/responses/NotConfigured"
+    delete:
+      operationId: deleteSource
+      summary: Deletes a source, which drops its slot; for organization admins
+      parameters:
+        - name: confirm
+          in: query
+          required: true
+          description: The source's name, typed again
+          schema:
+            type: string
+      responses:
+        "204":
+          description: The source is being deleted
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "503":
+          $ref: "#/components/responses/NotConfigured"
+  /api/customer/sources/{source}/sql:
+    parameters:
+      - $ref: "#/components/parameters/SourceName"
+    post:
+      operationId: getSourceSQL
+      summary: The SQL for a change to a source's database, for organization admins
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SourceSQLRequest"
+      responses:
+        "200":
+          description: What the customer runs
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SourceSQL"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "503":
+          $ref: "#/components/responses/NotConfigured"
+  /api/customer/sources/{source}/password:
+    parameters:
+      - $ref: "#/components/parameters/SourceName"
+    put:
+      operationId: setSourcePassword
+      summary: Gives a source the role's new password, once it logs in; for organization admins
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SourcePassword"
+      responses:
+        "204":
+          description: The source uses the new password
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "503":
+          $ref: "#/components/responses/NotConfigured"
+  /api/customer/sources/{source}/slot-dropped:
+    parameters:
+      - $ref: "#/components/parameters/SourceName"
+    post:
+      operationId: confirmSlotDropped
+      summary: Confirms that the customer dropped a deleted source's slot themselves; for organization admins
+      responses:
+        "204":
+          description: The source goes
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "503":
+          $ref: "#/components/responses/NotConfigured"
   /api/customer/throughput:
     get:
       operationId: getThroughput
@@ -389,6 +689,15 @@ components:
         type: string
         pattern: "^[a-zA-Z0-9._-]+$"
         maxLength: 249
+    SourceName:
+      name: source
+      in: path
+      required: true
+      description: The source's name, which prefixes its topics
+      schema:
+        type: string
+        pattern: "^[a-z]([-a-z0-9]*[a-z0-9])?$"
+        maxLength: 40
     CustomerID:
       name: customerID
       in: path
@@ -577,6 +886,9 @@ components:
           type: number
         bytesOutPerSecond:
           type: number
+        source:
+          type: string
+          description: The Postgres source that writes the topic, which keeps it from being deleted
     TopicPolicy:
       type: object
       required: [maxNameLength, reservedPrefixes, partitions, replicationFactor, retentionPresets, defaultRetentionMs, cleanupPolicies]
@@ -613,6 +925,345 @@ components:
           type: integer
         default:
           type: integer
+    TableRef:
+      type: object
+      required: [schema, name]
+      properties:
+        schema:
+          type: string
+          minLength: 1
+          maxLength: 63
+        name:
+          type: string
+          minLength: 1
+          maxLength: 63
+    Provider:
+      type: string
+      enum: [generic, rds, cloudsql, azure, supabase, neon]
+      description: Where the database runs
+    ProviderOption:
+      type: object
+      required: [id, title, passwordFromCustomer]
+      properties:
+        id:
+          $ref: "#/components/schemas/Provider"
+        title:
+          type: string
+        passwordFromCustomer:
+          type: boolean
+          description: Whether the customer brings the role's password, made in the provider's own console
+    SourceOptions:
+      type: object
+      required: [providers, egressAddresses, maxTables, maxNameLength, retentionPresets, defaultRetentionMs]
+      properties:
+        providers:
+          type: array
+          items:
+            $ref: "#/components/schemas/ProviderOption"
+        egressAddresses:
+          type: array
+          description: The addresses Changeport connects to databases from, which they allowlist
+          items:
+            type: string
+        maxTables:
+          type: integer
+        maxNameLength:
+          type: integer
+        retentionPresets:
+          type: array
+          items:
+            $ref: "#/components/schemas/RetentionPreset"
+        defaultRetentionMs:
+          type: integer
+          format: int64
+        registryURL:
+          type: string
+          description: Where clients reach the schema registry, once the customer has a source
+    SetupSQLRequest:
+      type: object
+      required: [step, name, provider]
+      properties:
+        step:
+          type: string
+          enum: [role, tables]
+        name:
+          type: string
+        provider:
+          $ref: "#/components/schemas/Provider"
+        id:
+          type: string
+          description: The source's ID from the role step, for the tables step
+        tables:
+          type: array
+          items:
+            $ref: "#/components/schemas/TableRef"
+    SourceSQLRequest:
+      type: object
+      required: [step]
+      properties:
+        step:
+          type: string
+          enum: [add, remove, password, cleanup, dropSlot]
+        tables:
+          type: array
+          description: The tables to add or remove
+          items:
+            $ref: "#/components/schemas/TableRef"
+    SourceSQL:
+      type: object
+      required: [id, role, steps, sql]
+      properties:
+        id:
+          type: string
+        role:
+          type: string
+          description: The role Changeport logs in as
+        password:
+          type: string
+          description: A new password for the role, which only this answer holds
+        steps:
+          type: array
+          description: What to do outside SQL, before the SQL
+          items:
+            type: string
+        sql:
+          type: string
+          description: The SQL to run in the source's database; empty when there is none
+    SourceConnection:
+      type: object
+      required: [host, port, database, tlsMode, password]
+      properties:
+        host:
+          type: string
+          maxLength: 253
+        port:
+          type: integer
+          minimum: 1
+          maximum: 65535
+        database:
+          type: string
+          maxLength: 63
+        tlsMode:
+          type: string
+          enum: [verify-full, verify-ca]
+        ca:
+          type: string
+          maxLength: 65536
+          description: The PEM certificates of the database's CA; without them, verify-full trusts the public authorities
+        password:
+          type: string
+          maxLength: 1024
+    SourceCheckRequest:
+      type: object
+      required: [name, id, provider, connection]
+      properties:
+        name:
+          type: string
+        id:
+          type: string
+        provider:
+          $ref: "#/components/schemas/Provider"
+        connection:
+          $ref: "#/components/schemas/SourceConnection"
+        tables:
+          type: array
+          description: The chosen tables; without them, the checks of tables and the publication do not run
+          items:
+            $ref: "#/components/schemas/TableRef"
+    CheckResult:
+      type: object
+      required: [check, status, message]
+      properties:
+        check:
+          type: string
+        status:
+          type: string
+          enum: [pass, warn, fail, skipped]
+        message:
+          type: string
+    CheckReport:
+      type: object
+      required: [ok, results]
+      properties:
+        ok:
+          type: boolean
+          description: Whether every check passed, warnings included
+        results:
+          type: array
+          items:
+            $ref: "#/components/schemas/CheckResult"
+    SourceTable:
+      type: object
+      required: [schema, name, partitioned, estimatedRows, readable, keyed, topic]
+      properties:
+        schema:
+          type: string
+        name:
+          type: string
+        partitioned:
+          type: boolean
+        estimatedRows:
+          type: integer
+          format: int64
+          description: Postgres's estimate, or -1 before the table was first analyzed
+        readable:
+          type: boolean
+        keyed:
+          type: boolean
+          description: Whether the table can be synced
+        reason:
+          type: string
+          description: Why the table cannot be synced
+        topic:
+          type: string
+          description: The table's topic, if it is synced
+        topicProblem:
+          type: string
+          description: Why the table's topic cannot be created, such as a name that collides
+    SourceTableList:
+      type: object
+      required: [tables]
+      properties:
+        tables:
+          type: array
+          items:
+            $ref: "#/components/schemas/SourceTable"
+    NewSource:
+      type: object
+      required: [name, id, provider, connection, tables, retentionMs]
+      properties:
+        name:
+          type: string
+        id:
+          type: string
+        provider:
+          $ref: "#/components/schemas/Provider"
+        connection:
+          $ref: "#/components/schemas/SourceConnection"
+        tables:
+          type: array
+          items:
+            $ref: "#/components/schemas/TableRef"
+        retentionMs:
+          type: integer
+          format: int64
+    SourceChange:
+      type: object
+      properties:
+        tables:
+          type: array
+          items:
+            $ref: "#/components/schemas/TableRef"
+        retentionMs:
+          type: integer
+          format: int64
+        state:
+          type: string
+          enum: [Running, Stopped]
+    SourcePassword:
+      type: object
+      required: [password]
+      properties:
+        password:
+          type: string
+          maxLength: 1024
+    SourceTableStatus:
+      type: object
+      required: [schema, name, topic, snapshot]
+      properties:
+        schema:
+          type: string
+        name:
+          type: string
+        topic:
+          type: string
+        snapshot:
+          type: string
+          enum: [Pending, Running, Done, Failed]
+        rowsCopied:
+          type: integer
+          format: int64
+        rowsEstimated:
+          type: integer
+          format: int64
+        message:
+          type: string
+    SlotHealth:
+      type: object
+      required: [name, active, retainedWALBytes, checkedAt]
+      properties:
+        name:
+          type: string
+        active:
+          type: boolean
+        retainedWALBytes:
+          type: integer
+          format: int64
+        walStatus:
+          type: string
+        safeWALSizeBytes:
+          type: integer
+          format: int64
+        checkedAt:
+          type: string
+          format: date-time
+    Source:
+      type: object
+      required: [name, id, provider, role, host, port, database, tlsMode, tables, retentionMs, state, phase, ready, reason, message, createdAt]
+      properties:
+        name:
+          type: string
+        id:
+          type: string
+        provider:
+          $ref: "#/components/schemas/Provider"
+        role:
+          type: string
+        host:
+          type: string
+        port:
+          type: integer
+        database:
+          type: string
+        tlsMode:
+          type: string
+        tables:
+          type: array
+          items:
+            $ref: "#/components/schemas/SourceTableStatus"
+        retentionMs:
+          type: integer
+          format: int64
+        state:
+          type: string
+          enum: [Running, Stopped]
+        phase:
+          type: string
+          description: Pending, Snapshotting, Streaming, Stopped, Failed or Deleting
+        ready:
+          type: boolean
+        reason:
+          type: string
+        message:
+          type: string
+        slot:
+          $ref: "#/components/schemas/SlotHealth"
+        dropSlotSQL:
+          type: string
+          description: The SQL to drop the slot, while a deleted source cannot reach its database
+        createdAt:
+          type: string
+          format: date-time
+        deleting:
+          type: boolean
+    SourceList:
+      type: object
+      required: [sources]
+      properties:
+        sources:
+          type: array
+          items:
+            $ref: "#/components/schemas/Source"
     RetentionPreset:
       type: object
       required: [label, ms]

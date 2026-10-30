@@ -82,19 +82,12 @@ cdcsql -step role -password "$password" | pg
 cdcsql -step tables -tables "$tables" | pg
 
 log "Creating source $source_name as the console does"
-kubectl apply -f - >/dev/null <<SECRET
-apiVersion: v1
-kind: Secret
-metadata:
-  name: postgres-password-$source_name-1
-  namespace: $namespace
-type: changeport.io/postgres-password
-immutable: true
-stringData:
-  password: $password
-SECRET
+# As the console's service account, as internal/console's KubeSources does:
+# the source first, which waits for its password, then the write-once
+# password Secret, which the source owns.
+console="system:serviceaccount:changeport:changeport-console"
 ca=$(kubectl -n source-postgres get secret postgres-tls -o jsonpath='{.data.ca\.crt}' | base64 -d | sed 's/^/        /')
-kubectl apply -f - >/dev/null <<SOURCE
+kubectl create --as "$console" -f - >/dev/null <<SOURCE
 apiVersion: changeport.io/v1alpha1
 kind: PostgresSource
 metadata:
@@ -116,6 +109,22 @@ $ca
     - {schema: public, name: orders}
   retentionMs: 3600000
 SOURCE
+source_uid=$(source_field .metadata.uid)
+kubectl create --as "$console" -f - >/dev/null <<SECRET
+apiVersion: v1
+kind: Secret
+metadata:
+  name: postgres-password-$source_name-1
+  namespace: $namespace
+  labels:
+    changeport.io/source: $source_name
+  ownerReferences:
+    - {apiVersion: changeport.io/v1alpha1, kind: PostgresSource, name: $source_name, uid: $source_uid}
+type: changeport.io/postgres-password
+immutable: true
+stringData:
+  password: $password
+SECRET
 wait_phase Streaming
 log "The tables' existing rows arrived first"
 customers_rows=$(pg -c "SELECT count(*) FROM customers")
@@ -276,7 +285,7 @@ done
   die "the source's slot status is \"$(source_field .status.slot)\", not its active slot $slot"
 
 log "A stopped source keeps its slot, and catches up once it runs again"
-kubectl -n "$namespace" patch postgressource "$source_name" --type merge -p '{"spec":{"state":"Stopped"}}' >/dev/null
+kubectl -n "$namespace" patch --as "$console" postgressource "$source_name" --type merge -p '{"spec":{"state":"Stopped"}}' >/dev/null
 wait_phase Stopped
 for _ in $(seq 30); do
   [[ $(slot_active) == f ]] && break
@@ -284,7 +293,7 @@ for _ in $(seq 30); do
 done
 [[ $(slot_active) == f ]] || die "the stopped source's slot $slot is still active, or gone: \"$(slot_active)\""
 pg -c "INSERT INTO customers (id, name, email) VALUES (900002, '$marker-while-stopped', '$marker-2@example.com')"
-kubectl -n "$namespace" patch postgressource "$source_name" --type merge -p '{"spec":{"state":"Running"}}' >/dev/null
+kubectl -n "$namespace" patch --as "$console" postgressource "$source_name" --type merge -p '{"spec":{"state":"Running"}}' >/dev/null
 wait_phase Streaming
 wait_message "$customers_topic" "$marker-while-stopped"
 pg -c "DELETE FROM customers WHERE id = 900002"
@@ -304,7 +313,7 @@ log "An added table's existing rows arrive, and only its"
 wait_message "$customers_topic" "$marker-while-stopped"
 customers_before=$(message_count "$customers_topic")
 cdcsql -step add -tables "public.$invoices" | pg
-kubectl -n "$namespace" patch postgressource "$source_name" --type json \
+kubectl -n "$namespace" patch --as "$console" postgressource "$source_name" --type json \
   -p "[{\"op\":\"add\",\"path\":\"/spec/tables/-\",\"value\":{\"schema\":\"public\",\"name\":\"$invoices\"}}]" >/dev/null
 wait_snapshot "$invoices" Done
 invoices_rows=$(pg -c "SELECT count(*) FROM $invoices")
@@ -317,7 +326,7 @@ wait_phase Streaming
 log "A removed table stops streaming, and keeps its topic"
 orders_before=$(message_count "$source_name.public.orders")
 cdcsql -step remove -tables public.orders -remaining "public.customers,public.$invoices" | pg
-kubectl -n "$namespace" patch postgressource "$source_name" --type merge \
+kubectl -n "$namespace" patch --as "$console" postgressource "$source_name" --type merge \
   -p "{\"spec\":{\"tables\":[{\"schema\":\"public\",\"name\":\"customers\"},{\"schema\":\"public\",\"name\":\"$invoices\"}]}}" >/dev/null
 for _ in $(seq 30); do
   [[ $(source_field '.status.tables[*].name') == "customers $invoices" ]] && break
@@ -343,7 +352,8 @@ wait_message "$customers_topic" "$marker-after-removal"
 pg -c "DELETE FROM orders WHERE id = 900003; DELETE FROM customers WHERE id = 900003"
 
 log "Deleting the source drops its slot and its credentials"
-kubectl -n "$namespace" delete postgressource "$source_name" --timeout=3m >/dev/null
+kubectl -n "$namespace" delete --as "$console" postgressource "$source_name" --wait=false >/dev/null
+kubectl -n "$namespace" wait --for=delete "postgressource/$source_name" --timeout=3m >/dev/null
 [[ -z $(slot_active) ]] || die "the slot $slot is left after the source was deleted"
 if kubectl -n "$namespace" get secret changeport-connect-sources -o jsonpath='{.data}' | grep -q "\"$source_name\""; then
   die "source $source_name's password is left in the Connect worker's Secret"

@@ -70,8 +70,13 @@ type Server struct {
 	organizations Organizations
 	clusters      Clusters
 	metrics       Metrics
-	ui            fs.FS
-	logger        *slog.Logger
+	sources       Sources
+	databases     Databases
+	// egress are the addresses Changeport connects to customers' databases
+	// from, which they allowlist.
+	egress []string
+	ui     fs.FS
+	logger *slog.Logger
 	// csp is the Content-Security-Policy of the web app's pages.
 	csp string
 }
@@ -85,6 +90,13 @@ type Options struct {
 	// Clusters and Metrics read the customers' clusters and their metrics.
 	Clusters Clusters
 	Metrics  Metrics
+	// Sources keeps the customers' Postgres CDC sources, and Databases
+	// checks their databases.
+	Sources   Sources
+	Databases Databases
+	// EgressAddresses are the addresses Changeport connects to customers'
+	// databases from.
+	EgressAddresses []string
 	// UI is the built web app, with index.html at its root.
 	UI     fs.FS
 	Logger *slog.Logger
@@ -104,6 +116,9 @@ func New(config Config, options Options) (*Server, error) {
 		organizations: options.Organizations,
 		clusters:      options.Clusters,
 		metrics:       options.Metrics,
+		sources:       options.Sources,
+		databases:     options.Databases,
+		egress:        options.EgressAddresses,
 		ui:            options.UI,
 		logger:        options.Logger,
 	}
@@ -815,9 +830,23 @@ func (s *Server) ListTopics(ctx context.Context, _ api.ListTopicsRequestObject) 
 		}
 		return nil
 	}
+	owned, _, err := s.sourceTopics(ctx, customer.Name)
+	if err != nil {
+		return nil, err
+	}
 	list := api.ListTopics200JSONResponse{Topics: make([]api.Topic, 0, len(settings))}
 	for _, t := range settings {
+		// The platform's own topics, such as Kafka Connect's, are not the
+		// customer's to see.
+		if topics.Reserved(t.Name) {
+			continue
+		}
+		var source *string
+		if owner, ok := owned[t.Name]; ok {
+			source = ptr.To(owner)
+		}
 		list.Topics = append(list.Topics, api.Topic{
+			Source:            source,
 			Name:              t.Name,
 			Partitions:        t.Partitions,
 			ReplicationFactor: t.ReplicationFactor,
@@ -958,7 +987,7 @@ func (s *Server) ListConsumerGroups(ctx context.Context, _ api.ListConsumerGroup
 	list := api.ListConsumerGroups200JSONResponse{Groups: []api.ConsumerGroupLag{}}
 	for key, seconds := range latest[metrics.LagSeconds] {
 		messages, ok := latest[metrics.LagMessages][key]
-		if !ok {
+		if !ok || platformGroup(key.group) || topics.Reserved(key.topic) {
 			continue
 		}
 		points := histories[key]
@@ -1056,6 +1085,18 @@ func (s *Server) CreateTopic(ctx context.Context, request api.CreateTopicRequest
 		return nil, err
 	}
 	body := *request.Body
+	_, sources, err := s.sourceTopics(ctx, customer.Name)
+	if err != nil {
+		return nil, err
+	}
+	for _, source := range sources {
+		if strings.HasPrefix(body.Name, source.Name+".") {
+			p := problem(http.StatusBadRequest, "The topic breaks a guardrail",
+				fmt.Sprintf("Names starting with %s. belong to the Postgres source %s.", source.Name, source.Name))
+			p.Field = ptr.To("name")
+			return api.CreateTopic400JSONResponse{BadRequestJSONResponse: api.BadRequestJSONResponse(p)}, nil
+		}
+	}
 	topic, err := policy.Check(topics.Request{
 		Name:          body.Name,
 		Partitions:    body.Partitions,
@@ -1112,6 +1153,14 @@ func (s *Server) DeleteTopic(ctx context.Context, request api.DeleteTopicRequest
 	case topics.Reserved(request.Topic):
 		return api.DeleteTopic404JSONResponse{NotFoundJSONResponse: api.NotFoundJSONResponse(noSuchTopic(request.Topic))}, nil
 	}
+	owned, _, err := s.sourceTopics(ctx, customer.Name)
+	if err != nil {
+		return nil, err
+	}
+	if source, ok := owned[request.Topic]; ok {
+		return api.DeleteTopic409JSONResponse{NotReadyJSONResponse: api.NotReadyJSONResponse(problem(http.StatusConflict,
+			"The topic belongs to a Postgres source", fmt.Sprintf("Postgres source %s writes topic %s. Remove its table from the source first, and the topic is yours to delete.", source, request.Topic)))}, nil
+	}
 	err = s.clusters.DeleteTopic(ctx, customer.Name, request.Topic)
 	switch {
 	case errors.Is(err, ErrNoSuchTopic):
@@ -1149,7 +1198,7 @@ func (s *Server) ListTopicConsumerGroups(ctx context.Context, request api.ListTo
 	if err != nil {
 		return nil, err
 	}
-	return api.ListTopicConsumerGroups200JSONResponse{Groups: groups}, nil
+	return api.ListTopicConsumerGroups200JSONResponse{Groups: slices.DeleteFunc(groups, platformGroup)}, nil
 }
 
 // audit logs a change a user made to a customer's cluster, with who made it.

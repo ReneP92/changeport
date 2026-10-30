@@ -38,6 +38,24 @@ wait_for_deployments() {
   done < <(kubectl get deployments -A -l changeport.io/platform -o jsonpath='{range .items[*]}{.metadata.namespace} {.metadata.name}{"\n"}{end}')
 }
 
+# The addresses Changeport connects to customers' databases from, which the
+# console shows them to allowlist: the NAT gateways' public addresses, from
+# Terraform. The console reads them when it starts.
+egress_changed=false
+if [[ $env != kind ]]; then
+  addresses=$(terraform -chdir="terraform/environments/$env" output -json nat_public_ips | tr -d '[]" \n')
+  [[ -n $addresses ]] || die "Terraform has no nat_public_ips for $env; apply terraform/environments/$env first"
+  current=$(kubectl -n changeport get configmap changeport-egress -o jsonpath='{.data.addresses}' 2>/dev/null || true)
+  if [[ $current != "$addresses" ]]; then
+    log "Egress addresses of $env: $addresses"
+    kubectl create namespace changeport --dry-run=client -o yaml |
+      kubectl apply --server-side --field-manager=changeport-platform -f - >/dev/null
+    kubectl -n changeport create configmap changeport-egress --from-literal=addresses="$addresses" --dry-run=client -o yaml |
+      kubectl apply --server-side --force-conflicts --field-manager=changeport-egress -f - >/dev/null
+    egress_changed=true
+  fi
+fi
+
 components="deploy/overlays/$overlay"
 if [[ $env == kind ]]; then
   kind_local_overlay
@@ -45,6 +63,9 @@ if [[ $env == kind ]]; then
 fi
 log "Applying the $overlay platform components to $KUBE_CONTEXT"
 apply "$components"
+if [[ $egress_changed == true ]]; then
+  kubectl -n changeport rollout restart deployment/changeport-console >/dev/null
+fi
 wait_for_deployments
 
 config="deploy/overlays/$overlay/config"

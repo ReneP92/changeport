@@ -16,6 +16,15 @@ rules:
   - apiGroups: [changeport.io]
     resources: [customers]
     verbs: [get, list, create, delete]
+  # Customers' Postgres CDC sources, in their namespaces.
+  - apiGroups: [changeport.io]
+    resources: [postgressources]
+    verbs: [get, list, create, update, patch, delete]
+  # Only the sources' write-once password Secrets, which the admission
+  # policy changeport-console-secrets narrows this to.
+  - apiGroups: [""]
+    resources: [secrets]
+    verbs: [create]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
@@ -62,6 +71,13 @@ spec:
               value: ""
             - name: CHANGEPORT_METRICS_URL
               value: http://victoria-metrics.metrics.svc:8428
+            # The addresses customers' databases see Changeport connect
+            # from, which they allowlist: the NAT gateways' (Terraform's
+            # nat_public_ips), which hack/platform-apply.sh writes into the
+            # ConfigMap changeport-egress. None on kind.
+            - name: CHANGEPORT_EGRESS_IPS
+              valueFrom:
+                configMapKeyRef: { name: changeport-egress, key: addresses, optional: true }
           envFrom:
             # The Clerk keys and the staff organization. Without them the
             # console starts, and refuses every API call.
