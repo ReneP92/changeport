@@ -25,9 +25,10 @@ fi
 kubectl get nodes -o wide --show-labels >"$out/nodes.txt" 2>&1
 kubectl get pods -A -o wide >"$out/pods.txt" 2>&1
 kubectl get events -A --sort-by=.lastTimestamp >"$out/events.txt" 2>&1
-kubectl get kafka,kafkanodepool,kafkauser,kafkatopic,certificate,clusterissuer -A -o yaml >"$out/resources.yaml" 2>&1
+kubectl get kafka,kafkanodepool,kafkauser,kafkatopic,kafkaconnect,kafkaconnector,certificate,clusterissuer -A -o yaml >"$out/resources.yaml" 2>&1
 kubectl get services,persistentvolumeclaims -A -o wide >"$out/services-and-volumes.txt" 2>&1
 kubectl get customers -o yaml >"$out/customers.yaml" 2>&1
+kubectl get postgressources,networkpolicies -A -o yaml >"$out/sources-and-policies.yaml" 2>&1
 
 while read -r namespace pod; do
   for container in $(kubectl -n "$namespace" get pod "$pod" -o jsonpath='{.spec.containers[*].name}'); do

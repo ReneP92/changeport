@@ -58,9 +58,18 @@ rules:
   - apiGroups: [""]
     resources: [pods]
     verbs: [get, list]
+  # The CDC runtime (Deployments, Services, NetworkPolicies, KafkaUsers
+  # and the KafkaConnect labelled changeport.io/part) is deleted again once
+  # the template no longer renders it.
   - apiGroups: [apps]
     resources: [deployments]
-    verbs: [get, create, patch]
+    verbs: [get, create, patch, list, delete]
+  - apiGroups: [""]
+    resources: [services]
+    verbs: [get, create, patch, list, delete]
+  - apiGroups: [networking.k8s.io]
+    resources: [networkpolicies]
+    verbs: [get, create, patch, list, delete]
   # The console's access to the Secrets it needs in each customer namespace.
   # Granting it needs no more than the controller holds itself.
   - apiGroups: [rbac.authorization.k8s.io]
@@ -70,8 +79,11 @@ rules:
     resources: [certificates]
     verbs: [get, create, patch]
   - apiGroups: [kafka.strimzi.io]
-    resources: [kafkas, kafkanodepools, kafkausers]
+    resources: [kafkas, kafkanodepools]
     verbs: [get, create, patch]
+  - apiGroups: [kafka.strimzi.io]
+    resources: [kafkausers, kafkaconnects]
+    verbs: [get, create, patch, list, delete]
   # Each customer's dedicated nodes on EKS Auto Mode.
   - apiGroups: [karpenter.sh]
     resources: [nodepools]
@@ -91,6 +103,33 @@ roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: ClusterRole
   name: changeport-provisioner
+subjects:
+  - kind: ServiceAccount
+    name: changeport-provisioner
+    namespace: changeport
+---
+# The addresses of the Kubernetes API server, which customers' Kafka Connect
+# workers may reach through their NetworkPolicy: Strimzi's config provider
+# reads the workers' certificates from it.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: changeport-provisioner-kubernetes-api
+  namespace: default
+rules:
+  - apiGroups: [discovery.k8s.io]
+    resources: [endpointslices]
+    verbs: [list]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: changeport-provisioner-kubernetes-api
+  namespace: default
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: changeport-provisioner-kubernetes-api
 subjects:
   - kind: ServiceAccount
     name: changeport-provisioner

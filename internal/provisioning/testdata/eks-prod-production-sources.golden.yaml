@@ -1,0 +1,811 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: customer-acme
+  labels:
+    app.kubernetes.io/managed-by: changeport-provisioner
+    changeport.io/tenant: "acme"
+    # The admission policy refuses deleting the namespace of a protected
+    # customer, with everything in it.
+    changeport.io/deletion-protection: "true"
+---
+# The customer's own nodes: EKS Auto Mode launches them for this NodePool
+# only, labelled and tainted with the tenant so that no other pods run there.
+apiVersion: eks.amazonaws.com/v1
+kind: NodeClass
+metadata:
+  name: customer-acme
+  labels:
+    app.kubernetes.io/managed-by: changeport-provisioner
+    changeport.io/tenant: "acme"
+spec:
+  role: changeport-prod-customer-node
+  subnetSelectorTerms:
+    - tags:
+        changeport.io/customer-nodes: "true"
+  securityGroupSelectorTerms:
+    - tags:
+        changeport.io/customer-nodes: "true"
+  # Shows each customer's nodes in cost allocation.
+  tags:
+    changeport.io/tenant: "acme"
+---
+apiVersion: karpenter.sh/v1
+kind: NodePool
+metadata:
+  name: customer-acme
+  labels:
+    app.kubernetes.io/managed-by: changeport-provisioner
+    changeport.io/tenant: "acme"
+spec:
+  template:
+    metadata:
+      labels:
+        changeport.io/tenant: "acme"
+    spec:
+      nodeClassRef:
+        group: eks.amazonaws.com
+        kind: NodeClass
+        name: customer-acme
+      taints:
+        - key: changeport.io/tenant
+          value: "acme"
+          effect: NoSchedule
+      requirements:
+        - key: kubernetes.io/arch
+          operator: In
+          values: [arm64]
+        - key: karpenter.sh/capacity-type
+          operator: In
+          values: [on-demand]
+        - key: eks.amazonaws.com/instance-family
+          operator: In
+          values: [m7g, m8g]
+        - key: eks.amazonaws.com/instance-cpu
+          operator: In
+          values: ["2"]
+      # The longest node lifetime EKS Auto Mode allows. Expiry ignores the
+      # disruption budgets; Strimzi Drain Cleaner turns the eviction of a
+      # broker into a rolling restart by the Strimzi operator instead.
+      expireAfter: 504h
+      terminationGracePeriod: 24h
+  disruption:
+    consolidationPolicy: WhenEmpty
+    consolidateAfter: 5m
+    budgets:
+      # One node at a time.
+      - nodes: "1"
+      # Drifted nodes, mostly after new Auto Mode AMIs (about weekly), are
+      # replaced only between 06:00 and 10:00 UTC, at night in us-east-1.
+      - nodes: "0"
+        reasons: [Drifted]
+        schedule: "0 10 * * *"
+        duration: 20h
+  limits:
+    cpu: "10"
+---
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: external-listener
+  namespace: customer-acme
+  labels:
+    app.kubernetes.io/managed-by: changeport-provisioner
+    changeport.io/tenant: "acme"
+spec:
+  # One wildcard name covers the bootstrap name and every broker's name.
+  dnsNames:
+    - "*.acme.kafka.changeport.invalid"
+  secretName: external-listener-tls
+  privateKey:
+    algorithm: ECDSA
+    size: 256
+    # Kafka only loads PEM private keys in PKCS#8.
+    encoding: PKCS8
+  issuerRef:
+    group: cert-manager.io
+    kind: ClusterIssuer
+    name: letsencrypt
+---
+apiVersion: kafka.strimzi.io/v1
+kind: KafkaNodePool
+metadata:
+  name: dual-role
+  namespace: customer-acme
+  labels:
+    strimzi.io/cluster: "acme"
+    app.kubernetes.io/managed-by: changeport-provisioner
+    changeport.io/tenant: "acme"
+spec:
+  replicas: 3
+  roles:
+    - controller
+    - broker
+  resources:
+    requests:
+      cpu: "1500m"
+      memory: "5Gi"
+    limits:
+      memory: "5Gi"
+  storage:
+    type: jbod
+    volumes:
+      - id: 0
+        type: persistent-claim
+        size: "100Gi"
+        class: "gp3"
+        deleteClaim: false
+        kraftMetadata: shared
+  template:
+    pod:
+      volumes:
+        # The tiered storage plugin's cache of chunks fetched back from S3.
+        - name: tiered-storage-cache
+          emptyDir:
+            sizeLimit: 3Gi
+      affinity:
+        nodeAffinity: {requiredDuringSchedulingIgnoredDuringExecution: {nodeSelectorTerms: [{matchExpressions: [{key: changeport.io/tenant, operator: In, values: ["acme"]}]}]}}
+        # One broker per node.
+        podAntiAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            - topologyKey: kubernetes.io/hostname
+              labelSelector: {matchLabels: {strimzi.io/cluster: "acme", strimzi.io/pool-name: dual-role}}
+      # Brokers spread evenly over the zones, or wait until they can.
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: topology.kubernetes.io/zone
+          whenUnsatisfiable: DoNotSchedule
+          labelSelector: {matchLabels: {strimzi.io/cluster: "acme", strimzi.io/pool-name: dual-role}}
+      tolerations: [{key: changeport.io/tenant, operator: Equal, value: "acme", effect: NoSchedule}]
+    kafkaContainer:
+      volumeMounts:
+        - name: tiered-storage-cache
+          mountPath: /mnt/tiered-storage-cache
+---
+apiVersion: kafka.strimzi.io/v1
+kind: Kafka
+metadata:
+  name: "acme"
+  namespace: customer-acme
+  labels:
+    app.kubernetes.io/managed-by: changeport-provisioner
+    changeport.io/tenant: "acme"
+spec:
+  kafka:
+    version: 4.3.1
+    metadataVersion: 4.3-IV0
+    # broker.rack, which clients set client.rack to, to read from a replica
+    # in their own zone (docs/connecting.md).
+    rack:
+      topologyKey: topology.k8s.aws/zone-id
+    listeners:
+      # Platform clients inside the cluster, such as the Kafka agent.
+      - name: tls
+        port: 9093
+        type: internal
+        tls: true
+        authentication:
+          type: tls
+      # Customers, over the internet.
+      - name: external
+        port: 9094
+        type: loadbalancer
+        tls: true
+        authentication:
+          type: scram-sha-512
+        configuration:
+          class: eks.amazonaws.com/nlb
+          brokerCertChainAndKey:
+            secretName: external-listener-tls
+            certificate: tls.crt
+            key: tls.key
+          bootstrap:
+            annotations:
+              external-dns.alpha.kubernetes.io/hostname: "bootstrap.acme.kafka.changeport.invalid"
+              service.beta.kubernetes.io/aws-load-balancer-listener-attributes.TCP-9094: "tcp.idle_timeout.seconds=900"
+              service.beta.kubernetes.io/aws-load-balancer-nlb-target-type: "ip"
+              service.beta.kubernetes.io/aws-load-balancer-scheme: "internet-facing"
+          advertisedHostTemplate: b{nodeId}.acme.kafka.changeport.invalid
+          perBrokerAnnotationsTemplate:
+            external-dns.alpha.kubernetes.io/hostname: "b{nodeId}.acme.kafka.changeport.invalid"
+            service.beta.kubernetes.io/aws-load-balancer-listener-attributes.TCP-9094: "tcp.idle_timeout.seconds=900"
+            service.beta.kubernetes.io/aws-load-balancer-nlb-target-type: "ip"
+            service.beta.kubernetes.io/aws-load-balancer-scheme: "internet-facing"
+    authorization:
+      type: simple
+    # Broker metrics on port 9404, which VictoriaMetrics scrapes with the
+    # tenant label (docs/metrics-labels.md). Only what observability and
+    # usage metering need, to keep the number of series per broker low. The
+    # patterns match names before Prometheus appends _total to counters; JVM
+    # and process metrics are always exported and trimmed when scraped. The
+    # metrics clients push (KIP-714) come out of the same reporter as
+    # clients_* series, which the allowList does not apply to; the Kafka
+    # agent sets up which ones and how they are labelled.
+    metricsConfig:
+      type: strimziMetricsReporter
+      values:
+        allowList:
+          # Health: replication, controller, offline storage.
+          - "kafka_server_replicamanager_(underreplicatedpartitions|underminisrpartitioncount|atminisrpartitioncount|offlinereplicacount|leadercount|partitioncount|isrshrinkspersec|isrexpandspersec|failedisrupdatespersec)"
+          - "kafka_controller_kafkacontroller_(activecontrollercount|activebrokercount|fencedbrokercount|offlinepartitionscount|globalpartitioncount|globaltopiccount|preferredreplicaimbalancecount)"
+          - "kafka_log_logmanager_offlinelogdirectorycount"
+          - "kafka_server_kafkaserver_brokerstate"
+          # Usage per topic: traffic, storage on the brokers and in S3.
+          - "kafka_server_brokertopicmetrics_(bytesin|bytesout|messagesin|bytesrejected|totalproducerequests|totalfetchrequests|failedproducerequests|failedfetchrequests|remotecopybytes|remotecopyerrors|remotefetchbytes|remotefetcherrors)persec"
+          - "kafka_server_brokertopicmetrics_(remotecopylagbytes|remotecopylagsegments|remotelogsizebytes)"
+          - "kafka_log_log_size"
+          # Load: requests, latency, connections, thread saturation.
+          - "kafka_network_requestmetrics_requestspersec"
+          - "kafka_network_requestmetrics_totaltimems.*"
+          - "kafka_network_socketserver_networkprocessoravgidlepercent"
+          - "kafka_server_kafkarequesthandlerpool_requesthandleravgidlepercent"
+          - "kafka_server_socket_server_metrics_connection_count"
+          - "kafka_coordinator_group_groupmetadatamanager_numgroups.*"
+    # Topic history goes to S3 through the Aiven plugin in the Kafka image
+    # (images/kafka). Topics opt in with remote.storage.enable=true.
+    tieredStorage:
+      type: custom
+      remoteStorageManager:
+        className: io.aiven.kafka.tieredstorage.RemoteStorageManager
+        classPath: /opt/kafka/plugins/tiered-storage/*
+        config:
+          storage.backend.class: io.aiven.kafka.tieredstorage.storage.s3.S3Storage
+          storage.s3.bucket.name: "changeport-prod-tiered-storage"
+          storage.s3.region: "us-east-1"
+          key.prefix: "customer-acme/"
+          chunk.size: "4194304"
+          fetch.chunk.cache.class: io.aiven.kafka.tieredstorage.fetch.cache.DiskChunkCache
+          fetch.chunk.cache.path: /mnt/tiered-storage-cache
+          # 2 GiB, inside the cache volume's 3 GiB.
+          fetch.chunk.cache.size: "2147483648"
+    config:
+      auto.create.topics.enable: false
+      # Tiered topics keep a day on the brokers' disks; the rest is in S3.
+      log.local.retention.ms: 86400000
+      rlmm.config.remote.log.metadata.topic.replication.factor: 3
+      # Follower fetching: consumers that set client.rack read from a replica
+      # in their own zone, avoiding cross-zone transfer.
+      replica.selector.class: org.apache.kafka.common.replica.RackAwareReplicaSelector
+      default.replication.factor: 3
+      min.insync.replicas: 2
+      offsets.topic.replication.factor: 3
+      transaction.state.log.replication.factor: 3
+      transaction.state.log.min.isr: 2
+  entityOperator:
+    template:
+      pod:
+        affinity:
+          nodeAffinity: {requiredDuringSchedulingIgnoredDuringExecution: {nodeSelectorTerms: [{matchExpressions: [{key: changeport.io/tenant, operator: In, values: ["acme"]}]}]}}
+        tolerations: [{key: changeport.io/tenant, operator: Equal, value: "acme", effect: NoSchedule}]
+    topicOperator: {}
+    userOperator: {}
+---
+# The customer's user. It manages topics, consumer groups and transactions,
+# but cannot change the cluster's configuration, which the platform owns.
+apiVersion: kafka.strimzi.io/v1
+kind: KafkaUser
+metadata:
+  name: admin
+  namespace: customer-acme
+  labels:
+    strimzi.io/cluster: "acme"
+    app.kubernetes.io/managed-by: changeport-provisioner
+    changeport.io/tenant: "acme"
+spec:
+  authentication:
+    type: scram-sha-512
+  authorization:
+    type: simple
+    acls:
+      - resource:
+          type: topic
+          name: "*"
+          patternType: literal
+        operations: [All]
+      - resource:
+          type: group
+          name: "*"
+          patternType: literal
+        operations: [All]
+      - resource:
+          type: transactionalId
+          name: "*"
+          patternType: literal
+        operations: [All]
+      - resource:
+          type: cluster
+        operations: [Describe, DescribeConfigs, IdempotentWrite]
+---
+# The Kafka agent's user on the internal listener: it reads the cluster,
+# keeps topic settings such as tiered storage in place, and reads consumer
+# groups' committed offsets to measure their lag. It cannot read messages.
+# It also keeps client telemetry in place, a client metrics subscription and
+# a dynamic broker config, both of which Kafka authorizes as cluster configs.
+apiVersion: kafka.strimzi.io/v1
+kind: KafkaUser
+metadata:
+  name: changeport-agent
+  namespace: customer-acme
+  labels:
+    strimzi.io/cluster: "acme"
+    app.kubernetes.io/managed-by: changeport-provisioner
+    changeport.io/tenant: "acme"
+spec:
+  authentication:
+    type: tls
+  authorization:
+    type: simple
+    acls:
+      - resource:
+          type: topic
+          name: "*"
+          patternType: literal
+        operations: [Describe, DescribeConfigs, AlterConfigs]
+      - resource:
+          type: group
+          name: "*"
+          patternType: literal
+        operations: [Describe]
+      - resource:
+          type: cluster
+        operations: [Describe, DescribeConfigs, AlterConfigs]
+---
+# The console's user on the internal listener: it manages the customer's
+# topics within the platform's guardrails, reads cluster metadata and which
+# consumer groups read a topic, and cannot read or write messages.
+apiVersion: kafka.strimzi.io/v1
+kind: KafkaUser
+metadata:
+  name: changeport-console
+  namespace: customer-acme
+  labels:
+    strimzi.io/cluster: "acme"
+    app.kubernetes.io/managed-by: changeport-provisioner
+    changeport.io/tenant: "acme"
+spec:
+  authentication:
+    type: tls
+  authorization:
+    type: simple
+    acls:
+      - resource:
+          type: topic
+          name: "*"
+          patternType: literal
+        operations: [Create, Delete, Describe, DescribeConfigs]
+      - resource:
+          type: group
+          name: "*"
+          patternType: literal
+        operations: [Describe]
+      - resource:
+          type: cluster
+        operations: [Describe]
+---
+# Lets the console's service account read the Secrets it needs in this
+# namespace, by name, and the pods, to show the brokers' health.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: changeport-console
+  namespace: customer-acme
+  labels:
+    app.kubernetes.io/managed-by: changeport-provisioner
+    changeport.io/tenant: "acme"
+rules:
+  - apiGroups: [""]
+    resources: [secrets]
+    resourceNames:
+      - "changeport-console"
+      - "acme-cluster-ca-cert"
+      - "admin"
+      - "external-listener-tls"
+    verbs: [get]
+  - apiGroups: [""]
+    resources: [pods]
+    verbs: [get, list]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: changeport-console
+  namespace: customer-acme
+  labels:
+    app.kubernetes.io/managed-by: changeport-provisioner
+    changeport.io/tenant: "acme"
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: changeport-console
+subjects:
+  - kind: ServiceAccount
+    name: changeport-console
+    namespace: changeport
+---
+# The Kafka Connect worker's user on the internal listener, for the customer's
+# Postgres CDC sources (docs/cdc.md). It creates and writes each source's
+# topics, but never reads the customer's topics.
+apiVersion: kafka.strimzi.io/v1
+kind: KafkaUser
+metadata:
+  name: changeport-connect
+  namespace: customer-acme
+  labels:
+    strimzi.io/cluster: "acme"
+    changeport.io/part: cdc
+    app.kubernetes.io/managed-by: changeport-provisioner
+    changeport.io/tenant: "acme"
+spec:
+  authentication:
+    type: tls
+  authorization:
+    type: simple
+    acls:
+      # Connect's own topics, of connector configurations, offsets and status,
+      # and its group.
+      - resource:
+          type: topic
+          name: changeport.connect.
+          patternType: prefix
+        operations: [Create, Describe, DescribeConfigs, Read, Write]
+      - resource:
+          type: group
+          name: changeport.connect
+          patternType: literal
+        operations: [Describe, Read]
+      # The sources' snapshot signals, progress notifications and heartbeats.
+      - resource:
+          type: topic
+          name: changeport.cdc.
+          patternType: prefix
+        operations: [Create, Describe, DescribeConfigs, Read, Write]
+      - resource:
+          type: group
+          name: changeport.cdc.
+          patternType: prefix
+        operations: [Describe, Read]
+      # The topics of source app's tables.
+      - resource:
+          type: topic
+          name: "app."
+          patternType: prefix
+        operations: [Create, Describe, DescribeConfigs, Write]
+      # The topics of source billing's tables.
+      - resource:
+          type: topic
+          name: "billing."
+          patternType: prefix
+        operations: [Create, Describe, DescribeConfigs, Write]
+      - resource:
+          type: cluster
+        operations: [Describe, DescribeConfigs]
+---
+# The schema registry's user on the internal listener: it keeps its schemas
+# in its own topics, and touches nothing else.
+apiVersion: kafka.strimzi.io/v1
+kind: KafkaUser
+metadata:
+  name: changeport-registry
+  namespace: customer-acme
+  labels:
+    strimzi.io/cluster: "acme"
+    changeport.io/part: cdc
+    app.kubernetes.io/managed-by: changeport-provisioner
+    changeport.io/tenant: "acme"
+spec:
+  authentication:
+    type: tls
+  authorization:
+    type: simple
+    acls:
+      - resource:
+          type: topic
+          name: changeport.registry.
+          patternType: prefix
+        operations: [Create, Describe, DescribeConfigs, Read, Write]
+      - resource:
+          type: group
+          name: changeport.registry.
+          patternType: prefix
+        operations: [Describe, Read]
+      - resource:
+          type: cluster
+        operations: [Describe, DescribeConfigs]
+---
+# The Kafka Connect worker that runs the customer's Postgres CDC sources, one
+# KafkaConnector each, with Debezium and Apicurio's Avro converter
+# (images/connect).
+apiVersion: kafka.strimzi.io/v1
+kind: KafkaConnect
+metadata:
+  name: changeport-connect
+  namespace: customer-acme
+  labels:
+    changeport.io/part: cdc
+    app.kubernetes.io/managed-by: changeport-provisioner
+    changeport.io/tenant: "acme"
+  annotations:
+    strimzi.io/use-connector-resources: "true"
+spec:
+  version: 4.3.1
+  image: 123456789012.dkr.ecr.us-east-1.amazonaws.com/changeport/connect@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
+  replicas: 1
+  bootstrapServers: "acme-kafka-bootstrap:9093"
+  groupId: changeport.connect
+  configStorageTopic: changeport.connect.configs
+  offsetStorageTopic: changeport.connect.offsets
+  statusStorageTopic: changeport.connect.status
+  tls:
+    trustedCertificates:
+      - secretName: acme-cluster-ca-cert
+        certificate: ca.crt
+  authentication:
+    type: tls
+    certificateAndKey:
+      secretName: changeport-connect
+      certificate: user.crt
+      key: user.key
+  config:
+    config.storage.replication.factor: 3
+    offset.storage.replication.factor: 3
+    status.storage.replication.factor: 3
+    # Connector configurations name the files of the mounted Secrets rather
+    # than holding passwords: ${directory:/mnt/sources:<source>}.
+    config.providers: directory
+    config.providers.directory.class: org.apache.kafka.common.config.provider.DirectoryConfigProvider
+  resources:
+    requests:
+      cpu: "1"
+      memory: "3Gi"
+    limits:
+      memory: "3Gi"
+  template:
+    pod:
+      affinity:
+        nodeAffinity: {requiredDuringSchedulingIgnoredDuringExecution: {nodeSelectorTerms: [{matchExpressions: [{key: changeport.io/tenant, operator: In, values: ["acme"]}]}]}}
+        podAntiAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            - topologyKey: kubernetes.io/hostname
+              labelSelector: {matchLabels: {strimzi.io/cluster: "acme", strimzi.io/pool-name: dual-role}}
+      tolerations: [{key: changeport.io/tenant, operator: Equal, value: "acme", effect: NoSchedule}]
+      volumes:
+        # The sources' database passwords, which the source controller writes.
+        - name: sources
+          secret:
+            secretName: changeport-connect-sources
+            optional: true
+        # The worker's own certificate and the cluster CA, for the clients
+        # Debezium starts itself, such as the snapshot signal consumer.
+        - name: connect-user
+          secret:
+            secretName: changeport-connect
+        - name: cluster-ca
+          secret:
+            secretName: acme-cluster-ca-cert
+    connectContainer:
+      volumeMounts:
+        - name: sources
+          mountPath: /mnt/sources
+        - name: connect-user
+          mountPath: /mnt/connect-user
+        - name: cluster-ca
+          mountPath: /mnt/cluster-ca
+---
+# The schema registry, Apicurio Registry, which keeps the Avro schemas of the
+# sources' topics in the customer's Kafka. Customers reach it through the
+# registry gateway; the Connect worker inside the cluster.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: changeport-registry
+  namespace: customer-acme
+  labels:
+    app.kubernetes.io/name: changeport-registry
+    changeport.io/part: cdc
+    app.kubernetes.io/managed-by: changeport-provisioner
+    changeport.io/tenant: "acme"
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: changeport-registry
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: changeport-registry
+        changeport.io/tenant: "acme"
+    spec:
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
+      affinity:
+        nodeAffinity: {requiredDuringSchedulingIgnoredDuringExecution: {nodeSelectorTerms: [{matchExpressions: [{key: changeport.io/tenant, operator: In, values: ["acme"]}]}]}}
+        podAntiAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            - topologyKey: kubernetes.io/hostname
+              labelSelector: {matchLabels: {strimzi.io/cluster: "acme", strimzi.io/pool-name: dual-role}}
+      tolerations: [{key: changeport.io/tenant, operator: Equal, value: "acme", effect: NoSchedule}]
+      containers:
+        - name: registry
+          image: quay.io/apicurio/apicurio-registry:3.3.3@sha256:c9cae4c90ce46538abf673c68eb591345f23bcc6c2aa6bfd47189adcf609d8f1
+          env:
+            - name: APICURIO_STORAGE_KIND
+              value: kafkasql
+            - name: APICURIO_KAFKASQL_BOOTSTRAP_SERVERS
+              value: "acme-kafka-bootstrap:9093"
+            - name: APICURIO_KAFKASQL_TOPIC
+              value: changeport.registry.journal
+            - name: APICURIO_KAFKASQL_SNAPSHOTS_TOPIC
+              value: changeport.registry.snapshots
+            - name: APICURIO_EVENTS_KAFKA_TOPIC
+              value: changeport.registry.events
+            - name: APICURIO_KAFKASQL_CONSUMER_GROUP_PREFIX
+              value: changeport.registry.
+            - name: APICURIO_KAFKASQL_SECURITY_PROTOCOL
+              value: SSL
+            - name: APICURIO_KAFKASQL_SECURITY_SSL_KEYSTORE_TYPE
+              value: PKCS12
+            - name: APICURIO_KAFKASQL_SECURITY_SSL_KEYSTORE_LOCATION
+              value: /mnt/user/user.p12
+            - name: APICURIO_KAFKASQL_SECURITY_SSL_KEYSTORE_PASSWORD
+              valueFrom:
+                secretKeyRef: {name: changeport-registry, key: user.password}
+            - name: APICURIO_KAFKASQL_SECURITY_SSL_TRUSTSTORE_TYPE
+              value: PKCS12
+            - name: APICURIO_KAFKASQL_SECURITY_SSL_TRUSTSTORE_LOCATION
+              value: /mnt/cluster-ca/ca.p12
+            - name: APICURIO_KAFKASQL_SECURITY_SSL_TRUSTSTORE_PASSWORD
+              valueFrom:
+                secretKeyRef: {name: acme-cluster-ca-cert, key: ca.password}
+          ports:
+            - name: http
+              containerPort: 8080
+            - name: management
+              containerPort: 9000
+          readinessProbe:
+            httpGet:
+              path: /health/ready
+              port: management
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /health/live
+              port: management
+            initialDelaySeconds: 60
+            periodSeconds: 30
+          resources:
+            requests:
+              cpu: "250m"
+              memory: "1Gi"
+            limits:
+              memory: "1Gi"
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: [ALL]
+          volumeMounts:
+            - name: user
+              mountPath: /mnt/user
+              readOnly: true
+            - name: cluster-ca
+              mountPath: /mnt/cluster-ca
+              readOnly: true
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        # The certificate of the registry's KafkaUser, from the User Operator.
+        - name: user
+          secret:
+            secretName: changeport-registry
+        - name: cluster-ca
+          secret:
+            secretName: acme-cluster-ca-cert
+        - name: tmp
+          emptyDir:
+            sizeLimit: 64Mi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: changeport-registry
+  namespace: customer-acme
+  labels:
+    changeport.io/part: cdc
+    app.kubernetes.io/managed-by: changeport-provisioner
+    changeport.io/tenant: "acme"
+spec:
+  selector:
+    app.kubernetes.io/name: changeport-registry
+  ports:
+    - name: http
+      port: 8080
+      targetPort: http
+---
+# The Connect worker reaches only DNS, the brokers, the registry, the other
+# workers, the Kubernetes API, which Strimzi's config provider reads its
+# certificates from, and databases on the internet; never the cluster's own
+# networks or the cloud's metadata service.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: changeport-connect-egress
+  namespace: customer-acme
+  labels:
+    changeport.io/part: cdc
+    app.kubernetes.io/managed-by: changeport-provisioner
+    changeport.io/tenant: "acme"
+spec:
+  podSelector: {matchLabels: {strimzi.io/cluster: changeport-connect, strimzi.io/kind: KafkaConnect}}
+  policyTypes: [Egress]
+  egress:
+    - ports:
+        - {protocol: UDP, port: 53}
+        - {protocol: TCP, port: 53}
+    - to:
+        - podSelector: {matchLabels: {strimzi.io/cluster: "acme", strimzi.io/kind: Kafka}}
+      ports:
+        - {protocol: TCP, port: 9093}
+    - to:
+        - podSelector: {matchLabels: {app.kubernetes.io/name: changeport-registry}}
+      ports:
+        - {protocol: TCP, port: 8080}
+    - to:
+        - podSelector: {matchLabels: {strimzi.io/cluster: changeport-connect, strimzi.io/kind: KafkaConnect}}
+      ports:
+        - {protocol: TCP, port: 8083}
+    - to:
+        - ipBlock: {cidr: 10.0.31.17/32}
+      ports:
+        - {protocol: TCP, port: 443}
+    - to:
+        - ipBlock: {cidr: 10.0.88.204/32}
+      ports:
+        - {protocol: TCP, port: 443}
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+            except:
+              - 0.0.0.0/8
+              - 10.0.0.0/8
+              - 100.64.0.0/10
+              - 127.0.0.0/8
+              - 169.254.0.0/16
+              - 172.16.0.0/12
+              - 192.0.0.0/24
+              - 192.0.2.0/24
+              - 192.168.0.0/16
+              - 198.18.0.0/15
+              - 198.51.100.0/24
+              - 203.0.113.0/24
+              - 224.0.0.0/3
+---
+# Only the Connect worker reaches the registry, and the registry reaches only
+# DNS and the brokers.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: changeport-registry
+  namespace: customer-acme
+  labels:
+    changeport.io/part: cdc
+    app.kubernetes.io/managed-by: changeport-provisioner
+    changeport.io/tenant: "acme"
+spec:
+  podSelector: {matchLabels: {app.kubernetes.io/name: changeport-registry}}
+  policyTypes: [Ingress, Egress]
+  ingress:
+    - from:
+        - podSelector: {matchLabels: {strimzi.io/cluster: changeport-connect, strimzi.io/kind: KafkaConnect}}
+      ports:
+        - {protocol: TCP, port: 8080}
+  egress:
+    - ports:
+        - {protocol: UDP, port: 53}
+        - {protocol: TCP, port: 53}
+    - to:
+        - podSelector: {matchLabels: {strimzi.io/cluster: "acme", strimzi.io/kind: Kafka}}
+      ports:
+        - {protocol: TCP, port: 9093}

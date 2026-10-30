@@ -5,6 +5,8 @@ package controller
 import (
 	"context"
 	"fmt"
+	"slices"
+	"strings"
 	"time"
 
 	"k8s.io/apimachinery/pkg/api/equality"
@@ -15,6 +17,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
+	"sigs.k8s.io/controller-runtime/pkg/handler"
 
 	"github.com/ReneP92/changeport/api/v1alpha1"
 	"github.com/ReneP92/changeport/internal/provisioning"
@@ -47,13 +50,25 @@ type CustomerReconciler struct {
 	ResyncInterval time.Duration
 }
 
-// SetupWithManager registers the reconciler with mgr.
+// SetupWithManager registers the reconciler with mgr. A change to a
+// PostgresSource reconciles the Customer of its namespace, whose template
+// renders what the sources run on.
 func (r *CustomerReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&v1alpha1.Customer{}).
+		Watches(&v1alpha1.PostgresSource{}, handler.EnqueueRequestsFromMapFunc(customerOfSource)).
 		Named("customer").
 		WithOptions(controller.Options{MaxConcurrentReconciles: 4}).
 		Complete(r)
+}
+
+// customerOfSource is the Customer whose namespace a source is in.
+func customerOfSource(_ context.Context, source client.Object) []ctrl.Request {
+	id, ok := strings.CutPrefix(source.GetNamespace(), provisioning.NamespacePrefix)
+	if !ok {
+		return nil
+	}
+	return []ctrl.Request{{NamespacedName: client.ObjectKey{Name: id}}}
 }
 
 // Reconcile implements reconcile.Reconciler.
@@ -80,6 +95,9 @@ func (r *CustomerReconciler) reconcile(ctx context.Context, req ctrl.Request) (c
 		// Only a change to the Customer can fix it, which triggers a new
 		// reconciliation.
 		return ctrl.Result{}, r.notReady(ctx, &customer, v1alpha1.ReasonInvalidSpec, err.Error())
+	}
+	if spec.Sources, err = r.sources(ctx, spec); err != nil {
+		return ctrl.Result{}, err
 	}
 	if err := r.ensureMetadata(ctx, &customer); err != nil {
 		return ctrl.Result{}, err
@@ -120,10 +138,15 @@ func (r *CustomerReconciler) reconcile(ctx context.Context, req ctrl.Request) (c
 		setCondition(status, customer.Generation, condition)
 	}
 	setCondition(status, customer.Generation, ready)
+	cdcReady := metav1.Condition{Type: v1alpha1.ConditionCDCReady, Status: metav1.ConditionTrue, Reason: v1alpha1.ReasonDone, Message: progress.CDC.String()}
+	if !progress.CDC.Ready {
+		cdcReady.Status, cdcReady.Reason = metav1.ConditionFalse, v1alpha1.ReasonPending
+	}
+	setCondition(status, customer.Generation, cdcReady)
 	if err := r.updateStatus(ctx, &customer, status); err != nil {
 		return ctrl.Result{}, err
 	}
-	if !progress.Ready() {
+	if !progress.Ready() || !progress.CDC.Ready {
 		return ctrl.Result{RequeueAfter: r.PollInterval}, nil
 	}
 	return ctrl.Result{RequeueAfter: r.ResyncInterval}, nil
@@ -177,6 +200,21 @@ func (r *CustomerReconciler) spec(customer *v1alpha1.Customer) (provisioning.Spe
 		DeletionProtection: customer.Spec.DeletionProtection,
 	}
 	return spec, spec.Validate()
+}
+
+// sources lists the customer's Postgres CDC sources, by name, including those
+// being deleted: they need their runtime until their slot is dropped.
+func (r *CustomerReconciler) sources(ctx context.Context, spec provisioning.Spec) ([]provisioning.Source, error) {
+	var list v1alpha1.PostgresSourceList
+	if err := r.Client.List(ctx, &list, client.InNamespace(spec.Namespace())); err != nil {
+		return nil, fmt.Errorf("list the Postgres sources of customer %s: %w", spec.CustomerID, err)
+	}
+	sources := make([]provisioning.Source, len(list.Items))
+	for i, source := range list.Items {
+		sources[i] = provisioning.Source{Name: source.Name}
+	}
+	slices.SortFunc(sources, func(a, b provisioning.Source) int { return strings.Compare(a.Name, b.Name) })
+	return sources, nil
 }
 
 // ensureMetadata adds the finalizer, before anything is created that it must

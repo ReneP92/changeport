@@ -106,7 +106,7 @@ spec:
               conditions:
                 description: |-
                   Conditions are CertificateIssued, KafkaReady, UsersReady,
-                  AgentAvailable and Ready.
+                  AgentAvailable and Ready, and CDCReady.
                 items:
                   description: Condition contains details for one aspect of the current
                     state of this API Resource.

@@ -32,6 +32,10 @@ const (
 	// ConditionReady is True when all of the above are, so customers can
 	// connect. While it is False, its reason says what the cluster waits for.
 	ConditionReady = "Ready"
+	// ConditionCDCReady is True once the Kafka Connect worker and the schema
+	// registry of the customer's Postgres CDC sources run, or when the
+	// customer has none. Ready does not include it.
+	ConditionCDCReady = "CDCReady"
 )
 
 // The reasons of a Customer's conditions.
@@ -103,7 +107,7 @@ type CustomerStatus struct {
 	BootstrapAddress string `json:"bootstrapAddress,omitempty"`
 
 	// Conditions are CertificateIssued, KafkaReady, UsersReady,
-	// AgentAvailable and Ready.
+	// AgentAvailable and Ready, and CDCReady.
 	// +listType=map
 	// +listMapKey=type
 	// +optional

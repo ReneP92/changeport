@@ -105,14 +105,27 @@ func (f *fakeCluster) Delete(_ context.Context, gvk schema.GroupVersionKind, nam
 	return nil
 }
 
-// List supports label selectors of the form "key=value".
+// List supports label selectors of comma-separated requirements, each
+// "key=value" or "key" for objects with the label; "" selects every object.
 func (f *fakeCluster) List(_ context.Context, gvk schema.GroupVersionKind, namespace, labelSelector string) ([]unstructured.Unstructured, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	key, value, _ := strings.Cut(labelSelector, "=")
+	matches := func(labels map[string]string) bool {
+		if labelSelector == "" {
+			return true
+		}
+		for requirement := range strings.SplitSeq(labelSelector, ",") {
+			key, value, hasValue := strings.Cut(requirement, "=")
+			label, hasLabel := labels[key]
+			if !hasLabel || hasValue && label != value {
+				return false
+			}
+		}
+		return true
+	}
 	var items []unstructured.Unstructured
 	for _, obj := range f.objects {
-		if obj.GroupVersionKind() == gvk && obj.GetNamespace() == namespace && obj.GetLabels()[key] == value {
+		if obj.GroupVersionKind() == gvk && obj.GetNamespace() == namespace && matches(obj.GetLabels()) {
 			items = append(items, *obj.DeepCopy())
 		}
 	}
@@ -482,6 +495,7 @@ func TestReconcileReportsEachPart(t *testing.T) {
 				Kafka:       Readiness{Object: "Kafka customer-acme/acme", Status: "operator has not reconciled the latest spec"},
 				Users:       Readiness{Object: "KafkaUser customer-acme/admin", Status: "operator has not reconciled the latest spec"},
 				Agent:       Readiness{Object: "Deployment customer-acme/changeport-agent", Status: "0 of 1 replicas updated, 0 available"},
+				CDC:         Readiness{Ready: true, Status: "No Postgres CDC sources"},
 			},
 		},
 		{
@@ -495,6 +509,7 @@ func TestReconcileReportsEachPart(t *testing.T) {
 				Kafka:       Readiness{Ready: true, Status: "Ready"},
 				Users:       Readiness{Ready: true, Status: "Ready"},
 				Agent:       Readiness{Ready: true, Status: "Ready"},
+				CDC:         Readiness{Ready: true, Status: "No Postgres CDC sources"},
 			},
 		},
 	}

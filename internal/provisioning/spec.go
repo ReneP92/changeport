@@ -8,7 +8,9 @@ package provisioning
 import (
 	"errors"
 	"fmt"
+	"net/netip"
 	"regexp"
+	"slices"
 	"strings"
 	"time"
 
@@ -49,7 +51,38 @@ const (
 	// cert-manager for the customer's names.
 	ExternalListenerSecret = "external-listener-tls"
 
-	namespacePrefix = "customer-"
+	// PartLabel marks the objects of an optional part of a customer's
+	// resources, which the provisioner deletes once the template no longer
+	// renders them.
+	PartLabel = "changeport.io/part"
+	// PartCDC is the part of customers with Postgres CDC sources: the Kafka
+	// Connect worker, the schema registry, their users and NetworkPolicies
+	// (docs/cdc.md).
+	PartCDC = "cdc"
+	// ConnectCluster names the KafkaConnect of a customer's sources.
+	ConnectCluster = "changeport-connect"
+	// ConnectUser is the KafkaUser of the Connect worker on the internal mTLS
+	// listener. It creates and writes the sources' topics, and cannot read
+	// the customer's topics.
+	ConnectUser = "changeport-connect"
+	// ConnectSourcesSecret holds the sources' database passwords, one file per
+	// source, which the Connect worker reads through Kafka's
+	// DirectoryConfigProvider. The source controller writes it.
+	ConnectSourcesSecret = "changeport-connect-sources"
+	// Registry names the schema registry's Deployment and Service.
+	Registry = "changeport-registry"
+	// RegistryUser is the KafkaUser of the schema registry, which keeps its
+	// schemas in the customer's Kafka.
+	RegistryUser = "changeport-registry"
+	// RegistryPort is the port of the registry's REST API inside the cluster.
+	RegistryPort = 8080
+	// registryImage is Apicurio Registry 3.3.3, by the digest of its
+	// multi-platform index.
+	registryImage = "quay.io/apicurio/apicurio-registry:3.3.3@sha256:c9cae4c90ce46538abf673c68eb591345f23bcc6c2aa6bfd47189adcf609d8f1"
+
+	// NamespacePrefix starts the name of every customer's namespace,
+	// customer-<id>.
+	NamespacePrefix = "customer-"
 	nodePoolName    = "dual-role"
 	// zoneTopologyKey is the well-known node label holding the availability zone.
 	zoneTopologyKey = "topology.kubernetes.io/zone"
@@ -78,6 +111,20 @@ type Spec struct {
 	// DeletionProtectionLabel, which the platform's admission policy reads
 	// to refuse deleting it.
 	DeletionProtection bool
+	// Sources are the customer's Postgres CDC sources, by name. While there
+	// are any, the template renders what they run on.
+	Sources []Source
+	// KubernetesAPI are the addresses of the Kubernetes API server, as
+	// host:port, which the Connect worker reads its certificates from
+	// through Strimzi's config provider. The provisioner looks them up when
+	// the template renders the CDC runtime.
+	KubernetesAPI []netip.AddrPort
+}
+
+// Source is a customer's Postgres CDC source, as the template needs it.
+type Source struct {
+	// Name is the PostgresSource's name, which prefixes its topics.
+	Name string
 }
 
 // DeletionProtectionLabel marks the namespace of a customer with deletion
@@ -86,7 +133,7 @@ type Spec struct {
 const DeletionProtectionLabel = "changeport.io/deletion-protection"
 
 // Namespace is the customer's own namespace.
-func (s Spec) Namespace() string { return namespacePrefix + s.CustomerID }
+func (s Spec) Namespace() string { return NamespacePrefix + s.CustomerID }
 
 // ClusterName is the name of the Strimzi Kafka resource.
 func (s Spec) ClusterName() string { return s.CustomerID }
@@ -102,7 +149,7 @@ func (s Spec) TieredStoragePrefix() string { return s.Namespace() + "/" }
 
 // DedicatedNodePool names the customer's dedicated EKS Auto Mode NodePool and
 // NodeClass, both cluster-scoped.
-func (s Spec) DedicatedNodePool() string { return namespacePrefix + s.CustomerID }
+func (s Spec) DedicatedNodePool() string { return NamespacePrefix + s.CustomerID }
 
 // Domain is the DNS zone of the customer's public names, under the platform's
 // Kafka domain, such as acme.kafka.changeport.test.
@@ -152,6 +199,45 @@ func (s Spec) Validate() error {
 	if s.Profile.Zones > s.Platform.Zones {
 		return fmt.Errorf("profile %q spreads brokers across %d zones, but platform %q has %d", s.Profile.Name, s.Profile.Zones, s.Platform.Name, s.Platform.Zones)
 	}
+	for _, endpoint := range s.KubernetesAPI {
+		if !endpoint.IsValid() || endpoint.Port() == 0 {
+			return fmt.Errorf("the Kubernetes API address %q is not an address and port", endpoint)
+		}
+	}
+	for i, source := range s.Sources {
+		if err := ValidateSourceName(source.Name); err != nil {
+			return err
+		}
+		if slices.Contains(s.Sources[:i], source) {
+			return fmt.Errorf("source %q is listed twice", source.Name)
+		}
+	}
+	return nil
+}
+
+// CDC reports whether the template renders the runtime of the customer's
+// Postgres CDC sources: when they have any, on a platform with a Connect
+// image.
+func (s Spec) CDC() bool { return len(s.Sources) > 0 && s.Platform.ConnectImage != "" }
+
+// RegistryURL is the schema registry's API inside the cluster, which the
+// Connect worker's converters use.
+func (s Spec) RegistryURL() string {
+	return fmt.Sprintf("http://%s.%s.svc:%d/apis/registry/v3", Registry, s.Namespace(), RegistryPort)
+}
+
+// maxSourceNameLength is cdc.MaxSourceNameLength, which internal/cdc's tests
+// keep equal.
+const maxSourceNameLength = 40
+
+// ValidateSourceName reports whether name can be rendered as a source's
+// name. The PostgresSource CRD and internal/cdc apply the full rules, which
+// also reserve the platform's prefixes; internal/cdc's tests keep the two
+// in agreement.
+func ValidateSourceName(name string) error {
+	if len(name) == 0 || len(name) > maxSourceNameLength || !customerIDPattern.MatchString(name) {
+		return fmt.Errorf("source name %q must be 1 to %d lowercase letters, digits and dashes, starting with a letter and ending with a letter or digit", name, maxSourceNameLength)
+	}
 	return nil
 }
 
@@ -181,8 +267,16 @@ type Profile struct {
 	// Above 1, the template enables rack-aware replica placement.
 	Zones int
 	// NodeCPUs is the vCPU count of each dedicated node, on platforms with
-	// dedicated nodes: one broker per node.
+	// dedicated nodes: one broker per node, and one more for the Connect
+	// worker and the schema registry of customers with CDC sources.
 	NodeCPUs int
+	// ConnectCPURequest and ConnectMemory size the Kafka Connect worker of
+	// customers with Postgres CDC sources, RegistryCPURequest and
+	// RegistryMemory their schema registry.
+	ConnectCPURequest  string
+	ConnectMemory      string
+	RegistryCPURequest string
+	RegistryMemory     string
 }
 
 func (p Profile) validate() error {
@@ -204,6 +298,8 @@ func (p Profile) validate() error {
 	case p.NodeCPUs < 2:
 		// EKS Auto Mode only runs instances with more than one vCPU.
 		return fmt.Errorf("profile %q: dedicated nodes need at least 2 vCPUs", p.Name)
+	case p.ConnectCPURequest == "" || p.ConnectMemory == "" || p.RegistryCPURequest == "" || p.RegistryMemory == "":
+		return fmt.Errorf("profile %q: the Connect worker's and the schema registry's CPU requests and memory are required", p.Name)
 	}
 	return nil
 }
@@ -220,37 +316,52 @@ var DevProfile = Profile{
 	StorageSize:       "5Gi",
 	Zones:             1,
 	NodeCPUs:          2,
+	// Small enough for kind, as the brokers.
+	ConnectCPURequest:  "250m",
+	ConnectMemory:      "1Gi",
+	RegistryCPURequest: "100m",
+	RegistryMemory:     "512Mi",
 }
 
 // DevHAProfile is a three-broker cluster across three zones, as durable as
 // production but small enough for kind, to test failover locally.
 var DevHAProfile = Profile{
-	Name:              "dev-ha",
-	Replicas:          3,
-	ReplicationFactor: 3,
-	MinInsyncReplicas: 2,
-	CPURequest:        "250m",
-	Memory:            "1Gi",
-	StorageSize:       "5Gi",
-	Zones:             3,
-	NodeCPUs:          2,
+	Name:               "dev-ha",
+	Replicas:           3,
+	ReplicationFactor:  3,
+	MinInsyncReplicas:  2,
+	CPURequest:         "250m",
+	Memory:             "1Gi",
+	StorageSize:        "5Gi",
+	Zones:              3,
+	NodeCPUs:           2,
+	ConnectCPURequest:  "250m",
+	ConnectMemory:      "1Gi",
+	RegistryCPURequest: "100m",
+	RegistryMemory:     "512Mi",
 }
 
 // ProductionProfile follows the durability decisions in docs/PROJECT_PLAN.md:
 // three zones, replication factor 3, min.insync.replicas 2. It is sized for
 // the design partner's volume (peak under 1 MB/s, under 50 GB a day) on
 // dedicated 2-vCPU, 8 GiB nodes (m7g.large), leaving room on each node for
-// the entity operator and the Kafka agent next to the broker.
+// the entity operator and the Kafka agent next to the broker. The Connect
+// worker and the schema registry of customers with CDC sources share one more
+// such node.
 var ProductionProfile = Profile{
-	Name:              "production",
-	Replicas:          3,
-	ReplicationFactor: 3,
-	MinInsyncReplicas: 2,
-	CPURequest:        "1500m",
-	Memory:            "5Gi",
-	StorageSize:       "100Gi",
-	Zones:             3,
-	NodeCPUs:          2,
+	Name:               "production",
+	Replicas:           3,
+	ReplicationFactor:  3,
+	MinInsyncReplicas:  2,
+	CPURequest:         "1500m",
+	Memory:             "5Gi",
+	StorageSize:        "100Gi",
+	Zones:              3,
+	NodeCPUs:           2,
+	ConnectCPURequest:  "1",
+	ConnectMemory:      "3Gi",
+	RegistryCPURequest: "250m",
+	RegistryMemory:     "1Gi",
 }
 
 // Profiles lists the known profiles by name.
@@ -295,6 +406,17 @@ type Platform struct {
 	// to every customer's cluster. Empty means no agent: on EKS until the
 	// image is first published to ECR (eks-images.json).
 	AgentImage string
+	// ConnectImage is the Kafka Connect image (images/connect) of customers
+	// with Postgres CDC sources. Empty means the platform runs no sources: on
+	// EKS until the image is first published to ECR.
+	ConnectImage string
+	// RegistryImage is the schema registry's image, Apicurio Registry.
+	RegistryImage string
+	// SourceDatabaseNamespace, when set, is a namespace of this Kubernetes
+	// cluster whose databases the Connect worker may reach, besides public
+	// addresses: on kind, where a Postgres stands in for customers'
+	// databases (deploy/base/source-postgres).
+	SourceDatabaseNamespace string
 	// KafkaDomain is the DNS zone the customers' public names live under, as
 	// <customer>.<KafkaDomain>.
 	KafkaDomain string
@@ -414,6 +536,8 @@ func (p Platform) validate() error {
 		return fmt.Errorf("platform %q: rack label is required", p.Name)
 	case p.CertificateIssuer == "":
 		return fmt.Errorf("platform %q: certificate issuer is required", p.Name)
+	case p.ConnectImage != "" && p.RegistryImage == "":
+		return fmt.Errorf("platform %q: a platform that runs Kafka Connect needs a schema registry image", p.Name)
 	}
 	if errs := validation.IsDNS1123Subdomain(p.KafkaDomain); len(errs) > 0 {
 		return fmt.Errorf("platform %q: Kafka domain %q: %s", p.Name, p.KafkaDomain, strings.Join(errs, "; "))
@@ -433,12 +557,16 @@ func (p Platform) validate() error {
 // cloud-provider-kind for the load balancers. Public names use the reserved
 // .test domain and a local CA; the dev scripts resolve them for clients.
 var KindPlatform = Platform{
-	Name:              "kind",
-	StorageClass:      "standard",
-	Zones:             3,
-	RackLabel:         zoneTopologyKey,
-	KafkaImage:        "changeport/kafka:local",
-	AgentImage:        "changeport/agent:local",
+	Name:         "kind",
+	StorageClass: "standard",
+	Zones:        3,
+	RackLabel:    zoneTopologyKey,
+	KafkaImage:   "changeport/kafka:local",
+	AgentImage:   "changeport/agent:local",
+	ConnectImage: "changeport/connect:local",
+	// By tag, as hack/lib.sh preloads it: kind's nodes do not keep the
+	// digest of the multi-platform index.
+	RegistryImage:     strings.Split(registryImage, "@")[0],
 	KafkaDomain:       "kafka.changeport.test",
 	CertificateIssuer: "local-ca",
 	// Like EKS load balancers with IP targets, send each broker's traffic only
@@ -466,6 +594,8 @@ var KindPlatform = Platform{
 	// Client metrics that reach the metrics store soon after a test client
 	// starts.
 	ClientMetricsInterval: 5 * time.Second,
+	// The Postgres of deploy/base/source-postgres, which the CDC tests use.
+	SourceDatabaseNamespace: "source-postgres",
 }
 
 // eksLoadBalancer is an internet-facing EKS Auto Mode Network Load Balancer
@@ -514,6 +644,8 @@ var EKSDevPlatform = Platform{
 	Name:              "eks-dev",
 	KafkaImage:        eksImages.Kafka,
 	AgentImage:        eksImages.Agent,
+	ConnectImage:      eksImages.Connect,
+	RegistryImage:     registryImage,
 	StorageClass:      "gp3",
 	Zones:             3,
 	RackLabel:         eksZoneIDLabel,
@@ -531,6 +663,8 @@ var EKSProdPlatform = Platform{
 	Name:              "eks-prod",
 	KafkaImage:        eksImages.Kafka,
 	AgentImage:        eksImages.Agent,
+	ConnectImage:      eksImages.Connect,
+	RegistryImage:     registryImage,
 	StorageClass:      "gp3",
 	Zones:             3,
 	RackLabel:         eksZoneIDLabel,
