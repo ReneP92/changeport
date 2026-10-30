@@ -140,12 +140,26 @@ func TestKeyed(t *testing.T) {
 	for _, c := range []struct {
 		identity   string
 		primaryKey bool
+		types      []string
 		keyed      bool
 	}{
-		{"d", true, true}, {"d", false, false}, {"i", false, true}, {"f", true, true}, {"f", false, false}, {"n", true, false},
+		{"d", true, []string{"int8"}, true},
+		{"d", true, []string{"int8", "text", "uuid", "date", "numeric", "bpchar", "varchar", "int2", "int4"}, true},
+		{"f", true, []string{"uuid"}, true},
+		{"i", true, []string{"int4"}, true},
+		{"d", false, nil, false},
+		{"i", false, nil, false}, // a unique replica identity alone: Debezium needs the primary key
+		{"n", true, []string{"int8"}, false},
+		{"d", true, []string{"int8", "timestamptz"}, false},
+		{"d", true, []string{"timestamp"}, false},
+		{"d", true, []string{"mood"}, false},
 	} {
-		if keyed, reason := keyed(c.identity, c.primaryKey); keyed != c.keyed || (keyed == (reason != "")) {
-			t.Errorf("keyed(%q, %t) = %t, %q", c.identity, c.primaryKey, keyed, reason)
+		keyed, reason := keyed(c.identity, c.primaryKey, c.types)
+		if keyed != c.keyed || keyed == (reason != "") {
+			t.Errorf("keyed(%q, %t, %v) = %t, %q", c.identity, c.primaryKey, c.types, keyed, reason)
 		}
+	}
+	if _, reason := keyed("d", true, []string{"int8", "timestamptz"}); !strings.HasPrefix(reason, "Its primary key has a column of type timestamptz,") {
+		t.Errorf("reason = %q", reason)
 	}
 }

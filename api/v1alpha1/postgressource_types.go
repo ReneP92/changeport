@@ -79,6 +79,9 @@ const SlotDroppedAnnotation = "changeport.io/slot-dropped"
 const (
 	// SourceReasonStreaming: changes stream. Ready is True.
 	SourceReasonStreaming = "Streaming"
+	// SourceReasonSnapshotting: changes stream while the existing rows of
+	// some tables are copied. Ready is True.
+	SourceReasonSnapshotting = "Snapshotting"
 	// SourceReasonWaitingForPassword: the console has not written the
 	// password Secret the spec names.
 	SourceReasonWaitingForPassword = "WaitingForPassword"
@@ -256,10 +259,14 @@ type TableStatus struct {
 	// +optional
 	RowsCopied int64 `json:"rowsCopied,omitempty"`
 
-	// RowsEstimated is Postgres's estimate of the table's rows when its
-	// snapshot started.
+	// RowsEstimated is how many rows the table had when its snapshot
+	// started.
 	// +optional
 	RowsEstimated int64 `json:"rowsEstimated,omitempty"`
+
+	// Message says why the snapshot waits or failed.
+	// +optional
+	Message string `json:"message,omitempty"`
 }
 
 // PostgresSourceStatus is how far the source is.
@@ -283,6 +290,11 @@ type PostgresSourceStatus struct {
 	// Slot is the health of the source's replication slot.
 	// +optional
 	Slot *SlotStatus `json:"slot,omitempty"`
+
+	// NotificationsOffset is how far the source controller has read the
+	// connector's notifications of snapshot progress.
+	// +optional
+	NotificationsOffset int64 `json:"notificationsOffset,omitempty"`
 
 	// Tables is how far each table is.
 	// +listType=map

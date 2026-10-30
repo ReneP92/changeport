@@ -7,7 +7,9 @@ import (
 	"errors"
 	"fmt"
 	"regexp"
+	"slices"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
@@ -43,13 +45,18 @@ func init() {
 
 var kafkaConnectorGVK = schema.GroupVersionKind{Group: "kafka.strimzi.io", Version: "v1", Kind: "KafkaConnector"}
 
-// Slots reads and drops sources' replication slots; cdc.Checker does.
-type Slots interface {
+// Database is what the controller does in sources' databases; cdc.Checker
+// does it.
+type Database interface {
+	// Check checks the database for a source, before its tables' snapshots.
+	Check(ctx context.Context, target cdc.Target) cdc.Report
+	// Slot reads the source's replication slot.
 	Slot(ctx context.Context, connection cdc.Connection, slot string) (cdc.SlotState, error)
+	// DropSlot drops it.
 	DropSlot(ctx context.Context, connection cdc.Connection, slot string) (bool, error)
 }
 
-var _ Slots = cdc.Checker{}
+var _ Database = cdc.Checker{}
 
 // PostgresSourceReconciler takes every PostgresSource from created to
 // streaming, and drops its slot once it is deleted (docs/cdc.md). The
@@ -60,11 +67,14 @@ var _ Slots = cdc.Checker{}
 //     Connect worker's, with the source's CA;
 //   - it reports the connector's state in the source's status, in plain
 //     language;
+//   - it asks for a snapshot of each table once, when the table is new and
+//     the database checks pass, and follows its progress;
 //   - it reads the slot every SlotInterval, and exports the WAL it keeps;
 //   - once the source is deleted and its connector gone, it drops the slot.
 type PostgresSourceReconciler struct {
-	Client client.Client
-	Slots  Slots
+	Client    client.Client
+	Database  Database
+	Snapshots SnapshotChannel
 	// PollInterval is how soon a source that is not streaming yet is
 	// looked at again.
 	PollInterval time.Duration
@@ -72,7 +82,17 @@ type PostgresSourceReconciler struct {
 	SlotInterval time.Duration
 	// Now is when the slot was read; time.Now by default.
 	Now func() time.Time
+
+	// signalled remembers the snapshots asked for in the last
+	// signalMemory, by source UID and table, so that a status update that
+	// failed after a signal never sends it again: Debezium copies a table
+	// once per signal.
+	mu        sync.Mutex
+	signalled map[string]time.Time
 }
+
+// signalMemory is how long the controller remembers a snapshot it asked for.
+const signalMemory = 10 * time.Minute
 
 // SetupWithManager registers the reconciler with mgr.
 func (r *PostgresSourceReconciler) SetupWithManager(mgr ctrl.Manager) error {
@@ -119,8 +139,12 @@ func (r *PostgresSourceReconciler) reconcile(ctx context.Context, req ctrl.Reque
 	if err := r.handOver(ctx, &source, status); err != nil {
 		return ctrl.Result{}, err
 	}
-	ready := r.connectorState(ctx, &source, names, status)
+	ready, connector := r.connectorState(ctx, &source, names, status)
+	if status.Phase == v1alpha1.PhaseStreaming {
+		ready = r.followSnapshots(ctx, &source, names, status, connector, ready)
+	}
 	requeue := r.PollInterval
+	// Snapshots are followed at the poll interval.
 	if status.Phase == v1alpha1.PhaseStreaming || status.Phase == v1alpha1.PhaseStopped {
 		requeue = r.SlotInterval
 	}
@@ -205,38 +229,180 @@ func (r *PostgresSourceReconciler) writeCredentials(ctx context.Context, source 
 }
 
 // connectorState sets the source's phase from its connector's state, which
-// Strimzi reports, and returns its Ready condition.
-func (r *PostgresSourceReconciler) connectorState(ctx context.Context, source *v1alpha1.PostgresSource, names cdc.Names, status *v1alpha1.PostgresSourceStatus) metav1.Condition {
+// Strimzi reports, and returns its Ready condition and the connector, if any.
+func (r *PostgresSourceReconciler) connectorState(ctx context.Context, source *v1alpha1.PostgresSource, names cdc.Names, status *v1alpha1.PostgresSourceStatus) (metav1.Condition, *unstructured.Unstructured) {
 	condition := func(phase string, ready metav1.ConditionStatus, reason, message string) metav1.Condition {
 		status.Phase = phase
 		return metav1.Condition{Type: v1alpha1.ConditionReady, Status: ready, Reason: reason, Message: message}
 	}
 	if status.PasswordSecret == "" {
 		return condition(v1alpha1.PhasePending, metav1.ConditionFalse, v1alpha1.SourceReasonWaitingForPassword,
-			fmt.Sprintf("Waiting for the password Secret %s.", source.Spec.Connection.PasswordSecret))
+			fmt.Sprintf("Waiting for the password Secret %s.", source.Spec.Connection.PasswordSecret)), nil
 	}
 	connector := &unstructured.Unstructured{}
 	connector.SetGroupVersionKind(kafkaConnectorGVK)
 	err := r.Client.Get(ctx, client.ObjectKey{Namespace: source.Namespace, Name: names.Connector}, connector)
 	if err != nil {
-		return condition(v1alpha1.PhasePending, metav1.ConditionFalse, v1alpha1.SourceReasonStarting, "Waiting for Kafka Connect to start the connector.")
+		return condition(v1alpha1.PhasePending, metav1.ConditionFalse, v1alpha1.SourceReasonStarting, "Waiting for Kafka Connect to start the connector."), nil
 	}
 	state, trace := connectorStatus(connector)
 	stopped := source.Spec.State == v1alpha1.StateStopped
 	switch {
 	case stopped && state == "STOPPED":
 		return condition(v1alpha1.PhaseStopped, metav1.ConditionFalse, v1alpha1.SourceReasonStopped,
-			"The source is stopped. Its slot keeps the database's WAL until it runs again.")
+			"The source is stopped. Its slot keeps the database's WAL until it runs again."), connector
 	case stopped:
-		return condition(v1alpha1.PhaseStopped, metav1.ConditionFalse, v1alpha1.SourceReasonStopped, "The source is stopping.")
+		return condition(v1alpha1.PhaseStopped, metav1.ConditionFalse, v1alpha1.SourceReasonStopped, "The source is stopping."), connector
 	case state == "FAILED":
-		return condition(v1alpha1.PhaseFailed, metav1.ConditionFalse, v1alpha1.SourceReasonFailed, Explain(trace, source, names))
+		return condition(v1alpha1.PhaseFailed, metav1.ConditionFalse, v1alpha1.SourceReasonFailed, Explain(trace, source, names)), connector
 	case state == "RUNNING":
 		return condition(v1alpha1.PhaseStreaming, metav1.ConditionTrue, v1alpha1.SourceReasonStreaming,
-			fmt.Sprintf("Changes stream from %d tables.", len(source.Spec.Tables)))
+			fmt.Sprintf("Changes stream from %d tables.", len(source.Spec.Tables))), connector
 	default:
-		return condition(v1alpha1.PhasePending, metav1.ConditionFalse, v1alpha1.SourceReasonStarting, "The connector is starting.")
+		return condition(v1alpha1.PhasePending, metav1.ConditionFalse, v1alpha1.SourceReasonStarting, "The connector is starting."), connector
 	}
+}
+
+// followSnapshots follows the snapshots of a streaming source's tables. It
+// asks for a snapshot of each new table once the connector runs with it and
+// the database checks pass, and reads the progress of those running. While
+// any table's existing rows are being copied, the source is Snapshotting,
+// and Ready says how far.
+func (r *PostgresSourceReconciler) followSnapshots(ctx context.Context, source *v1alpha1.PostgresSource, names cdc.Names,
+	status *v1alpha1.PostgresSourceStatus, connector *unstructured.Unstructured, ready metav1.Condition,
+) metav1.Condition {
+	log := ctrl.LoggerFrom(ctx)
+	syncTables(source, status)
+	if slices.ContainsFunc(status.Tables, func(t v1alpha1.TableStatus) bool { return t.Snapshot == v1alpha1.SnapshotRunning }) {
+		notifications, next, err := r.Snapshots.Notifications(ctx, source, names, status.NotificationsOffset)
+		applyNotifications(status.Tables, notifications)
+		status.NotificationsOffset = next
+		if err != nil {
+			log.Info("could not read the snapshot notifications", "source", source.Name, "error", err.Error())
+		}
+	}
+	// A table asked for recently runs, even if the status lost it.
+	running := slices.ContainsFunc(status.Tables, func(t v1alpha1.TableStatus) bool {
+		return t.Snapshot == v1alpha1.SnapshotRunning || t.Snapshot == v1alpha1.SnapshotPending && r.asked(source, t)
+	})
+	if pending := r.pendingTables(source, status); len(pending) > 0 && !running && connectorHasTables(connector, source) {
+		r.requestSnapshot(ctx, source, names, status, pending)
+	}
+
+	copying := snapshotting(status.Tables)
+	if copying == 0 {
+		return ready
+	}
+	status.Phase = v1alpha1.PhaseSnapshotting
+	message := fmt.Sprintf("Copying the existing rows of %d of %d tables, while changes stream.", copying, len(status.Tables))
+	// The first table that waits says what for.
+	if i := slices.IndexFunc(status.Tables, func(t v1alpha1.TableStatus) bool {
+		return t.Snapshot == v1alpha1.SnapshotPending && t.Message != ""
+	}); i >= 0 {
+		t := status.Tables[i]
+		message = fmt.Sprintf("%s %s.%s waits: %s", message, t.Schema, t.Name, t.Message)
+	}
+	return metav1.Condition{Type: v1alpha1.ConditionReady, Status: metav1.ConditionTrue, Reason: v1alpha1.SourceReasonSnapshotting, Message: message}
+}
+
+// pendingTables are the tables whose snapshot has not been asked for, and
+// not just been asked for either.
+func (r *PostgresSourceReconciler) pendingTables(source *v1alpha1.PostgresSource, status *v1alpha1.PostgresSourceStatus) []cdc.Table {
+	var pending []cdc.Table
+	for _, t := range status.Tables {
+		if t.Snapshot == v1alpha1.SnapshotPending && !r.asked(source, t) {
+			pending = append(pending, cdc.Table{Schema: t.Schema, Name: t.Name})
+		}
+	}
+	return pending
+}
+
+// asked reports whether the table's snapshot was asked for in the last
+// signalMemory.
+func (r *PostgresSourceReconciler) asked(source *v1alpha1.PostgresSource, t v1alpha1.TableStatus) bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	asked, ok := r.signalled[string(source.UID)+"/"+t.Schema+"."+t.Name]
+	return ok && r.now().Sub(asked) <= signalMemory
+}
+
+// requestSnapshot asks for the snapshot of the first pending table that
+// passes the database checks, as the console runs them before a source
+// starts. Tables are copied one at a time: Debezium drops the rest of a
+// snapshot's tables when one fails. A table that fails a check stays
+// pending, with what to do.
+func (r *PostgresSourceReconciler) requestSnapshot(ctx context.Context, source *v1alpha1.PostgresSource, names cdc.Names, status *v1alpha1.PostgresSourceStatus, pending []cdc.Table) {
+	tableStatus := func(table cdc.Table) *v1alpha1.TableStatus {
+		i := slices.IndexFunc(status.Tables, func(t v1alpha1.TableStatus) bool { return t.Schema == table.Schema && t.Name == table.Name })
+		return &status.Tables[i]
+	}
+	connection, err := r.connection(ctx, source, names)
+	if err != nil {
+		for _, table := range pending {
+			tableStatus(table).Message = capitalizeFirst(err.Error()) + "."
+		}
+		return
+	}
+	for _, table := range pending {
+		t := tableStatus(table)
+		report := r.Database.Check(ctx, cdc.Target{Provider: cdc.Provider(source.Spec.Provider), Connection: connection, Names: names, Tables: []cdc.Table{table}})
+		if !report.OK() {
+			t.Message = "The database checks did not finish."
+			for _, result := range report.Results {
+				if result.Status == cdc.Fail {
+					t.Message = result.Message
+					break
+				}
+			}
+			continue
+		}
+		if err := r.Snapshots.Signal(ctx, source, names, []cdc.Table{table}); err != nil {
+			t.Message = "Asking for the snapshot failed, and is retried: " + err.Error() + "."
+			return
+		}
+		r.remember(source, table)
+		t.Snapshot, t.Message, t.RowsCopied = v1alpha1.SnapshotRunning, "", 0
+		return
+	}
+}
+
+// remember notes that a table's snapshot was asked for, and forgets those
+// asked for longer than signalMemory ago.
+func (r *PostgresSourceReconciler) remember(source *v1alpha1.PostgresSource, table cdc.Table) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.signalled == nil {
+		r.signalled = map[string]time.Time{}
+	}
+	r.signalled[string(source.UID)+"/"+table.String()] = r.now()
+	for key, asked := range r.signalled {
+		if r.now().Sub(asked) > signalMemory {
+			delete(r.signalled, key)
+		}
+	}
+}
+
+// connectorHasTables reports whether Kafka Connect runs the connector with
+// all of the source's tables, so that a snapshot of a new table is not asked
+// for before the connector would stream it.
+func connectorHasTables(connector *unstructured.Unstructured, source *v1alpha1.PostgresSource) bool {
+	if connector == nil {
+		return false
+	}
+	observed, _, _ := unstructured.NestedInt64(connector.Object, "status", "observedGeneration")
+	included, _, _ := unstructured.NestedString(connector.Object, "spec", "config", "table.include.list")
+	tables := make([]cdc.Table, len(source.Spec.Tables))
+	for i, t := range source.Spec.Tables {
+		tables[i] = cdc.Table{Schema: t.Schema, Name: t.Name}
+	}
+	return observed >= connector.GetGeneration() && included == cdc.TableIncludeList(tables)
+}
+
+func capitalizeFirst(s string) string {
+	if s == "" {
+		return s
+	}
+	return strings.ToUpper(s[:1]) + s[1:]
 }
 
 // connectorStatus is the state of a connector and its task, as Strimzi
@@ -353,7 +519,7 @@ func (r *PostgresSourceReconciler) readSlot(ctx context.Context, source *v1alpha
 	if err != nil {
 		return
 	}
-	state, err := r.Slots.Slot(ctx, connection, names.Slot)
+	state, err := r.Database.Slot(ctx, connection, names.Slot)
 	if err != nil {
 		ctrl.LoggerFrom(ctx).Info("could not read the slot", "source", source.Name, "error", err.Error())
 		return
@@ -419,7 +585,7 @@ func (r *PostgresSourceReconciler) finalize(ctx context.Context, source *v1alpha
 	if status.PasswordSecret != "" && !confirmed {
 		connection, err := r.connection(ctx, source, names)
 		if err == nil {
-			_, err = r.Slots.DropSlot(ctx, connection, names.Slot)
+			_, err = r.Database.DropSlot(ctx, connection, names.Slot)
 		}
 		switch {
 		case errors.Is(err, cdc.ErrSlotActive):

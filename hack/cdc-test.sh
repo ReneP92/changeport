@@ -3,10 +3,12 @@
 # Postgres that stands in for a customer's database (deploy/base/source-postgres):
 # it runs the setup SQL the console generates as the customer would, writes
 # the password Secret and the PostgresSource as the console does, and waits
-# for the source to stream. Inserts, updates and deletes then reach the
-# tables' topics, deletes with a tombstone; a stopped source keeps its slot
-# and catches up once it runs again; and deleting the source drops its slot
-# and its credentials.
+# for the source to copy its tables' existing rows and stream. Inserts,
+# updates and deletes then reach the tables' topics, deletes with a
+# tombstone; a stopped source keeps its slot and catches up once it runs
+# again; an added table's rows arrive, and only its; a removed table stops
+# streaming and keeps its topic; and deleting the source drops its slot and
+# its credentials.
 # Usage: hack/cdc-test.sh [customer-id] (default demo)
 # shellcheck source=lib.sh
 source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
@@ -18,6 +20,11 @@ id=$(random_string a-z0-9 6)
 password=$(random_string A-Za-z0-9 32)
 slot="changeport_${source_name//-/_}_$id"
 tables=public.customers,public.orders
+# A partitioned table of the test's own, keyed by a date as partitioned
+# tables usually are, which the test adds to the source.
+invoices="invoices_$id"
+# Every table the source has at some point, for cleaning up.
+all_tables="public.customers,public.orders,public.$invoices"
 marker="cdc-$RANDOM"
 work=$(mktemp -d)
 
@@ -38,13 +45,25 @@ wait_phase() {
 }
 slot_active() { pg -c "SELECT active FROM pg_replication_slots WHERE slot_name = '$slot'"; }
 
+# Calls the schema registry's Confluent-compatible API from the Connect worker.
+registry() {
+  kubectl -n "$namespace" exec changeport-connect-connect-0 -- curl -sf "http://changeport-registry:8080/apis/ccompat/v7$1" "${@:2}" 2>/dev/null
+}
 kafka() { docker run "${KAFKA_CLIENT[@]}" --entrypoint "/opt/kafka/bin/$1" "$KAFKA_IMAGE" --bootstrap-server "$bootstrap" "${@:2}"; }
 cleanup() {
   kubectl -n "$namespace" delete postgressource "$source_name" --ignore-not-found --timeout=3m >/dev/null 2>&1 || true
-  cdcsql -step cleanup -tables "$tables" | pg >/dev/null 2>&1 || true
+  cdcsql -step cleanup -tables "$all_tables" | pg >/dev/null 2>&1 || true
+  pg -c "DROP TABLE IF EXISTS $invoices" >/dev/null 2>&1 || true
   local topic
-  for topic in "$source_name.public.customers" "$source_name.public.orders" "changeport.cdc.heartbeat.$source_name"; do
+  for topic in "$source_name.public.customers" "$source_name.public.orders" "$source_name.public.$invoices" "changeport.cdc.heartbeat.$source_name"; do
     kafka kafka-topics.sh --command-config /config/client.properties --delete --if-exists --topic "$topic" >/dev/null 2>&1 || true
+  done
+  # The schemas of the source's topics, which the registry keeps. Only the
+  # Connect worker reaches the registry.
+  local subject
+  for subject in $(registry /subjects | tr -d '[]"' | tr ',' '\n' | grep -E "(^|[.])(${source_name}|${source_name//-/_})[.-]"); do
+    registry "/subjects/$subject" -X DELETE >/dev/null || true
+    registry "/subjects/$subject?permanent=true" -X DELETE >/dev/null || true
   done
   rm -rf "$work"
 }
@@ -53,6 +72,10 @@ prepare_kafka_client "$customer" "$work"
 bootstrap=$(sed -n 's/^bootstrap.servers=//p' "$work/client.properties")
 
 log "CDC test for customer $customer: setting up source $source_name in the stand-in database"
+pg -c "CREATE TABLE $invoices (id bigint, issued_on date, total numeric(10, 2), PRIMARY KEY (id, issued_on)) PARTITION BY RANGE (issued_on);
+  CREATE TABLE ${invoices}_2026 PARTITION OF $invoices FOR VALUES FROM ('2026-01-01') TO ('2027-01-01');
+  CREATE TABLE ${invoices}_2027 PARTITION OF $invoices FOR VALUES FROM ('2027-01-01') TO ('2028-01-01');
+  INSERT INTO $invoices SELECT g, date '2026-06-01' + (g % 400), g FROM generate_series(1, 2500) g"
 cdcsql -step role -password "$password" | pg
 cdcsql -step tables -tables "$tables" | pg
 
@@ -92,6 +115,19 @@ $ca
   retentionMs: 3600000
 SOURCE
 wait_phase Streaming
+log "The tables' existing rows arrived first"
+customers_rows=$(pg -c "SELECT count(*) FROM customers")
+orders_rows=$(pg -c "SELECT count(*) FROM orders")
+if [[ $(source_field '.status.tables[?(@.name=="customers")].rowsCopied') != "$customers_rows" ||
+  $(source_field '.status.tables[?(@.name=="orders")].rowsCopied') != "$orders_rows" ||
+  $(source_field '.status.tables[*].snapshot') != "Done Done" ]]; then
+  # The snapshot's notifications, with Avro's bytes as spaces.
+  kafka kafka-console-consumer.sh --command-config /config/client.properties --topic "changeport.cdc.notifications.$source_name" \
+    --partition 0 --offset earliest --timeout-ms 10000 2>/dev/null | LC_ALL=C tr -c '[:print:]\n' ' ' >&2 || true
+  kubectl -n "$namespace" logs changeport-connect-connect-0 2>&1 | grep -F "$source_name" |
+    grep -iE "incremental|chunk|snapshot|signal|task|restart" | grep -v "Context is null" | tail -60 >&2 || true
+  die "the snapshot's status is $(source_field .status.tables), want $customers_rows customers and $orders_rows orders copied"
+fi
 if kubectl -n "$namespace" get secret "postgres-password-$source_name-1" >/dev/null 2>&1; then
   die "the console's password Secret is left after the handover"
 fi
@@ -109,6 +145,12 @@ messages() {
 message_count() {
   kafka kafka-get-offsets.sh --command-config /config/client.properties --topic "$1" 2>/dev/null | cut -d: -f3
 }
+# A read-only snapshot reads a chunk again while transactions commit during
+# it, so a row may arrive twice: at least once.
+customers_snapshot=$(message_count "$source_name.public.customers")
+orders_snapshot=$(message_count "$source_name.public.orders")
+[[ $customers_snapshot -ge $customers_rows && $orders_snapshot -ge $orders_rows ]] ||
+  die "the topics hold $customers_snapshot customers and $orders_snapshot orders, want each table's rows at least once"
 # Waits until the topic has a message containing text. Avro's bytes are no
 # text, so grep reads them in the C locale.
 wait_message() {
@@ -134,9 +176,9 @@ LC_ALL=C grep -qF "$marker-inserted" <<<"$seen" || die "the insert is missing fr
 # The delete's event, then its tombstone: a key with a null value.
 LC_ALL=C grep -q '|null$' <<<"$seen" || die "$customers_topic has no tombstone for the deleted row"
 count=$(message_count "$customers_topic")
-[[ $count == 4 ]] || die "$customers_topic has $count messages, want the insert, the update, the delete and its tombstone"
+[[ $count == $((customers_snapshot + 4)) ]] || die "$customers_topic has $count messages, want the snapshot's, then the insert, the update, the delete and its tombstone"
 count=$(message_count "$source_name.public.orders")
-[[ $count == 3 ]] || die "$source_name.public.orders has $count messages, want the insert, the delete and its tombstone"
+[[ $count == $((orders_snapshot + 3)) ]] || die "$source_name.public.orders has $count messages, want the snapshot's, then the insert, the delete and its tombstone"
 partitions=$(kafka kafka-topics.sh --command-config /config/client.properties --describe --topic "$customers_topic" 2>/dev/null | sed -n 1p)
 if ! grep -q "PartitionCount: 1" <<<"$partitions" || ! grep -q "retention.ms=3600000" <<<"$partitions"; then
   die "$customers_topic is not one partition with the source's retention: $partitions"
@@ -165,10 +207,63 @@ wait_phase Streaming
 wait_message "$customers_topic" "$marker-while-stopped"
 pg -c "DELETE FROM customers WHERE id = 900002"
 
+# Waits until a table's snapshot is in a state.
+wait_snapshot() {
+  local state
+  for _ in $(seq 60); do
+    state=$(source_field ".status.tables[?(@.name==\"$1\")].snapshot")
+    [[ $state == "$2" ]] && return
+    sleep 4
+  done
+  die "the snapshot of table $1 is \"$state\", not $2: $(source_field .status.conditions)"
+}
+
+log "An added table's existing rows arrive, and only its"
+wait_message "$customers_topic" "$marker-while-stopped"
+customers_before=$(message_count "$customers_topic")
+cdcsql -step add -tables "public.$invoices" | pg
+kubectl -n "$namespace" patch postgressource "$source_name" --type json \
+  -p "[{\"op\":\"add\",\"path\":\"/spec/tables/-\",\"value\":{\"schema\":\"public\",\"name\":\"$invoices\"}}]" >/dev/null
+wait_snapshot "$invoices" Done
+invoices_rows=$(pg -c "SELECT count(*) FROM $invoices")
+[[ $(source_field ".status.tables[?(@.name==\"$invoices\")].rowsCopied") == "$invoices_rows" &&
+  $(message_count "$source_name.public.$invoices") -ge $invoices_rows ]] ||
+  die "$source_name.public.$invoices has $(message_count "$source_name.public.$invoices") messages, want the partitioned table's $invoices_rows rows"
+[[ $(message_count "$customers_topic") == "$customers_before" ]] || die "adding a table copied customers again"
+wait_phase Streaming
+
+log "A removed table stops streaming, and keeps its topic"
+orders_before=$(message_count "$source_name.public.orders")
+cdcsql -step remove -tables public.orders -remaining "public.customers,public.$invoices" | pg
+kubectl -n "$namespace" patch postgressource "$source_name" --type merge \
+  -p "{\"spec\":{\"tables\":[{\"schema\":\"public\",\"name\":\"customers\"},{\"schema\":\"public\",\"name\":\"$invoices\"}]}}" >/dev/null
+for _ in $(seq 30); do
+  [[ $(source_field '.status.tables[*].name') == "customers $invoices" ]] && break
+  sleep 2
+done
+[[ $(source_field '.status.tables[*].name') == "customers $invoices" ]] || die "the source's tables are $(source_field '.status.tables[*].name') after removing orders"
+# Kafka Connect restarts the connector without the table.
+connector_field() { kubectl -n "$namespace" get kafkaconnector "$source_name-$id" -o jsonpath="{$1}"; }
+for _ in $(seq 60); do
+  if [[ $(connector_field '.spec.config.table\.include\.list') != *orders* &&
+    $(connector_field .status.observedGeneration) == $(connector_field .metadata.generation) &&
+    $(connector_field '.status.connectorStatus.tasks[0].state') == RUNNING ]]; then
+    break
+  fi
+  sleep 2
+done
+# Changes to both tables in one transaction: once the customer's arrives,
+# the order's would have too.
+pg -c "BEGIN; INSERT INTO customers (id, name, email) VALUES (900003, '$marker-after-removal', '$marker-3@example.com');
+  INSERT INTO orders (id, customer_id, amount) VALUES (900003, 900003, 1); COMMIT"
+wait_message "$customers_topic" "$marker-after-removal"
+[[ $(message_count "$source_name.public.orders") == "$orders_before" ]] || die "a removed table's change reached its topic"
+pg -c "DELETE FROM orders WHERE id = 900003; DELETE FROM customers WHERE id = 900003"
+
 log "Deleting the source drops its slot and its credentials"
 kubectl -n "$namespace" delete postgressource "$source_name" --timeout=3m >/dev/null
 [[ -z $(slot_active) ]] || die "the slot $slot is left after the source was deleted"
 if kubectl -n "$namespace" get secret changeport-connect-sources -o jsonpath='{.data}' | grep -q "\"$source_name\""; then
   die "source $source_name's password is left in the Connect worker's Secret"
 fi
-log "CDC test passed: source $source_name streamed inserts, updates and deletes, paused and resumed, and dropped its slot"
+log "CDC test passed: source $source_name copied its tables and streamed their changes, paused and resumed, added and removed a table, and dropped its slot"

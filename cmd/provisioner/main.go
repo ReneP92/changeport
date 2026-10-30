@@ -388,7 +388,8 @@ func runController(ctx context.Context, args []string, logger *slog.Logger, stde
 	sources := &controller.PostgresSourceReconciler{
 		Client: mgr.GetClient(),
 		// On kind, the stand-in database is on the cluster's own network.
-		Slots:        cdc.Checker{Guard: cdc.Guard{AllowPrivate: platform.SourceDatabaseNamespace != ""}},
+		Database:     cdc.Checker{Guard: cdc.Guard{AllowPrivate: platform.SourceDatabaseNamespace != ""}},
+		Snapshots:    &controller.KafkaSnapshots{Client: mgr.GetClient()},
 		PollInterval: 10 * time.Second,
 		SlotInterval: time.Minute,
 	}

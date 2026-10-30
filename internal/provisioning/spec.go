@@ -76,6 +76,10 @@ const (
 	RegistryUser = "changeport-registry"
 	// RegistryPort is the port of the registry's REST API inside the cluster.
 	RegistryPort = 8080
+	// SnapshotChunkSize is how many rows a source's snapshot copies at a
+	// time, Debezium's default; the source controller counts progress in
+	// chunks of it.
+	SnapshotChunkSize = 1024
 	// registryImage is Apicurio Registry 3.3.3, by the digest of its
 	// multi-platform index.
 	registryImage = "quay.io/apicurio/apicurio-registry:3.3.3@sha256:c9cae4c90ce46538abf673c68eb591345f23bcc6c2aa6bfd47189adcf609d8f1"
@@ -352,8 +356,11 @@ type Profile struct {
 	// ConnectCPURequest and ConnectMemory size the Kafka Connect worker of
 	// customers with Postgres CDC sources, RegistryCPURequest and
 	// RegistryMemory their schema registry.
-	ConnectCPURequest  string
-	ConnectMemory      string
+	ConnectCPURequest string
+	ConnectMemory     string
+	// ConnectHeap is the Connect worker's Java heap, about half its memory:
+	// Debezium and the clients it starts need the rest outside the heap.
+	ConnectHeap        string
 	RegistryCPURequest string
 	RegistryMemory     string
 }
@@ -377,7 +384,7 @@ func (p Profile) validate() error {
 	case p.NodeCPUs < 2:
 		// EKS Auto Mode only runs instances with more than one vCPU.
 		return fmt.Errorf("profile %q: dedicated nodes need at least 2 vCPUs", p.Name)
-	case p.ConnectCPURequest == "" || p.ConnectMemory == "" || p.RegistryCPURequest == "" || p.RegistryMemory == "":
+	case p.ConnectCPURequest == "" || p.ConnectMemory == "" || p.ConnectHeap == "" || p.RegistryCPURequest == "" || p.RegistryMemory == "":
 		return fmt.Errorf("profile %q: the Connect worker's and the schema registry's CPU requests and memory are required", p.Name)
 	}
 	return nil
@@ -398,6 +405,7 @@ var DevProfile = Profile{
 	// Small enough for kind, as the brokers.
 	ConnectCPURequest:  "250m",
 	ConnectMemory:      "1Gi",
+	ConnectHeap:        "512m",
 	RegistryCPURequest: "100m",
 	RegistryMemory:     "512Mi",
 }
@@ -416,6 +424,7 @@ var DevHAProfile = Profile{
 	NodeCPUs:           2,
 	ConnectCPURequest:  "250m",
 	ConnectMemory:      "1Gi",
+	ConnectHeap:        "512m",
 	RegistryCPURequest: "100m",
 	RegistryMemory:     "512Mi",
 }
@@ -439,6 +448,7 @@ var ProductionProfile = Profile{
 	NodeCPUs:           2,
 	ConnectCPURequest:  "1",
 	ConnectMemory:      "3Gi",
+	ConnectHeap:        "1536m",
 	RegistryCPURequest: "250m",
 	RegistryMemory:     "1Gi",
 }

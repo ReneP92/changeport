@@ -3,6 +3,7 @@ package controller
 import (
 	"context"
 	"errors"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -24,14 +25,51 @@ import (
 	"github.com/ReneP92/changeport/internal/provisioning"
 )
 
-// fakeSlots reports the slot a test sets, and records what it was asked.
+// fakeSlots reports the slot and checks a test sets, and records what it
+// was asked.
 type fakeSlots struct {
 	state   cdc.SlotState
 	err     error
 	dropErr error
+	report  cdc.Report
 	calls   []string
 	// last is the connection of the last call.
 	last cdc.Connection
+}
+
+func (f *fakeSlots) Check(_ context.Context, target cdc.Target) cdc.Report {
+	tables := make([]string, len(target.Tables))
+	for i, t := range target.Tables {
+		tables[i] = t.String()
+	}
+	f.calls = append(f.calls, "check "+strings.Join(tables, ","))
+	return f.report
+}
+
+// fakeSnapshots records signals and returns the notifications a test sets.
+type fakeSnapshots struct {
+	signals       [][]string
+	notifications []Notification
+	signalErr     error
+}
+
+func (f *fakeSnapshots) Signal(_ context.Context, _ *v1alpha1.PostgresSource, _ cdc.Names, tables []cdc.Table) error {
+	if f.signalErr != nil {
+		return f.signalErr
+	}
+	names := make([]string, len(tables))
+	for i, t := range tables {
+		names[i] = t.String()
+	}
+	f.signals = append(f.signals, names)
+	return nil
+}
+
+func (f *fakeSnapshots) Notifications(_ context.Context, _ *v1alpha1.PostgresSource, _ cdc.Names, from int64) ([]Notification, int64, error) {
+	if from >= int64(len(f.notifications)) {
+		return nil, from, nil
+	}
+	return f.notifications[from:], int64(len(f.notifications)), nil
 }
 
 func (f *fakeSlots) Slot(_ context.Context, connection cdc.Connection, slot string) (cdc.SlotState, error) {
@@ -94,7 +132,7 @@ func newSourceReconciler(t *testing.T, slots *fakeSlots, objects ...client.Objec
 	}
 	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(objects...).WithStatusSubresource(&v1alpha1.PostgresSource{}).Build()
 	return &PostgresSourceReconciler{
-		Client: c, Slots: slots, PollInterval: pollInterval, SlotInterval: time.Minute,
+		Client: c, Database: slots, Snapshots: &fakeSnapshots{}, PollInterval: pollInterval, SlotInterval: time.Minute,
 		Now: func() time.Time { return testNow },
 	}, c
 }
@@ -237,6 +275,8 @@ func TestSourceReportsItsConnector(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			source := handedOver()
 			source.Spec.State = test.state
+			// Every table's existing rows are copied already.
+			source.Status.Tables = doneTables(source)
 			objects := []client.Object{source, sourcesSecret()}
 			if test.connector != nil {
 				objects = append(objects, test.connector)
@@ -428,5 +468,186 @@ func TestSourceWithoutItsSlotYet(t *testing.T) {
 	}
 	if len(slots.calls) != 2 {
 		t.Errorf("calls = %v, want the slot read on each pass until it exists", slots.calls)
+	}
+}
+
+func doneTables(source *v1alpha1.PostgresSource) []v1alpha1.TableStatus {
+	var tables []v1alpha1.TableStatus
+	for _, t := range source.Spec.Tables {
+		tables = append(tables, v1alpha1.TableStatus{
+			Schema: t.Schema, Name: t.Name, Snapshot: v1alpha1.SnapshotDone,
+			Topic: cdc.TopicName(source.Name, cdc.Table{Schema: t.Schema, Name: t.Name}),
+		})
+	}
+	return tables
+}
+
+// runningConnector is the source's connector running with its tables, as
+// Strimzi reports it once Kafka Connect has its configuration.
+func runningConnector(source *v1alpha1.PostgresSource) *unstructured.Unstructured {
+	connector := connectorWith("RUNNING", map[string]any{"id": int64(0), "state": "RUNNING"})
+	tables := make([]cdc.Table, len(source.Spec.Tables))
+	for i, t := range source.Spec.Tables {
+		tables[i] = cdc.Table{Schema: t.Schema, Name: t.Name}
+	}
+	connector.Object["spec"] = map[string]any{"config": map[string]any{"table.include.list": cdc.TableIncludeList(tables)}}
+	return connector
+}
+
+func TestSourceAsksForEachSnapshotOnce(t *testing.T) {
+	source := handedOver()
+	database := &fakeSlots{report: cdc.Report{Results: []cdc.Result{{Check: cdc.Published, Status: cdc.Pass}}}}
+	r, c := newSourceReconciler(t, database, source, sourcesSecret(), runningConnector(source))
+	snapshots := &fakeSnapshots{}
+	r.Snapshots = snapshots
+
+	// One table at a time, after its checks.
+	result := reconcileSource(t, r)
+	if want := [][]string{{"public.orders"}}; !slices.EqualFunc(snapshots.signals, want, slices.Equal) {
+		t.Errorf("signals = %v, want %v", snapshots.signals, want)
+	}
+	if !slices.Contains(database.calls, "check public.orders") {
+		t.Errorf("calls = %v, want the table checked first", database.calls)
+	}
+	got := getSource(t, c)
+	ready := sourceReady(t, got)
+	if got.Status.Phase != v1alpha1.PhaseSnapshotting || ready.Status != metav1.ConditionTrue ||
+		ready.Message != "Copying the existing rows of 2 of 2 tables, while changes stream." || result.RequeueAfter != pollInterval {
+		t.Errorf("status = %s, Ready %s %q, requeue %v", got.Status.Phase, ready.Status, ready.Message, result.RequeueAfter)
+	}
+	if got.Status.Tables[0].Snapshot != v1alpha1.SnapshotRunning || got.Status.Tables[1].Snapshot != v1alpha1.SnapshotPending || got.Status.Tables[1].Topic != "app.Sales.Order_Lines" {
+		t.Errorf("tables = %+v", got.Status.Tables)
+	}
+
+	// The status update after the signal is lost: the tables read pending
+	// again, but no signal is sent while the first may still run.
+	got.Status.Tables = nil
+	if err := c.Status().Update(t.Context(), got); err != nil {
+		t.Fatal(err)
+	}
+	reconcileSource(t, r)
+	if len(snapshots.signals) != 1 {
+		t.Errorf("signals = %v, want one", snapshots.signals)
+	}
+
+	// Once the first table is copied, the second is asked for.
+	snapshots.notifications = []Notification{
+		note("STARTED", map[string]string{"data_collections": "public.orders"}),
+		note("TABLE_SCAN_COMPLETED", map[string]string{"scanned_collection": "public.orders", "status": "SUCCEEDED", "total_rows_scanned": "1000"}),
+	}
+	got = getSource(t, c)
+	got.Status.Tables[0].Snapshot = v1alpha1.SnapshotRunning
+	if err := c.Status().Update(t.Context(), got); err != nil {
+		t.Fatal(err)
+	}
+	reconcileSource(t, r)
+	if want := [][]string{{"public.orders"}, {"Sales.Order Lines"}}; !slices.EqualFunc(snapshots.signals, want, slices.Equal) {
+		t.Errorf("signals = %v, want %v", snapshots.signals, want)
+	}
+
+	// Once both are copied, the source streams.
+	snapshots.notifications = append(snapshots.notifications,
+		note("TABLE_SCAN_COMPLETED", map[string]string{"scanned_collection": "Sales.Order Lines", "status": "SUCCEEDED", "total_rows_scanned": "7"}))
+	reconcileSource(t, r)
+	got = getSource(t, c)
+	if got.Status.Phase != v1alpha1.PhaseStreaming || got.Status.NotificationsOffset != 3 || got.Status.Tables[0].RowsCopied != 1000 || got.Status.Tables[1].RowsCopied != 7 {
+		t.Errorf("status = %s, offset %d, tables %+v", got.Status.Phase, got.Status.NotificationsOffset, got.Status.Tables)
+	}
+}
+
+// A table that fails its checks waits, and does not hold up the others.
+func TestSourceSnapshotOfATableThatFailsItsChecks(t *testing.T) {
+	source := handedOver()
+	database := &fakeSlots{}
+	r, c := newSourceReconciler(t, database, source, sourcesSecret(), runningConnector(source))
+	snapshots := &fakeSnapshots{}
+	r.Snapshots = snapshots
+	database.report = cdc.Report{Results: []cdc.Result{{Check: cdc.Published, Status: cdc.Fail, Message: "The publication changeport_app_x1y2z3 does not publish public.orders. Run the SQL that adds them."}}}
+	failFirst := &firstFails{fakeSlots: database}
+	r.Database = failFirst
+	reconcileSource(t, r)
+	if want := [][]string{{"Sales.Order Lines"}}; !slices.EqualFunc(snapshots.signals, want, slices.Equal) {
+		t.Errorf("signals = %v, want %v", snapshots.signals, want)
+	}
+	got := getSource(t, c)
+	if got.Status.Tables[0].Snapshot != v1alpha1.SnapshotPending || !strings.HasPrefix(got.Status.Tables[0].Message, "The publication changeport_app_x1y2z3 does not publish public.orders.") {
+		t.Errorf("tables = %+v", got.Status.Tables)
+	}
+	if ready := sourceReady(t, got); !strings.Contains(ready.Message, "public.orders waits: The publication") {
+		t.Errorf("Ready = %q, want what the table waits for", ready.Message)
+	}
+}
+
+// firstFails fails the checks of public.orders only.
+type firstFails struct{ *fakeSlots }
+
+func (f *firstFails) Check(ctx context.Context, target cdc.Target) cdc.Report {
+	f.fakeSlots.Check(ctx, target)
+	if target.Tables[0].Name == "orders" {
+		return f.report
+	}
+	return cdc.Report{}
+}
+
+func TestSourceSnapshotWaitsForTheChecks(t *testing.T) {
+	source := handedOver()
+	database := &fakeSlots{report: cdc.Report{Results: []cdc.Result{
+		{Check: cdc.Published, Status: cdc.Fail, Message: "The publication changeport_app_x1y2z3 does not publish Sales.Order Lines. Run the SQL that adds them."},
+	}}}
+	r, c := newSourceReconciler(t, database, source, sourcesSecret(), runningConnector(source))
+	snapshots := &fakeSnapshots{}
+	r.Snapshots = snapshots
+	reconcileSource(t, r)
+	if len(snapshots.signals) != 0 {
+		t.Errorf("signals = %v before the checks pass", snapshots.signals)
+	}
+	got := getSource(t, c)
+	if got.Status.Tables[0].Snapshot != v1alpha1.SnapshotPending || got.Status.Tables[0].Message != "The publication changeport_app_x1y2z3 does not publish Sales.Order Lines. Run the SQL that adds them." {
+		t.Errorf("tables = %+v", got.Status.Tables)
+	}
+	if ready := sourceReady(t, got); !strings.Contains(ready.Message, "public.orders waits: The publication") {
+		t.Errorf("Ready = %q, want what the tables wait for", ready.Message)
+	}
+
+	// Once the customer runs the SQL, the next pass asks for a snapshot.
+	database.report = cdc.Report{}
+	reconcileSource(t, r)
+	if want := [][]string{{"public.orders"}}; !slices.EqualFunc(snapshots.signals, want, slices.Equal) {
+		t.Errorf("signals = %v once the checks pass, want %v", snapshots.signals, want)
+	}
+}
+
+// A new table is only snapshotted once Kafka Connect runs the connector with
+// it.
+func TestSourceSnapshotWaitsForTheConnectorsTables(t *testing.T) {
+	source := handedOver()
+	connector := runningConnector(source)
+	source.Spec.Tables = append(source.Spec.Tables, v1alpha1.PostgresTable{Schema: "public", Name: "invoices"})
+	source.Status.Tables = doneTables(source)[:2]
+	r, c := newSourceReconciler(t, &fakeSlots{}, source, sourcesSecret(), connector)
+	snapshots := &fakeSnapshots{}
+	r.Snapshots = snapshots
+	reconcileSource(t, r)
+	if len(snapshots.signals) != 0 {
+		t.Errorf("signals = %v before the connector has the new table", snapshots.signals)
+	}
+	if got := getSource(t, c); got.Status.Tables[2].Snapshot != v1alpha1.SnapshotPending || got.Status.Phase != v1alpha1.PhaseSnapshotting {
+		t.Errorf("status = %s %+v", got.Status.Phase, got.Status.Tables)
+	}
+
+	// With the new configuration, only the new table is snapshotted.
+	updated := runningConnector(source)
+	current := &unstructured.Unstructured{}
+	current.SetGroupVersionKind(kafkaConnectorGVK)
+	if err := c.Get(t.Context(), types.NamespacedName{Namespace: sourcesNamespaceName, Name: "app-x1y2z3"}, current); err != nil {
+		t.Fatal(err)
+	}
+	updated.SetResourceVersion(current.GetResourceVersion())
+	if err := c.Update(t.Context(), updated); err != nil {
+		t.Fatal(err)
+	}
+	reconcileSource(t, r)
+	if want := [][]string{{"public.invoices"}}; !slices.EqualFunc(snapshots.signals, want, slices.Equal) {
+		t.Errorf("signals = %v, want %v", snapshots.signals, want)
 	}
 }

@@ -23,7 +23,8 @@ it are in [PROJECT_PLAN.md](PROJECT_PLAN.md).
    outbound IP addresses to allowlist. On Neon, the role is created in Neon's
    console instead, and the customer enters the password Neon shows.
 3. **Pick tables:** chooses the tables to sync. Tables without a primary key
-   or a unique index as replica identity are listed but cannot be picked, with
+   of integers, numeric, text, uuid or date columns are listed but cannot be
+   picked, with
    the reason.
 4. **Run our second SQL:** grants read access to those tables and creates a
    publication for them.
@@ -148,7 +149,36 @@ include, so `Ready` keeps meaning that clients can connect.
   - Snapshots take no locks and write nothing to the customer's database.
   - They resume where they stopped, and do not hold a transaction open long
     enough to hold back vacuum.
-  - Snapshot requests and progress travel through Kafka topics.
+  - Snapshot requests and progress travel through Kafka topics, one pair
+    per source: `changeport.cdc.signals.<source>` and
+    `changeport.cdc.notifications.<source>`.
+    - The template creates them as KafkaTopics.
+    - They say `remote.storage.enable: "true"`, so the Topic Operator agrees
+      with the Kafka agent, which tiers every topic it can.
+  - The source controller asks for each table's snapshot once, one table at
+    a time: when one table of a snapshot fails, Debezium drops the rest.
+    - It waits until the connector runs with the table, and the database
+      checks pass for it: the publication has it, and the role may read it.
+      Until then the table waits, and its status says why.
+    - Debezium copies a table once per signal, even a signal sent before a
+      restart. So the controller sends a table's signal once, and remembers
+      it for ten minutes in case recording that in the status fails.
+    - It follows the progress in the notification topic, decoding the
+      notifications' Avro with their schemas from the registry.
+    - Each table's status shows its snapshot, Pending, Running, Done or
+      Failed, and the rows copied of its rows when the snapshot started.
+    - Each notification sets a state rather than adding to one, so reading
+      notifications again changes nothing.
+  - Rows arrive at least once. While transactions commit during a
+    read-only snapshot, Debezium reads the current chunk again, so a row may
+    arrive twice. Consumers that upsert by key, as a warehouse sink does,
+    see each row once; the status counts the table's rows, not reads.
+  - While a table is being copied, the source is `Snapshotting`. Changes
+    stream meanwhile, so `Ready` stays True.
+  - **Adding a table:** the connector restarts with it, and only the new
+    table is copied.
+  - **Removing a table:** it stops streaming, and its topic stays, as an
+    ordinary topic.
 - **Heartbeat:** every minute, a transactional logical message with no table
   (`pg_logical_emit_message(true, 'changeport-heartbeat', '')`). It lets the
   slot advance when the published tables are idle while the rest of the
@@ -281,8 +311,17 @@ it failed, what to do. The checks:
   passes with a warning), and a free slot and WAL sender;
 - a replication connection (`IDENTIFY_SYSTEM`), which catches a missing
   `pg_hba.conf` entry;
-- the chosen tables: each exists, has a primary key or a unique replica
-  identity, and is readable by the role;
+- the chosen tables: each exists, has a primary key Changeport can copy it by
+  (see below), and is readable by the role;
+- the chosen tables' keys, as the table picker shows them:
+  - Debezium keys a table's messages by its primary key, so a unique index as
+    replica identity is not enough;
+  - its read-only snapshots page through a table by the key, comparing it
+    with the last chunk's key, which they bind as text or a number. Postgres
+    refuses that for timestamps and enums, so only keys of integers,
+    numeric, text, varchar, char, uuid and date work. Tables partitioned by
+    time usually have a timestamp in their key, and wait for a later
+    version. These types were each tried on kind;
 - the publication: inserts, updates and deletes, partitioned tables published
   as themselves, and every chosen table in it;
 - `max_slot_wal_keep_size`, which only warns.
@@ -378,8 +417,11 @@ of this design with the Connect image, Apicurio 3.3.3 and Postgres 17:
   - The slot's health is reported in the source's status.
   - A stopped source lets go of its slot, and catches up once it runs again.
   - Deleting the source drops its slot and its credentials.
-  - Still to come: the snapshot and adding a table (#107), and decoding
-    through the registry gateway (#108).
+  - Before any change, each table's existing rows arrive exactly once.
+  - An added table, a partitioned one, arrives in full, and no other table
+    is copied again.
+  - A removed table's changes no longer reach its topic.
+  - Still to come: decoding through the registry gateway (#108).
 - **A Playwright spec** runs the console's wizard against the same database.
 
 ## Steps
