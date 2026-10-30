@@ -82,7 +82,7 @@ func TestKindImagesMatchDevScripts(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for variable, image := range map[string]string{"KAFKA_IMAGE": KindPlatform.KafkaImage, "AGENT_IMAGE": KindPlatform.AgentImage, "CONNECT_IMAGE": KindPlatform.ConnectImage} {
+	for variable, image := range map[string]string{"KAFKA_IMAGE": KindPlatform.KafkaImage, "AGENT_IMAGE": KindPlatform.AgentImage, "CONNECT_IMAGE": KindPlatform.ConnectImage, "REGISTRY_GATEWAY_IMAGE": KindPlatform.RegistryGatewayImage} {
 		if !strings.Contains(string(lib), "\n"+variable+"="+image+"\n") {
 			t.Errorf("hack/lib.sh does not set %s=%s, the kind platform's image", variable, image)
 		}

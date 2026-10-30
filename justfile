@@ -94,6 +94,11 @@ kafka-image:
 connect-image:
     @source hack/lib.sh && build_connect_image
 
+# Build the registry gateway image (images/registry-gateway) for this machine as changeport/registry-gateway:local
+[group('Images')]
+registry-gateway-image:
+    @source hack/lib.sh && build_registry_gateway_image
+
 # Build the Kafka agent image (images/agent) for this machine as changeport/agent:local
 [group('Images')]
 agent-image:

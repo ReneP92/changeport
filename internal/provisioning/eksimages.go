@@ -26,6 +26,9 @@ type EKSImages struct {
 	Connect string `json:"connect"`
 	// Agent is the Kafka agent's image; empty means no agent.
 	Agent string `json:"agent"`
+	// RegistryGateway is the registry gateway's image, through which
+	// customers reach their schema registry.
+	RegistryGateway string `json:"registry-gateway"`
 	// Provisioner and Console are the platform components' images, which the
 	// EKS overlays set (deploy/components/eks-images).
 	Provisioner string `json:"provisioner"`
@@ -33,7 +36,7 @@ type EKSImages struct {
 }
 
 // ecrImage is an image in the platform's ECR registry, by digest.
-var ecrImage = regexp.MustCompile(`^[0-9]{12}\.dkr\.ecr\.[a-z0-9-]+\.amazonaws\.com/changeport/(kafka|connect|agent|provisioner|console)@sha256:[0-9a-f]{64}$`)
+var ecrImage = regexp.MustCompile(`^[0-9]{12}\.dkr\.ecr\.[a-z0-9-]+\.amazonaws\.com/changeport/(kafka|connect|agent|registry-gateway|provisioner|console)@sha256:[0-9a-f]{64}$`)
 
 // ParseEKSImages parses and checks a list of images like eks-images.json:
 // every image is empty or its own repository's image by digest.
@@ -43,11 +46,12 @@ func ParseEKSImages(data []byte) (EKSImages, error) {
 		return EKSImages{}, fmt.Errorf("parse EKS images: %w", err)
 	}
 	for name, image := range map[string]string{
-		"kafka":       images.Kafka,
-		"connect":     images.Connect,
-		"agent":       images.Agent,
-		"provisioner": images.Provisioner,
-		"console":     images.Console,
+		"kafka":            images.Kafka,
+		"connect":          images.Connect,
+		"agent":            images.Agent,
+		"registry-gateway": images.RegistryGateway,
+		"provisioner":      images.Provisioner,
+		"console":          images.Console,
 	} {
 		if image == "" {
 			continue

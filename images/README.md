@@ -24,6 +24,14 @@ just kafka-image-test
 just agent-image
 ```
 
+- `registry-gateway/`: the registry gateway (`cmd/registry-gateway`), through
+  which a customer's clients reach their schema registry from the internet,
+  with their Kafka credentials (docs/cdc.md). Built like the agent.
+
+```bash
+just registry-gateway-image
+```
+
 `just kafka-image` builds `changeport/kafka:local` for this machine, and
 `just dev-up` builds it and loads it into kind. `just kafka-image-test` starts
 a single broker from it with tiered storage configured and creates a tiered

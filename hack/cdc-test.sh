@@ -5,7 +5,9 @@
 # the password Secret and the PostgresSource as the console does, and waits
 # for the source to copy its tables' existing rows and stream. Inserts,
 # updates and deletes then reach the tables' topics, deletes with a
-# tombstone; a stopped source keeps its slot and catches up once it runs
+# tombstone, and a Confluent client decodes them through the registry
+# gateway, which refuses changes to the source's schemas and wrong
+# credentials; a stopped source keeps its slot and catches up once it runs
 # again; an added table's rows arrive, and only its; a removed table stops
 # streaming and keeps its topic; and deleting the source drops its slot and
 # its credentials.
@@ -182,6 +184,86 @@ count=$(message_count "$source_name.public.orders")
 partitions=$(kafka kafka-topics.sh --command-config /config/client.properties --describe --topic "$customers_topic" 2>/dev/null | sed -n 1p)
 if ! grep -q "PartitionCount: 1" <<<"$partitions" || ! grep -q "retention.ms=3600000" <<<"$partitions"; then
   die "$customers_topic is not one partition with the source's retention: $partitions"
+fi
+
+log "A client decodes the messages through the registry gateway, with the customer's credentials"
+registry_host="registry.$customer.kafka.changeport.test"
+for _ in $(seq 60); do
+  gateway_address=$(kubectl -n "$namespace" get service changeport-registry-gateway -o jsonpath='{.status.loadBalancer.ingress[0].ip}' 2>/dev/null)
+  [[ -n $gateway_address ]] && break
+  sleep 2
+done
+[[ -n $gateway_address ]] || die "the registry gateway's load balancer has no address"
+# The local CA, from the truststore lines of client.properties.
+sed -n '/BEGIN CERTIFICATE/,/END CERTIFICATE/p' "$work/client.properties" |
+  sed -E 's/^ssl\.truststore\.certificates=//; s/^ +//; s/ \\$//' >"$work/ca.crt"
+cat >"$work/decode.py" <<'PYTHON'
+# Reads a topic as a customer's consumer would, decoding its Avro through the
+# registry gateway, then checks what the gateway refuses.
+import json, os, sys, urllib.error, urllib.request, base64, ssl
+from confluent_kafka import Consumer, TopicPartition
+from confluent_kafka.schema_registry import SchemaRegistryClient
+from confluent_kafka.schema_registry.avro import AvroDeserializer
+from confluent_kafka.serialization import MessageField, SerializationContext
+
+registry_url, user, password, topic = os.environ["REGISTRY"], os.environ["KAFKA_USERNAME"], os.environ["KAFKA_PASSWORD"], os.environ["TOPIC"]
+registry = SchemaRegistryClient({"url": registry_url, "basic.auth.user.info": f"{user}:{password}", "ssl.ca.location": "/config/ca.crt"})
+deserialize = AvroDeserializer(registry)
+consumer = Consumer({
+    "bootstrap.servers": os.environ["KAFKA_BOOTSTRAP"], "security.protocol": "SASL_SSL", "sasl.mechanisms": "SCRAM-SHA-512",
+    "sasl.username": user, "sasl.password": password, "ssl.ca.location": "/config/ca.crt",
+    "group.id": "cdc-test-unused", "enable.auto.commit": False,
+})
+low, high = consumer.get_watermark_offsets(TopicPartition(topic, 0), timeout=30)
+consumer.assign([TopicPartition(topic, 0, low)])
+read = 0
+while read < high - low:
+    message = consumer.poll(30)
+    if message is None:
+        sys.exit(f"read {read} of {high - low} messages")
+    if message.error():
+        sys.exit(str(message.error()))
+    read += 1
+    key = deserialize(message.key(), SerializationContext(topic, MessageField.KEY))
+    value = deserialize(message.value(), SerializationContext(topic, MessageField.VALUE)) if message.value() else None
+    print(json.dumps({"key": key, "value": value}, default=str))
+consumer.close()
+
+def call(method, path, credentials):
+    request = urllib.request.Request(registry_url + path, method=method)
+    request.add_header("Authorization", "Basic " + base64.b64encode(credentials.encode()).decode())
+    try:
+        with urllib.request.urlopen(request, context=ssl.create_default_context(cafile="/config/ca.crt")) as response:
+            return response.status
+    except urllib.error.HTTPError as error:
+        return error.code
+
+subject = topic + "-value"
+checks = [
+    ("deleting a source's subject", call("DELETE", f"/subjects/{subject}", f"{user}:{password}"), 403),
+    ("changing its compatibility", call("PUT", f"/config/{subject}", f"{user}:{password}"), 403),
+    ("reading it", call("GET", f"/subjects/{subject}/versions/latest", f"{user}:{password}"), 200),
+    ("a wrong password", call("GET", "/subjects", f"{user}:wrong"), 401),
+]
+# Ten failures lock the client out for a while, even with the right password.
+for _ in range(9):
+    call("GET", "/subjects", f"{user}:wrong")
+checks.append(("the right password after ten failures", call("GET", "/subjects", f"{user}:{password}"), 429))
+for name, got, want in checks:
+    if got != want:
+        sys.exit(f"{name}: the gateway answered {got}, want {want}")
+print("GATEWAY CHECKS PASSED")
+PYTHON
+username=$(sed -nE 's/.*username="([^"]+)".*/\1/p' "$work/client.properties")
+kafka_password=$(sed -nE 's/.*password="([^"]+)".*/\1/p' "$work/client.properties")
+decoded=$(docker run "${KAFKA_CLIENT[@]}" --add-host "$registry_host:$gateway_address" \
+  -e "REGISTRY=https://$registry_host" -e "KAFKA_BOOTSTRAP=$bootstrap" -e "KAFKA_USERNAME=$username" -e "KAFKA_PASSWORD=$kafka_password" \
+  -e "TOPIC=$customers_topic" "$PYTHON_IMAGE" sh -c \
+  "pip install -q --root-user-action=ignore --disable-pip-version-check 'confluent-kafka[avro]==$CONFLUENT_KAFKA_PYTHON' && python /config/decode.py" 2>&1) ||
+  die "decoding through the registry gateway failed:"$'\n'"$decoded"
+grep -q "GATEWAY CHECKS PASSED" <<<"$decoded" || die "the registry gateway's checks did not finish:"$'\n'"$decoded"
+if ! grep -q "\"name\": \"$marker-updated\"" <<<"$decoded" || ! grep -q "\"value\": null" <<<"$decoded"; then
+  die "the decoded messages lack the update or the tombstone:"$'\n'"$decoded"
 fi
 
 log "The slot's health is in the source's status"

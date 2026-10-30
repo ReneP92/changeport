@@ -964,9 +964,9 @@ spec:
               - 203.0.113.0/24
               - 224.0.0.0/3
 ---
-# Only the Connect worker reaches the registry, and the source controller,
-# which decodes the snapshot notifications with its schemas; the registry
-# reaches only DNS and the brokers.
+# Only the Connect worker reaches the registry, the source controller, which
+# decodes the snapshot notifications with its schemas, and the registry
+# gateway; the registry reaches only DNS and the brokers.
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
@@ -984,6 +984,7 @@ spec:
         - podSelector: {matchLabels: {strimzi.io/cluster: changeport-connect, strimzi.io/kind: KafkaConnect}}
         - namespaceSelector: {matchLabels: {kubernetes.io/metadata.name: changeport}}
           podSelector: {matchLabels: {app.kubernetes.io/name: changeport-provisioner}}
+        - podSelector: {matchLabels: {app.kubernetes.io/name: changeport-registry-gateway}}
       ports:
         - {protocol: TCP, port: 8080}
   egress:
@@ -994,3 +995,143 @@ spec:
         - podSelector: {matchLabels: {strimzi.io/cluster: "acme", strimzi.io/kind: Kafka}}
       ports:
         - {protocol: TCP, port: 9093}
+---
+# The registry gateway (cmd/registry-gateway): customers' clients reach their
+# schema registry through it from the internet, at registry.acme.kafka.changeport.invalid, over TLS
+# on the cluster's certificate, with their Kafka credentials. It refuses
+# changes to the sources' schemas.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: changeport-registry-gateway
+  namespace: customer-acme
+  labels:
+    app.kubernetes.io/name: changeport-registry-gateway
+    changeport.io/part: cdc
+    app.kubernetes.io/managed-by: changeport-provisioner
+    changeport.io/tenant: "acme"
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: changeport-registry-gateway
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: changeport-registry-gateway
+        changeport.io/tenant: "acme"
+    spec:
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
+      affinity:
+        nodeAffinity: {requiredDuringSchedulingIgnoredDuringExecution: {nodeSelectorTerms: [{matchExpressions: [{key: changeport.io/tenant, operator: In, values: ["acme"]}]}]}}
+        podAntiAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            - topologyKey: kubernetes.io/hostname
+              labelSelector: {matchLabels: {strimzi.io/cluster: "acme", strimzi.io/pool-name: dual-role}}
+      tolerations: [{key: changeport.io/tenant, operator: Equal, value: "acme", effect: NoSchedule}]
+      containers:
+        - name: gateway
+          image: 123456789012.dkr.ecr.us-east-1.amazonaws.com/changeport/registry-gateway@sha256:fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210
+          args:
+            - "-upstream=http://changeport-registry:8080/apis/ccompat/v7"
+            - "-username=admin"
+            - "-sources=app,billing"
+          ports:
+            - name: https
+              containerPort: 8443
+            - name: health
+              containerPort: 8080
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: health
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: health
+            periodSeconds: 30
+          resources:
+            requests:
+              cpu: 10m
+              memory: 32Mi
+            limits:
+              memory: 64Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: [ALL]
+          volumeMounts:
+            - name: kafka-user
+              mountPath: /etc/changeport/kafka-user
+              readOnly: true
+            - name: tls
+              mountPath: /etc/changeport/tls
+              readOnly: true
+      volumes:
+        # The customer's Kafka user's password, which the gateway checks.
+        - name: kafka-user
+          secret:
+            secretName: admin
+            items: [{key: password, path: password}]
+        # The public listener's certificate, whose wildcard name covers the
+        # gateway's.
+        - name: tls
+          secret:
+            secretName: external-listener-tls
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: changeport-registry-gateway
+  namespace: customer-acme
+  labels:
+    changeport.io/part: cdc
+    app.kubernetes.io/managed-by: changeport-provisioner
+    changeport.io/tenant: "acme"
+  annotations:
+    external-dns.alpha.kubernetes.io/hostname: "registry.acme.kafka.changeport.invalid"
+    service.beta.kubernetes.io/aws-load-balancer-listener-attributes.TCP-9094: "tcp.idle_timeout.seconds=900"
+    service.beta.kubernetes.io/aws-load-balancer-nlb-target-type: "ip"
+    service.beta.kubernetes.io/aws-load-balancer-scheme: "internet-facing"
+    service.beta.kubernetes.io/aws-load-balancer-target-group-attributes: "preserve_client_ip.enabled=true"
+spec:
+  type: LoadBalancer
+  loadBalancerClass: eks.amazonaws.com/nlb
+  selector:
+    app.kubernetes.io/name: changeport-registry-gateway
+  ports:
+    - name: https
+      port: 443
+      targetPort: https
+---
+# The gateway takes customers' connections from anywhere, and reaches only
+# DNS and the registry.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: changeport-registry-gateway
+  namespace: customer-acme
+  labels:
+    changeport.io/part: cdc
+    app.kubernetes.io/managed-by: changeport-provisioner
+    changeport.io/tenant: "acme"
+spec:
+  podSelector: {matchLabels: {app.kubernetes.io/name: changeport-registry-gateway}}
+  policyTypes: [Ingress, Egress]
+  ingress:
+    - ports:
+        - {protocol: TCP, port: 8443}
+  egress:
+    - ports:
+        - {protocol: UDP, port: 53}
+        - {protocol: TCP, port: 53}
+    - to:
+        - podSelector: {matchLabels: {app.kubernetes.io/name: changeport-registry}}
+      ports:
+        - {protocol: TCP, port: 8080}

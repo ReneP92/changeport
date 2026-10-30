@@ -31,6 +31,9 @@ CONNECT_IMAGE=changeport/connect:local
 # The Kafka agent's image from images/agent, as named by
 # internal/provisioning.KindPlatform. dev-up builds it and loads it into kind.
 AGENT_IMAGE=changeport/agent:local
+# The registry gateway's image from images/registry-gateway, as named by
+# internal/provisioning.KindPlatform. dev-up builds it and loads it into kind.
+REGISTRY_GATEWAY_IMAGE=changeport/registry-gateway:local
 # The provisioner's image from images/provisioner, as named by
 # deploy/base/provisioner. dev-up builds it and loads it into kind.
 PROVISIONER_IMAGE=changeport/provisioner:local
@@ -71,6 +74,14 @@ KIND_PRELOAD_IMAGES=(
   postgres:17.11
   quay.io/apicurio/apicurio-registry:3.3.3
 )
+
+# The Python image and Confluent's Python client that tests run clients with
+# as customers would: the connection guide's example, and decoding a CDC
+# source's Avro through the registry gateway.
+# shellcheck disable=SC2034 # used by the tests that source this file
+PYTHON_IMAGE=python:3.13-slim@sha256:d98cc29d3266e535dd9da1099688d9cb3ca4753813571e071763d17725460962
+# shellcheck disable=SC2034
+CONFLUENT_KAFKA_PYTHON=2.16.0
 
 CLUSTER_NAME=${CLUSTER_NAME:-changeport}
 KUBE_CONTEXT="kind-${CLUSTER_NAME}"
@@ -296,6 +307,13 @@ build_agent_image() {
   tag_content "$AGENT_IMAGE"
 }
 
+build_registry_gateway_image() {
+  log "Building $REGISTRY_GATEWAY_IMAGE"
+  # shellcheck disable=SC2046 # the cache arguments are separate words
+  retry_registry docker buildx build --load --quiet $(build_cache_args registry-gateway) -t "$REGISTRY_GATEWAY_IMAGE" -f images/registry-gateway/Dockerfile . >/dev/null
+  tag_content "$REGISTRY_GATEWAY_IMAGE"
+}
+
 build_provisioner_image() {
   log "Building $PROVISIONER_IMAGE"
   # shellcheck disable=SC2046 # the cache arguments are separate words
@@ -315,16 +333,17 @@ KIND_LOCAL_OVERLAY="$ROOT/deploy/overlays/kind-local"
 
 # Writes KIND_LOCAL_OVERLAY: the kind overlay with the locally built images.
 # The provisioner and the console run the content tags of their images, and
-# the provisioner gives customers those of the Kafka, agent and Connect
-# images, so that every pod rolls when its image is rebuilt.
+# the provisioner gives customers those of the Kafka, agent, Connect and
+# registry gateway images, so that every pod rolls when its image is rebuilt.
 kind_local_overlay() {
-  local image kafka agent connect provisioner console
-  for image in "$KAFKA_IMAGE" "$AGENT_IMAGE" "$CONNECT_IMAGE" "$PROVISIONER_IMAGE" "$CONSOLE_IMAGE"; do
+  local image kafka agent connect gateway provisioner console
+  for image in "$KAFKA_IMAGE" "$AGENT_IMAGE" "$CONNECT_IMAGE" "$REGISTRY_GATEWAY_IMAGE" "$PROVISIONER_IMAGE" "$CONSOLE_IMAGE"; do
     docker image inspect "$image" >/dev/null 2>&1 || die "$image has not been built; run just dev-up"
   done
   kafka=$(content_tag "$KAFKA_IMAGE")
   agent=$(content_tag "$AGENT_IMAGE")
   connect=$(content_tag "$CONNECT_IMAGE")
+  gateway=$(content_tag "$REGISTRY_GATEWAY_IMAGE")
   provisioner=$(content_tag "$PROVISIONER_IMAGE")
   console=$(content_tag "$CONSOLE_IMAGE")
   mkdir -p "$KIND_LOCAL_OVERLAY"
@@ -353,6 +372,9 @@ patches:
       - op: add
         path: /spec/template/spec/containers/0/args/-
         value: -connect-image=$connect
+      - op: add
+        path: /spec/template/spec/containers/0/args/-
+        value: -registry-gateway-image=$gateway
 KUSTOMIZATION
 }
 
@@ -362,7 +384,8 @@ cluster_exists() { kind get clusters 2>/dev/null | grep -x "$CLUSTER_NAME" >/dev
 # existing one still matches it: three zone-labelled workers on the pinned
 # Kubernetes version. Then preloads KIND_PRELOAD_IMAGES into its workers, and
 # the content tags of KAFKA_IMAGE, AGENT_IMAGE, CONNECT_IMAGE,
-# PROVISIONER_IMAGE and CONSOLE_IMAGE once they have been built.
+# REGISTRY_GATEWAY_IMAGE, PROVISIONER_IMAGE and CONSOLE_IMAGE once they have
+# been built.
 ensure_kind_cluster() {
   if cluster_exists; then
     check_kind_cluster
@@ -383,7 +406,7 @@ ensure_kind_cluster() {
   log "Loading images into the kind workers"
   kind_load "$workers" "${KIND_PRELOAD_IMAGES[@]}"
   local image
-  for image in "$KAFKA_IMAGE" "$AGENT_IMAGE" "$CONNECT_IMAGE" "$PROVISIONER_IMAGE" "$CONSOLE_IMAGE"; do
+  for image in "$KAFKA_IMAGE" "$AGENT_IMAGE" "$CONNECT_IMAGE" "$REGISTRY_GATEWAY_IMAGE" "$PROVISIONER_IMAGE" "$CONSOLE_IMAGE"; do
     if docker image inspect "$image" >/dev/null 2>&1; then
       kind_load "$workers" "$(content_tag "$image")"
       prune_node_images "$image" "$workers"

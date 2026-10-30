@@ -2,6 +2,7 @@
   "kafka": "",
   "connect": "",
   "agent": "",
+  "registry-gateway": "",
   "provisioner": "",
   "console": ""
 }

@@ -112,6 +112,7 @@ type platformFlags struct {
 	kafkaImage   string
 	agentImage   string
 	connectImage string
+	gatewayImage string
 }
 
 func (p *platformFlags) register(fs *flag.FlagSet) {
@@ -119,6 +120,7 @@ func (p *platformFlags) register(fs *flag.FlagSet) {
 	fs.StringVar(&p.kafkaImage, "kafka-image", "", "broker image to use instead of the platform's")
 	fs.StringVar(&p.agentImage, "agent-image", "", "Kafka agent image to use instead of the platform's")
 	fs.StringVar(&p.connectImage, "connect-image", "", "Kafka Connect image to use instead of the platform's")
+	fs.StringVar(&p.gatewayImage, "registry-gateway-image", "", "registry gateway image to use instead of the platform's")
 }
 
 func (p *platformFlags) resolve() (provisioning.Platform, error) {
@@ -134,6 +136,9 @@ func (p *platformFlags) resolve() (provisioning.Platform, error) {
 	}
 	if p.connectImage != "" {
 		platform.ConnectImage = p.connectImage
+	}
+	if p.gatewayImage != "" {
+		platform.RegistryGatewayImage = p.gatewayImage
 	}
 	return platform, nil
 }

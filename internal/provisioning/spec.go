@@ -71,6 +71,11 @@ const (
 	ConnectSourcesSecret = "changeport-connect-sources"
 	// Registry names the schema registry's Deployment and Service.
 	Registry = "changeport-registry"
+	// RegistryGateway names the registry gateway's Deployment and Service,
+	// through which customers reach their registry.
+	RegistryGateway = "changeport-registry-gateway"
+	// RegistryGatewayPort is the registry gateway's public port.
+	RegistryGatewayPort = 443
 	// RegistryUser is the KafkaUser of the schema registry, which keeps its
 	// schemas in the customer's Kafka.
 	RegistryUser = "changeport-registry"
@@ -303,6 +308,10 @@ func (s Spec) Validate() error {
 // image.
 func (s Spec) CDC() bool { return len(s.Sources) > 0 && s.Platform.ConnectImage != "" }
 
+// RegistryHost is the public name customers reach their schema registry at,
+// through the registry gateway.
+func (s Spec) RegistryHost() string { return "registry." + s.Domain() }
+
 // RegistryURL is the schema registry's API inside the cluster, which the
 // Connect worker's converters use.
 func (s Spec) RegistryURL() string {
@@ -501,6 +510,11 @@ type Platform struct {
 	ConnectImage string
 	// RegistryImage is the schema registry's image, Apicurio Registry.
 	RegistryImage string
+	// RegistryGatewayImage is the registry gateway's image
+	// (images/registry-gateway), through which customers reach their
+	// registry from the internet. Empty means no gateway: on EKS until the
+	// image is first published.
+	RegistryGatewayImage string
 	// SourceDatabaseNamespace, when set, is a namespace of this Kubernetes
 	// cluster whose databases the Connect worker may reach, besides public
 	// addresses: on kind, where a Postgres stands in for customers'
@@ -611,6 +625,10 @@ type LoadBalancer struct {
 	Annotations map[string]string
 	// ExternalTrafficPolicy, when set, is the Services' externalTrafficPolicy.
 	ExternalTrafficPolicy string
+	// ClientAddressAnnotations keep clients' addresses for Services that
+	// need them, such as the registry gateway, which limits failed attempts
+	// by address.
+	ClientAddressAnnotations map[string]string
 }
 
 func (p Platform) validate() error {
@@ -646,13 +664,14 @@ func (p Platform) validate() error {
 // cloud-provider-kind for the load balancers. Public names use the reserved
 // .test domain and a local CA; the dev scripts resolve them for clients.
 var KindPlatform = Platform{
-	Name:         "kind",
-	StorageClass: "standard",
-	Zones:        3,
-	RackLabel:    zoneTopologyKey,
-	KafkaImage:   "changeport/kafka:local",
-	AgentImage:   "changeport/agent:local",
-	ConnectImage: "changeport/connect:local",
+	Name:                 "kind",
+	StorageClass:         "standard",
+	Zones:                3,
+	RackLabel:            zoneTopologyKey,
+	KafkaImage:           "changeport/kafka:local",
+	AgentImage:           "changeport/agent:local",
+	ConnectImage:         "changeport/connect:local",
+	RegistryGatewayImage: "changeport/registry-gateway:local",
 	// By tag, as hack/lib.sh preloads it: kind's nodes do not keep the
 	// digest of the multi-platform index.
 	RegistryImage:     strings.Split(registryImage, "@")[0],
@@ -698,6 +717,10 @@ var eksLoadBalancer = LoadBalancer{
 		"service.beta.kubernetes.io/aws-load-balancer-nlb-target-type":                                       "ip",
 		fmt.Sprintf("service.beta.kubernetes.io/aws-load-balancer-listener-attributes.TCP-%d", ExternalPort): "tcp.idle_timeout.seconds=900",
 	},
+	// IP targets otherwise see the load balancer's own address.
+	ClientAddressAnnotations: map[string]string{
+		"service.beta.kubernetes.io/aws-load-balancer-target-group-attributes": "preserve_client_ip.enabled=true",
+	},
 }
 
 // eksDedicatedNodes runs customers on on-demand Graviton nodes in the
@@ -730,38 +753,40 @@ func eksTieredStorage(environment string) TieredStorage {
 // and nodes across three availability zones. Its Kafka domain is a reserved
 // .invalid placeholder until the domain is registered (#8).
 var EKSDevPlatform = Platform{
-	Name:              "eks-dev",
-	KafkaImage:        eksImages.Kafka,
-	AgentImage:        eksImages.Agent,
-	ConnectImage:      eksImages.Connect,
-	RegistryImage:     registryImage,
-	StorageClass:      "gp3",
-	Zones:             3,
-	RackLabel:         eksZoneIDLabel,
-	KafkaDomain:       "kafka.dev.changeport.invalid",
-	CertificateIssuer: "letsencrypt-staging",
-	LoadBalancer:      eksLoadBalancer,
-	TieredStorage:     eksTieredStorage("dev"),
-	DedicatedNodes:    eksDedicatedNodes("dev"),
+	Name:                 "eks-dev",
+	KafkaImage:           eksImages.Kafka,
+	AgentImage:           eksImages.Agent,
+	ConnectImage:         eksImages.Connect,
+	RegistryImage:        registryImage,
+	RegistryGatewayImage: eksImages.RegistryGateway,
+	StorageClass:         "gp3",
+	Zones:                3,
+	RackLabel:            eksZoneIDLabel,
+	KafkaDomain:          "kafka.dev.changeport.invalid",
+	CertificateIssuer:    "letsencrypt-staging",
+	LoadBalancer:         eksLoadBalancer,
+	TieredStorage:        eksTieredStorage("dev"),
+	DedicatedNodes:       eksDedicatedNodes("dev"),
 }
 
 // EKSProdPlatform is the EKS cluster of the prod AWS account, where customers
 // run. Its Kafka domain is a reserved .invalid placeholder until the domain is
 // registered (#8).
 var EKSProdPlatform = Platform{
-	Name:              "eks-prod",
-	KafkaImage:        eksImages.Kafka,
-	AgentImage:        eksImages.Agent,
-	ConnectImage:      eksImages.Connect,
-	RegistryImage:     registryImage,
-	StorageClass:      "gp3",
-	Zones:             3,
-	RackLabel:         eksZoneIDLabel,
-	KafkaDomain:       "kafka.changeport.invalid",
-	CertificateIssuer: "letsencrypt",
-	LoadBalancer:      eksLoadBalancer,
-	TieredStorage:     eksTieredStorage("prod"),
-	DedicatedNodes:    eksDedicatedNodes("prod"),
+	Name:                 "eks-prod",
+	KafkaImage:           eksImages.Kafka,
+	AgentImage:           eksImages.Agent,
+	ConnectImage:         eksImages.Connect,
+	RegistryImage:        registryImage,
+	RegistryGatewayImage: eksImages.RegistryGateway,
+	StorageClass:         "gp3",
+	Zones:                3,
+	RackLabel:            eksZoneIDLabel,
+	KafkaDomain:          "kafka.changeport.invalid",
+	CertificateIssuer:    "letsencrypt",
+	LoadBalancer:         eksLoadBalancer,
+	TieredStorage:        eksTieredStorage("prod"),
+	DedicatedNodes:       eksDedicatedNodes("prod"),
 }
 
 // Platforms lists the known platforms by name.
