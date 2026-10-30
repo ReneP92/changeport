@@ -42,9 +42,12 @@ rules:
   - apiGroups: [""]
     resources: [namespaces]
     verbs: [get, create, patch, delete]
+  # The source controller moves each Postgres source's password from the
+  # console's write-once Secret into the Connect worker's, and deletes the
+  # console's.
   - apiGroups: [""]
     resources: [secrets]
-    verbs: [get, create, patch]
+    verbs: [get, create, patch, update, delete]
   # Before deleting a customer's namespace, the controller marks the volumes
   # of its claims with when the customer was deprovisioned, for the purge
   # after 30 days (docs/runbook.md).
@@ -82,8 +85,8 @@ rules:
     resources: [kafkas, kafkanodepools]
     verbs: [get, create, patch]
   - apiGroups: [kafka.strimzi.io]
-    resources: [kafkausers, kafkaconnects]
-    verbs: [get, create, patch, list, delete]
+    resources: [kafkausers, kafkaconnects, kafkaconnectors]
+    verbs: [get, create, patch, list, watch, delete]
   # Each customer's dedicated nodes on EKS Auto Mode.
   - apiGroups: [karpenter.sh]
     resources: [nodepools]

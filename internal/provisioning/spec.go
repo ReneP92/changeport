@@ -125,7 +125,81 @@ type Spec struct {
 type Source struct {
 	// Name is the PostgresSource's name, which prefixes its topics.
 	Name string
+	// Connector is the source's Debezium connector; nil until the source's
+	// credentials have reached the Connect worker, and once the source is
+	// deleted, while it still holds its slot.
+	Connector *Connector
 }
+
+// Connector is the configuration of a source's Debezium connector
+// (docs/cdc.md). The source controller writes its credentials into
+// ConnectSourcesSecret: the password as <source>, the CA as <source>.ca.
+type Connector struct {
+	// Name is the KafkaConnector's name, <source>-<id>.
+	Name     string
+	Host     string
+	Port     int
+	Database string
+	// Role, Publication and Slot are the source's names in the database.
+	Role        string
+	Publication string
+	Slot        string
+	// TLSMode is verify-full or verify-ca.
+	TLSMode string
+	// CA reports whether the source has a CA. Without one, verify-full
+	// trusts the public authorities.
+	CA bool
+	// TableIncludeList is Debezium's table.include.list of the source's
+	// tables.
+	TableIncludeList string
+	// RetentionMs is the retention of the source's topics.
+	RetentionMs int64
+	// Running is false while the source is stopped.
+	Running bool
+	// CredentialsVersion changes with the source's credentials, which
+	// restarts the connector with them.
+	CredentialsVersion string
+}
+
+// connectorName is a Kubernetes name of a source and its ID.
+var connectorName = regexp.MustCompile(`^[a-z]([-a-z0-9]*[a-z0-9])?-[a-z0-9]{6}$`)
+
+// hostPattern is a host name or address, as the PostgresSource CRD allows.
+var hostPattern = regexp.MustCompile(`^[A-Za-z0-9.:-]+$`)
+
+func (c *Connector) validate(source string) error {
+	switch {
+	case !connectorName.MatchString(c.Name) || !strings.HasPrefix(c.Name, source+"-"):
+		return fmt.Errorf("source %q: connector name %q is not <source>-<id>", source, c.Name)
+	case !hostPattern.MatchString(c.Host) || len(c.Host) > 253:
+		return fmt.Errorf("source %q: host %q is not a host name or address", source, c.Host)
+	case c.Port < 1 || c.Port > 65535:
+		return fmt.Errorf("source %q: port %d is not a port", source, c.Port)
+	case c.Database == "" || c.Role == "" || c.Publication == "" || c.Slot == "" || c.TableIncludeList == "":
+		return fmt.Errorf("source %q: the connector needs a database, role, publication, slot and tables", source)
+	case c.TLSMode != "verify-full" && c.TLSMode != "verify-ca":
+		return fmt.Errorf("source %q: TLS mode %q is neither verify-full nor verify-ca", source, c.TLSMode)
+	case c.TLSMode == "verify-ca" && !c.CA:
+		return fmt.Errorf("source %q: verify-ca needs a CA", source)
+	case c.RetentionMs < 1:
+		return fmt.Errorf("source %q: retention %dms is not positive", source, c.RetentionMs)
+	}
+	return nil
+}
+
+// LocalRetentionMs is how long the source's topics keep data on the
+// brokers' disks, when it must be less than the brokers' day: tiered
+// topics may not keep more locally than in all. Zero means the brokers'
+// default.
+func (c *Connector) LocalRetentionMs() int64 {
+	if c.RetentionMs < localRetentionMs {
+		return c.RetentionMs
+	}
+	return 0
+}
+
+// localRetentionMs is the brokers' log.local.retention.ms, a day.
+const localRetentionMs = 24 * 60 * 60 * 1000
 
 // DeletionProtectionLabel marks the namespace of a customer with deletion
 // protection. The ValidatingAdmissionPolicy in deploy/base/deletion-protection
@@ -208,8 +282,13 @@ func (s Spec) Validate() error {
 		if err := ValidateSourceName(source.Name); err != nil {
 			return err
 		}
-		if slices.Contains(s.Sources[:i], source) {
+		if slices.ContainsFunc(s.Sources[:i], func(other Source) bool { return other.Name == source.Name }) {
 			return fmt.Errorf("source %q is listed twice", source.Name)
+		}
+		if source.Connector != nil {
+			if err := source.Connector.validate(source.Name); err != nil {
+				return err
+			}
 		}
 	}
 	return nil

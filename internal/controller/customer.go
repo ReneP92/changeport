@@ -3,7 +3,10 @@
 package controller
 
 import (
+	"cmp"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"slices"
 	"strings"
@@ -14,12 +17,16 @@ import (
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
+	"sigs.k8s.io/controller-runtime/pkg/event"
 	"sigs.k8s.io/controller-runtime/pkg/handler"
+	"sigs.k8s.io/controller-runtime/pkg/predicate"
 
 	"github.com/ReneP92/changeport/api/v1alpha1"
+	"github.com/ReneP92/changeport/internal/cdc"
 	"github.com/ReneP92/changeport/internal/provisioning"
 )
 
@@ -56,10 +63,27 @@ type CustomerReconciler struct {
 func (r *CustomerReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&v1alpha1.Customer{}).
-		Watches(&v1alpha1.PostgresSource{}, handler.EnqueueRequestsFromMapFunc(customerOfSource)).
+		Watches(&v1alpha1.PostgresSource{}, handler.EnqueueRequestsFromMapFunc(customerOfSource), builder.WithPredicates(sourceChanged)).
 		Named("customer").
 		WithOptions(controller.Options{MaxConcurrentReconciles: 4}).
 		Complete(r)
+}
+
+// sourceChanged lets through the changes to a source that change what the
+// template renders for it: its spec, its deletion, and its credentials
+// reaching the Connect worker. The source controller's other status updates,
+// such as the slot's every minute, do not reconcile the Customer.
+var sourceChanged = predicate.Funcs{
+	UpdateFunc: func(e event.UpdateEvent) bool {
+		before, ok1 := e.ObjectOld.(*v1alpha1.PostgresSource)
+		after, ok2 := e.ObjectNew.(*v1alpha1.PostgresSource)
+		if !ok1 || !ok2 {
+			return true
+		}
+		return before.Generation != after.Generation ||
+			!before.DeletionTimestamp.Equal(after.DeletionTimestamp) ||
+			before.Status.PasswordSecret != after.Status.PasswordSecret
+	},
 }
 
 // customerOfSource is the Customer whose namespace a source is in.
@@ -211,10 +235,52 @@ func (r *CustomerReconciler) sources(ctx context.Context, spec provisioning.Spec
 	}
 	sources := make([]provisioning.Source, len(list.Items))
 	for i, source := range list.Items {
-		sources[i] = provisioning.Source{Name: source.Name}
+		sources[i] = provisioning.Source{Name: source.Name, Connector: connector(&source)}
 	}
 	slices.SortFunc(sources, func(a, b provisioning.Source) int { return strings.Compare(a.Name, b.Name) })
 	return sources, nil
+}
+
+// connector is a source's Debezium connector: none until the source
+// controller has handed its password to the Connect worker, and none once
+// the source is deleted, so that the connector lets go of the slot before
+// the source controller drops it.
+func connector(source *v1alpha1.PostgresSource) *provisioning.Connector {
+	if !source.DeletionTimestamp.IsZero() || source.Status.PasswordSecret == "" {
+		return nil
+	}
+	names, err := cdc.NamesFor(source.Name, source.Spec.ID)
+	if err != nil {
+		// The CRD's validation keeps such sources out.
+		return nil
+	}
+	tables := make([]cdc.Table, len(source.Spec.Tables))
+	for i, table := range source.Spec.Tables {
+		tables[i] = cdc.Table{Schema: table.Schema, Name: table.Name}
+	}
+	connection := source.Spec.Connection
+	return &provisioning.Connector{
+		Name:               names.Connector,
+		Host:               connection.Host,
+		Port:               int(connection.Port),
+		Database:           connection.Database,
+		Role:               names.Role,
+		Publication:        names.Publication,
+		Slot:               names.Slot,
+		TLSMode:            cmp.Or(connection.TLS.Mode, v1alpha1.TLSVerifyFull),
+		CA:                 connection.TLS.CA != "",
+		TableIncludeList:   cdc.TableIncludeList(tables),
+		RetentionMs:        source.Spec.RetentionMs,
+		Running:            source.Spec.State != v1alpha1.StateStopped,
+		CredentialsVersion: CredentialsVersion(source),
+	}
+}
+
+// CredentialsVersion names the version of a source's credentials in the
+// Connect worker: its password Secret, and a digest of its CA.
+func CredentialsVersion(source *v1alpha1.PostgresSource) string {
+	digest := sha256.Sum256([]byte(source.Spec.Connection.TLS.CA))
+	return source.Status.PasswordSecret + "/" + hex.EncodeToString(digest[:4])
 }
 
 // ensureMetadata adds the finalizer, before anything is created that it must

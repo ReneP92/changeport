@@ -62,6 +62,41 @@ const (
 // password Secret.
 const PostgresPasswordKey = "password"
 
+// PostgresPasswordSecretType is the type of the Secrets the console writes a
+// source's password into, once.
+const PostgresPasswordSecretType = "changeport.io/postgres-password" //nolint:gosec // G101: a Secret type, not a credential
+
+// SourceFinalizer keeps a deleted PostgresSource until the source controller
+// has dropped its replication slot.
+const SourceFinalizer = "changeport.io/drop-slot"
+
+// SlotDroppedAnnotation says, set to "true" on a deleted PostgresSource, that
+// the customer dropped its slot themselves, when Changeport cannot reach the
+// database to.
+const SlotDroppedAnnotation = "changeport.io/slot-dropped"
+
+// The reasons of a PostgresSource's Ready condition.
+const (
+	// SourceReasonStreaming: changes stream. Ready is True.
+	SourceReasonStreaming = "Streaming"
+	// SourceReasonWaitingForPassword: the console has not written the
+	// password Secret the spec names.
+	SourceReasonWaitingForPassword = "WaitingForPassword"
+	// SourceReasonStarting: the connector is starting.
+	SourceReasonStarting = "Starting"
+	// SourceReasonStopped: the source is stopped.
+	SourceReasonStopped = "Stopped"
+	// SourceReasonFailed: the connector failed; the message says why.
+	SourceReasonFailed = "Failed"
+	// SourceReasonDeleting: the source is deleted, and its slot is being
+	// dropped; the message says what it waits for.
+	SourceReasonDeleting = "Deleting"
+	// SourceReasonDatabaseUnreachable: the source is deleted, and Changeport
+	// cannot reach the database to drop its slot. The message has the SQL
+	// for the customer, who then sets SlotDroppedAnnotation.
+	SourceReasonDatabaseUnreachable = "DatabaseUnreachable"
+)
+
 // PostgresConnection is how Changeport reaches the customer's database.
 type PostgresConnection struct {
 	// Host is the database's public host name or address, without a port.

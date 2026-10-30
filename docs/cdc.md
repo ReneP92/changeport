@@ -108,7 +108,9 @@ A test keeps the resource's limits equal to `internal/cdc`'s and the topic
 presets, and envtest tests check its validation.
 
 The provisioning controller renders the runtime and a `KafkaConnector` per
-source. A second controller, for sources, does everything else: credentials,
+source, named `<source>-<id>`. Kafka Connect keeps offsets by connector
+name, so a new source with an old one's name never resumes from the old one's
+position. A second controller, for sources, does everything else: credentials,
 snapshots, slot monitoring, status, and dropping the slot when a source is
 deleted. The `Customer` gets a `CDCReady` condition, which `Ready` does not
 include, so `Ready` keeps meaning that clients can connect.
@@ -184,13 +186,25 @@ include, so `Ready` keeps meaning that clients can connect.
 - **The console writes it once:** as an immutable Secret of its own type. An
   admission policy allows the console only that, so it can never read,
   change or delete a Secret.
-- **The controller keeps it:** it moves the password into a Secret only the
-  controller and the Connect worker use, then deletes the console's copy.
-- **Connect reads it through a config provider:** connector configurations
-  hold only a placeholder, never the password.
+- **The controller keeps it:** the source controller moves the password into
+  `changeport-connect-sources`, a Secret only it and the Connect worker use,
+  then deletes the console's copy.
+  - The password goes in as `<source>`, and the source's CA as `<source>.ca`.
+  - The source's `status.passwordSecret` then names the Secret it came from.
+  - Only then does the template render the source's connector.
+- **Connect reads it through a config provider:** the worker mounts the
+  Secret, and connector configurations hold only a placeholder,
+  `${directory:/mnt/sources:<source>}`, never the password.
+  - Kubernetes updates a mounted Secret within about a minute, so a new
+    source's connector may fail once before its credentials arrive. Strimzi
+    restarts it, and the status says what it waits for meanwhile.
 - **Rotation:** the console generates a new password and its `ALTER ROLE`
   statement. Once the customer has run it and the console has tested it, the
   new password replaces the old one.
+  - The console writes it to a new Secret and names that Secret in the
+    source.
+  - The connector's configuration carries a version of the credentials, so
+    the change restarts it with the new password.
 
 ## Keeping the customer's database safe
 
@@ -204,12 +218,20 @@ So:
   `changeport_source_retained_wal_bytes{tenant,source}` for alerts.
 - **A setup warning:** the checks warn when `max_slot_wal_keep_size` is
   unlimited.
-- **Pausing:** pausing a source keeps its slot and offsets, and the console
-  shows the retained WAL growing meanwhile.
-- **Deleting:** deleting a source drops its slot as soon as the connector has
-  let go of it. If the database cannot be reached, the console shows the SQL
-  to drop it, and the customer confirms once it is done. Slots are never
-  dropped any other way.
+- **Pausing:** `state: Stopped` stops the connector (Strimzi's `stopped`). The
+  slot and offsets stay, and the console shows the retained WAL growing
+  meanwhile. Running again catches up from where the source stopped.
+- **Deleting:** the source's finalizer, `changeport.io/drop-slot`, keeps it
+  until its slot is dropped.
+  - The template stops rendering its connector, and the provisioner deletes
+    the connector.
+  - Once the connector has let go of the slot, the source controller drops it
+    as the source's role.
+  - If the database cannot be reached, the controller keeps trying, and the
+    source's status says so, with the SQL to drop the slot. The customer
+    confirms once they have run it, which sets the annotation
+    `changeport.io/slot-dropped: "true"`.
+  - Slots are never dropped any other way.
 - **A lost slot:** when the database invalidates a slot because it held back
   too much WAL, the source fails, saying so plainly. Recovery is a new slot
   and a new snapshot.
@@ -346,13 +368,18 @@ of this design with the Connect image, Apicurio 3.3.3 and Postgres 17:
     the seed, opens a replication connection with `verify-full`, and checks
     that a client without TLS, or verifying the certificate against the
     service's address, is refused.
-- **`hack/cdc-test.sh`,** in its own CI suite, creates a source as the console
-  does and takes it through its whole life:
-  1. snapshot;
-  2. inserts, updates and deletes, decoded through the registry gateway;
-  3. adding a table;
-  4. pausing and resuming;
-  5. deleting it, which drops its slot.
+- **`hack/cdc-test.sh`** (`just cdc-test`), in its own CI suite (`cdc`),
+  takes a source of the demo customer through its whole life.
+  - It runs the setup SQL from `internal/cdc` (`cmd/cdcsql`) against the
+    stand-in database, as a customer would.
+  - It writes the password Secret and the source, as the console does.
+  - Inserts, updates and deletes reach the tables' topics, deletes with a
+    tombstone. Each topic has one partition and the source's retention.
+  - The slot's health is reported in the source's status.
+  - A stopped source lets go of its slot, and catches up once it runs again.
+  - Deleting the source drops its slot and its credentials.
+  - Still to come: the snapshot and adding a table (#107), and decoding
+    through the registry gateway (#108).
 - **A Playwright spec** runs the console's wizard against the same database.
 
 ## Steps

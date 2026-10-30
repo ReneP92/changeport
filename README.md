@@ -166,8 +166,9 @@ check. Its core suite provisions a second customer, protected from deletion,
 smoke tests both clusters, runs the metrics, deletion protection, agent, lag,
 client telemetry, console, tiered storage, host access, connection guide,
 Postgres and CDC runtime tests, and removes the second customer again; its failover suite freezes a zone and drains a
-broker of a three-zone customer. CI runs the two on separate clusters at once;
-locally `just e2e` runs both, one after the other:
+broker of a three-zone customer; its cdc suite takes a Postgres CDC source
+from created through streaming and paused to deleted. CI runs the three on
+separate clusters at once; locally `just e2e` runs them one after the other:
 
 ```bash
 just provision acme

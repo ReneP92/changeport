@@ -17,15 +17,18 @@ import (
 	"time"
 
 	"github.com/go-logr/logr"
+	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/clientcmd"
 	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/healthz"
 	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
 
 	"github.com/ReneP92/changeport/api/v1alpha1"
+	"github.com/ReneP92/changeport/internal/cdc"
 	"github.com/ReneP92/changeport/internal/controller"
 	"github.com/ReneP92/changeport/internal/provisioning"
 )
@@ -357,8 +360,11 @@ func runController(ctx context.Context, args []string, logger *slog.Logger, stde
 		return err
 	}
 	mgr, err := ctrl.NewManager(config, ctrl.Options{
-		Scheme:                  scheme,
-		Metrics:                 metricsserver.Options{BindAddress: *metricsAddress},
+		Scheme:  scheme,
+		Metrics: metricsserver.Options{BindAddress: *metricsAddress},
+		// Secrets are read one at a time by name, never listed or watched
+		// across customers' namespaces.
+		Client:                  client.Options{Cache: &client.CacheOptions{DisableFor: []client.Object{&corev1.Secret{}}}},
 		HealthProbeBindAddress:  *probeAddress,
 		LeaderElection:          *leaderElection,
 		LeaderElectionID:        "changeport-provisioner",
@@ -377,6 +383,16 @@ func runController(ctx context.Context, args []string, logger *slog.Logger, stde
 		ResyncInterval: 10 * time.Minute,
 	}
 	if err := reconciler.SetupWithManager(mgr); err != nil {
+		return err
+	}
+	sources := &controller.PostgresSourceReconciler{
+		Client: mgr.GetClient(),
+		// On kind, the stand-in database is on the cluster's own network.
+		Slots:        cdc.Checker{Guard: cdc.Guard{AllowPrivate: platform.SourceDatabaseNamespace != ""}},
+		PollInterval: 10 * time.Second,
+		SlotInterval: time.Minute,
+	}
+	if err := sources.SetupWithManager(mgr); err != nil {
 		return err
 	}
 	if err := mgr.AddHealthzCheck("ping", healthz.Ping); err != nil {

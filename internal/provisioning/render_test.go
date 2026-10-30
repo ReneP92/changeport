@@ -44,8 +44,19 @@ func TestRenderYAMLWithSourcesMatchesGoldenFiles(t *testing.T) {
 	}
 }
 
-// sources are the CDC sources of the golden files with sources.
-var sources = []Source{{Name: "app"}, {Name: "billing"}}
+// sources are the CDC sources of the golden files with sources: app
+// streams, with its credentials in place, and billing's have not reached
+// the Connect worker yet.
+var sources = []Source{{Name: "app", Connector: appConnector()}, {Name: "billing"}}
+
+func appConnector() *Connector {
+	return &Connector{
+		Name: "app-x1y2z3", Host: "app.abc123.us-east-1.rds.amazonaws.com", Port: 5432, Database: "app",
+		Role: "changeport_app_x1y2z3", Publication: "changeport_app_x1y2z3", Slot: "changeport_app_x1y2z3",
+		TLSMode: "verify-full", CA: true, TableIncludeList: `public\.orders,Sales\.Order\ Lines`,
+		RetentionMs: 3600000, Running: true, CredentialsVersion: "postgres-password-app-1/0a1b2c3d",
+	}
+}
 
 // The Kubernetes API server's addresses: kind's control plane, and the
 // network interfaces of EKS's control plane in two zones.

@@ -373,6 +373,26 @@ func sourceLifecycle(t *testing.T, port int, certs pki, keepSize Status) {
 		t.Errorf("after DropSlotSQL, slots message = %q", got)
 	}
 
+	// The source controller reads the slot and drops it as the role.
+	if state, err := local.Slot(t.Context(), target.Connection, names.Slot); err != nil || state.Exists {
+		t.Errorf("Slot() of a dropped slot = %+v, %v", state, err)
+	}
+	createSlot(t, target.Connection, names.Slot)
+	admin(t, port, certs, "CREATE TABLE wal_filler AS SELECT g, repeat('x', 100) AS x FROM generate_series(1, 10000) g")
+	state, err := local.Slot(t.Context(), target.Connection, names.Slot)
+	if err != nil || !state.Exists || state.Active || state.RetainedBytes < 1_000_000 || state.WALStatus != "reserved" {
+		t.Errorf("Slot() = %+v, %v; want an inactive slot keeping the filler's WAL, reserved", state, err)
+	}
+	if (state.SafeWALSize != nil) != (keepSize == Pass) {
+		t.Errorf("safe WAL size = %v with max_slot_wal_keep_size %s", state.SafeWALSize, keepSize)
+	}
+	if existed, err := local.DropSlot(t.Context(), target.Connection, names.Slot); !existed || err != nil {
+		t.Errorf("DropSlot() = %t, %v", existed, err)
+	}
+	if existed, err := local.DropSlot(t.Context(), target.Connection, names.Slot); existed || err != nil {
+		t.Errorf("DropSlot() of a dropped slot = %t, %v", existed, err)
+	}
+
 	// A new password replaces the old one.
 	newPassword := GeneratePassword()
 	rotate, err := PasswordSQL(Generic, names, newPassword)
