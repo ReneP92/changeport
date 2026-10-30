@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"flag"
 	"maps"
+	"net/netip"
 	"os"
 	"path/filepath"
 	"slices"
@@ -33,9 +34,50 @@ func TestRenderYAMLMatchesGoldenFiles(t *testing.T) {
 	}
 }
 
+// TestRenderYAMLWithSourcesMatchesGoldenFiles renders customers with
+// Postgres CDC sources: on kind, and on EKS with a published Connect image.
+func TestRenderYAMLWithSourcesMatchesGoldenFiles(t *testing.T) {
+	for _, spec := range withSourcesGoldenSpecs() {
+		t.Run(spec.Platform.Name+"/"+spec.Profile.Name, func(t *testing.T) {
+			testGoldenFile(t, spec)
+		})
+	}
+}
+
+// sources are the CDC sources of the golden files with sources.
+var sources = []Source{{Name: "app"}, {Name: "billing"}}
+
+// The Kubernetes API server's addresses: kind's control plane, and the
+// network interfaces of EKS's control plane in two zones.
+var (
+	kindAPIServer = []netip.AddrPort{netip.MustParseAddrPort("172.19.0.5:6443")}
+	eksAPIServer  = []netip.AddrPort{netip.MustParseAddrPort("10.0.31.17:443"), netip.MustParseAddrPort("10.0.88.204:443")}
+)
+
+// publishedConnectImage stands in for the Connect image once it is published
+// to ECR.
+const publishedConnectImage = "123456789012.dkr.ecr.us-east-1.amazonaws.com/changeport/connect@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+
+func withSourcesGoldenSpecs() []Spec {
+	eks := EKSProdPlatform
+	eks.ConnectImage = publishedConnectImage
+	return []Spec{
+		{CustomerID: "acme", Profile: DevProfile, Platform: KindPlatform, Sources: sources, KubernetesAPI: kindAPIServer},
+		{CustomerID: "acme", Profile: ProductionProfile, Platform: eks, Sources: sources, KubernetesAPI: eksAPIServer, DeletionProtection: true},
+	}
+}
+
+func goldenFile(spec Spec) string {
+	name := spec.Platform.Name + "-" + spec.Profile.Name
+	if len(spec.Sources) > 0 {
+		name += "-sources"
+	}
+	return filepath.Join("testdata", name+".golden.yaml")
+}
+
 func testGoldenFile(t *testing.T, spec Spec) {
 	t.Helper()
-	golden := filepath.Join("testdata", spec.Platform.Name+"-"+spec.Profile.Name+".golden.yaml")
+	golden := goldenFile(spec)
 	got, err := RenderYAML(spec)
 	if spec.Profile.Zones > spec.Platform.Zones {
 		if err == nil {
@@ -76,6 +118,9 @@ func TestNoStaleGoldenFiles(t *testing.T) {
 			for profile := range Profiles {
 				known = known || filepath.Base(file) == platform+"-"+profile+".golden.yaml"
 			}
+		}
+		for _, spec := range withSourcesGoldenSpecs() {
+			known = known || file == goldenFile(spec)
 		}
 		if !known {
 			t.Errorf("%s belongs to no platform and profile pair; delete it", file)

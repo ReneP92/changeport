@@ -15,9 +15,11 @@
 # test opens the console as a browser does, the tiered storage test offloads a
 # topic of the demo customer to the object store and reads it back, the host
 # access test produces and consumes as an application on this machine, the
-# connection guide test runs the examples of docs/connecting.md, and the
+# connection guide test runs the examples of docs/connecting.md, the
 # Postgres test checks the database that stands in for a customer's in the
-# Postgres CDC source. The failover
+# Postgres CDC source, and the CDC runtime test checks that a customer's
+# first source brings Kafka Connect and the schema registry, and the last
+# takes them. The failover
 # suite freezes a zone and drains a broker of a three-zone customer under
 # load. SUITE=core or SUITE=failover runs one (default: both, one after the
 # other). Set KEEP=1 to keep the customers. Run just dev-up first.
@@ -62,7 +64,7 @@ core_suite() {
   log "Checking that every image was preloaded"
   missing=$(kubectl get pods -A -o jsonpath='{range .items[*]}{.metadata.namespace}{range .spec.initContainers[*]}{" "}{.image}{end}{range .spec.containers[*]}{" "}{.image}{end}{"\n"}{end}' |
     awk '$1 != "kube-system" && $1 != "local-path-storage" { for (i = 2; i <= NF; i++) print $i }' | sort -u |
-    grep -vxF -f <(printf '%s\n' "${KIND_PRELOAD_IMAGES[@]}" "$(content_tag "$KAFKA_IMAGE")" "$(content_tag "$AGENT_IMAGE")" "$(content_tag "$PROVISIONER_IMAGE")" "$(content_tag "$CONSOLE_IMAGE")") || true)
+    grep -vxF -f <(printf '%s\n' "${KIND_PRELOAD_IMAGES[@]}" "$(content_tag "$KAFKA_IMAGE")" "$(content_tag "$AGENT_IMAGE")" "$(content_tag "$CONNECT_IMAGE")" "$(content_tag "$PROVISIONER_IMAGE")" "$(content_tag "$CONSOLE_IMAGE")") || true)
   [[ -z "$missing" ]] || die "pods run images that are not built or preloaded by hack/lib.sh:"$'\n'"$missing"
 
   if [[ ${KEEP:-0} != 1 ]]; then
@@ -78,6 +80,7 @@ core_suite() {
   "$ROOT/hack/host-access-test.sh" "$DEMO_CUSTOMER"
   "$ROOT/hack/connecting-guide-test.sh" "$DEMO_CUSTOMER"
   "$ROOT/hack/postgres-test.sh"
+  "$ROOT/hack/cdc-runtime-test.sh" "$DEMO_CUSTOMER"
 }
 
 [[ $SUITE == failover ]] || core_suite

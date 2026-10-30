@@ -62,8 +62,9 @@ var (
 	readyPart   = provisioning.Readiness{Ready: true, Status: "Ready"}
 	creating    = provisioning.Readiness{Object: "Kafka customer-acme/acme", Status: "NotReady=True (Creating)"}
 	waiting     = provisioning.Readiness{Status: "waiting for the listener certificate"}
-	allReady    = provisioning.Progress{Certificate: issued, Kafka: readyPart, Users: readyPart, Agent: readyPart}
-	kafkaCreate = provisioning.Progress{Certificate: issued, Kafka: creating, Users: waiting, Agent: waiting}
+	noSources   = provisioning.Readiness{Ready: true, Status: "No Postgres CDC sources"}
+	allReady    = provisioning.Progress{Certificate: issued, Kafka: readyPart, Users: readyPart, Agent: readyPart, CDC: noSources}
+	kafkaCreate = provisioning.Progress{Certificate: issued, Kafka: creating, Users: waiting, Agent: waiting, CDC: waiting}
 )
 
 const (
@@ -182,6 +183,49 @@ func TestReconcileReportsAReadyCluster(t *testing.T) {
 	ready := condition(t, get(t, c, "acme"), v1alpha1.ConditionReady)
 	if ready.Status != metav1.ConditionTrue || ready.Message != "Clients can connect to bootstrap.acme.kafka.changeport.test:9094" {
 		t.Errorf("Ready = %s %q", ready.Status, ready.Message)
+	}
+}
+
+// The customer's sources reach the template, and their runtime has a
+// condition of its own, which Ready does not wait for.
+func TestReconcileRendersTheSourcesAndReportsCDCApart(t *testing.T) {
+	sources := []client.Object{newCustomer()}
+	for _, name := range []string{"billing", "app"} {
+		sources = append(sources, &v1alpha1.PostgresSource{ObjectMeta: metav1.ObjectMeta{Namespace: "customer-acme", Name: name}})
+	}
+	// A source of another customer is not acme's.
+	sources = append(sources, &v1alpha1.PostgresSource{ObjectMeta: metav1.ObjectMeta{Namespace: "customer-globex", Name: "crm"}})
+	progress := allReady
+	progress.CDC = provisioning.Readiness{Object: "KafkaConnect customer-acme/changeport-connect", Status: "NotReady=True (Creating)"}
+	provisioner := &fakeProvisioner{progress: progress}
+	r, c := newReconciler(t, provisioner, sources...)
+	result, err := reconcile(t, r, "acme")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := []provisioning.Source{{Name: "app"}, {Name: "billing"}}; !slices.Equal(provisioner.last.Sources, want) {
+		t.Errorf("sources = %v, want %v, by name", provisioner.last.Sources, want)
+	}
+	if result.RequeueAfter != pollInterval {
+		t.Errorf("requeue after %v, want %v while the CDC runtime is not ready", result.RequeueAfter, pollInterval)
+	}
+	customer := get(t, c, "acme")
+	if ready := condition(t, customer, v1alpha1.ConditionReady); ready.Status != metav1.ConditionTrue {
+		t.Errorf("Ready = %s %s, want True without the CDC runtime", ready.Status, ready.Message)
+	}
+	cdc := condition(t, customer, v1alpha1.ConditionCDCReady)
+	if cdc.Status != metav1.ConditionFalse || cdc.Reason != "Pending" || cdc.Message != "KafkaConnect customer-acme/changeport-connect: NotReady=True (Creating)" {
+		t.Errorf("CDCReady = %s %s %q", cdc.Status, cdc.Reason, cdc.Message)
+	}
+}
+
+func TestCustomerOfSource(t *testing.T) {
+	requests := customerOfSource(t.Context(), &v1alpha1.PostgresSource{ObjectMeta: metav1.ObjectMeta{Namespace: "customer-acme", Name: "app"}})
+	if len(requests) != 1 || requests[0].Name != "acme" || requests[0].Namespace != "" {
+		t.Errorf("customerOfSource(customer-acme/app) = %v, want Customer acme", requests)
+	}
+	if requests := customerOfSource(t.Context(), &v1alpha1.PostgresSource{ObjectMeta: metav1.ObjectMeta{Namespace: "default", Name: "app"}}); len(requests) != 0 {
+		t.Errorf("customerOfSource(default/app) = %v, want none", requests)
 	}
 }
 

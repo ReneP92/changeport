@@ -2,8 +2,10 @@ package provisioning
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
+	"net/netip"
 	"slices"
 	"strings"
 	"time"
@@ -22,7 +24,16 @@ var (
 	deploymentGVK  = schema.GroupVersionKind{Group: "apps", Version: "v1", Kind: "Deployment"}
 	pvcGVK         = schema.GroupVersionKind{Version: "v1", Kind: "PersistentVolumeClaim"}
 	pvGVK          = schema.GroupVersionKind{Version: "v1", Kind: "PersistentVolume"}
+	connectGVK     = schema.GroupVersionKind{Group: "kafka.strimzi.io", Version: "v1", Kind: "KafkaConnect"}
+	serviceGVK     = schema.GroupVersionKind{Version: "v1", Kind: "Service"}
+	policyGVK      = schema.GroupVersionKind{Group: "networking.k8s.io", Version: "v1", Kind: "NetworkPolicy"}
+	sliceGVK       = schema.GroupVersionKind{Group: "discovery.k8s.io", Version: "v1", Kind: "EndpointSlice"}
 )
+
+// prunedKinds are the kinds of the template's optional parts
+// (PartLabel): Reconcile deletes such objects of a customer that the
+// template no longer renders.
+var prunedKinds = []schema.GroupVersionKind{kafkaUserGVK, connectGVK, deploymentGVK, serviceGVK, policyGVK}
 
 // The marks Deprovision leaves on a customer's volumes. Where the storage
 // class retains volumes, as in production, they outlive the namespace, and
@@ -94,9 +105,14 @@ type Progress struct {
 	// Agent is the Kafka agent next to the cluster, ready when the platform
 	// runs none.
 	Agent Readiness
+	// CDC is the runtime of the customer's Postgres CDC sources: the Connect
+	// worker, the schema registry and their users. It is ready when the
+	// customer has no sources. Ready does not include it, as clients can
+	// connect without it.
+	CDC Readiness
 }
 
-// Ready reports whether every part of the cluster is ready.
+// Ready reports whether every part clients need is ready.
 func (p Progress) Ready() bool {
 	return p.Certificate.Ready && p.Kafka.Ready && p.Users.Ready && p.Agent.Ready
 }
@@ -107,6 +123,12 @@ func (p Progress) Ready() bool {
 // never starts without its listener certificate. Calling it again carries on
 // from there. It is idempotent: it converges the resources to the template.
 func (p *Provisioner) Reconcile(ctx context.Context, spec Spec) (Progress, error) {
+	if spec.CDC() && spec.KubernetesAPI == nil {
+		var err error
+		if spec.KubernetesAPI, err = p.kubernetesAPI(ctx); err != nil {
+			return Progress{}, err
+		}
+	}
 	objects, err := Render(spec)
 	if err != nil {
 		return Progress{}, err
@@ -135,25 +157,145 @@ func (p *Provisioner) Reconcile(ctx context.Context, spec Spec) (Progress, error
 		}
 		if !certificate.Ready {
 			waiting := Readiness{Status: "waiting for the listener certificate"}
-			return Progress{Certificate: certificate, Kafka: waiting, Users: waiting, Agent: waiting}, nil
+			return Progress{Certificate: certificate, Kafka: waiting, Users: waiting, Agent: waiting, CDC: waiting}, nil
 		}
 	}
+	if err := p.prune(ctx, spec, objects); err != nil {
+		return Progress{}, err
+	}
 	progress := Progress{Certificate: Readiness{Ready: true, Status: "Issued"}}
+	core, cdc := splitCDC(objects)
 	parts := []struct {
 		readiness *Readiness
+		objects   []*unstructured.Unstructured
 		kind      schema.GroupVersionKind
 		ready     func(*unstructured.Unstructured) (bool, string)
 	}{
-		{&progress.Kafka, kafkaGVK, strimziReady},
-		{&progress.Users, kafkaUserGVK, strimziReady},
-		{&progress.Agent, deploymentGVK, deploymentReady},
+		{&progress.Kafka, core, kafkaGVK, strimziReady},
+		{&progress.Users, core, kafkaUserGVK, strimziReady},
+		{&progress.Agent, core, deploymentGVK, deploymentReady},
 	}
 	for _, part := range parts {
-		if *part.readiness, err = p.observe(ctx, objects, part.kind, part.ready); err != nil {
+		if *part.readiness, err = p.observe(ctx, part.objects, part.kind, part.ready); err != nil {
 			return Progress{}, err
 		}
 	}
+	if progress.CDC, err = p.observeCDC(ctx, spec, cdc); err != nil {
+		return Progress{}, err
+	}
 	return progress, nil
+}
+
+// kubernetesAPI returns the addresses of the Kubernetes API server, from the
+// EndpointSlices of the kubernetes Service in the default namespace.
+func (p *Provisioner) kubernetesAPI(ctx context.Context) ([]netip.AddrPort, error) {
+	endpointSlices, err := p.Cluster.List(ctx, sliceGVK, "default", "kubernetes.io/service-name=kubernetes")
+	if err != nil {
+		return nil, fmt.Errorf("look up the Kubernetes API server's addresses: %w", err)
+	}
+	var addresses []netip.AddrPort
+	for _, slice := range endpointSlices {
+		ports, _, _ := unstructured.NestedSlice(slice.Object, "ports")
+		endpoints, _, _ := unstructured.NestedSlice(slice.Object, "endpoints")
+		for _, e := range endpoints {
+			endpoint, _ := e.(map[string]any)
+			ips, _, _ := unstructured.NestedStringSlice(endpoint, "addresses")
+			for _, ip := range ips {
+				addr, err := netip.ParseAddr(ip)
+				if err != nil {
+					return nil, fmt.Errorf("the Kubernetes API server's address %q: %w", ip, err)
+				}
+				for _, pt := range ports {
+					portSpec, _ := pt.(map[string]any)
+					port, _, _ := unstructured.NestedInt64(portSpec, "port")
+					if port > 0 && port <= 65535 {
+						addresses = append(addresses, netip.AddrPortFrom(addr, uint16(port)))
+					}
+				}
+			}
+		}
+	}
+	if len(addresses) == 0 {
+		return nil, errors.New("the kubernetes Service in the default namespace has no addresses")
+	}
+	slices.SortFunc(addresses, func(a, b netip.AddrPort) int { return a.Compare(b) })
+	return slices.Compact(addresses), nil
+}
+
+// splitCDC splits the rendered objects into those of the CDC runtime and the
+// rest.
+func splitCDC(objects []*unstructured.Unstructured) (core, cdc []*unstructured.Unstructured) {
+	for _, obj := range objects {
+		if obj.GetLabels()[PartLabel] == PartCDC {
+			cdc = append(cdc, obj)
+		} else {
+			core = append(core, obj)
+		}
+	}
+	return core, cdc
+}
+
+// observeCDC reports how far the CDC runtime is: its users, then the Connect
+// worker, then the registry.
+func (p *Provisioner) observeCDC(ctx context.Context, spec Spec, objects []*unstructured.Unstructured) (Readiness, error) {
+	switch {
+	case len(spec.Sources) == 0:
+		return Readiness{Ready: true, Status: "No Postgres CDC sources"}, nil
+	case !spec.CDC():
+		return Readiness{Status: fmt.Sprintf("Postgres CDC sources do not run on platform %s yet: it has no Kafka Connect image", spec.Platform.Name)}, nil
+	}
+	for _, part := range []struct {
+		kind  schema.GroupVersionKind
+		ready func(*unstructured.Unstructured) (bool, string)
+	}{
+		{kafkaUserGVK, strimziReady},
+		{connectGVK, strimziReady},
+		{deploymentGVK, deploymentReady},
+	} {
+		readiness, err := p.observe(ctx, objects, part.kind, part.ready)
+		if err != nil || !readiness.Ready {
+			return readiness, err
+		}
+	}
+	sources := fmt.Sprintf("%d sources", len(spec.Sources))
+	if len(spec.Sources) == 1 {
+		sources = "1 source"
+	}
+	return Readiness{Ready: true, Status: "Kafka Connect and the schema registry run for " + sources}, nil
+}
+
+// prunedSelector selects the objects of the template's optional parts that
+// the provisioner applied itself. Operators copy a resource's labels onto
+// what they make of it, as Strimzi does from the KafkaConnect onto its
+// Services and NetworkPolicy, but name themselves as its manager.
+var prunedSelector = PartLabel + ",app.kubernetes.io/managed-by=" + ManagedBy
+
+// prune deletes the objects of the template's optional parts that it no
+// longer renders for spec, such as the CDC runtime once the last source is
+// gone. It finds them by prunedSelector in the customer's namespace, and
+// leaves alone any object with an owner, which only an operator could have
+// made.
+func (p *Provisioner) prune(ctx context.Context, spec Spec, objects []*unstructured.Unstructured) error {
+	rendered := map[string]bool{}
+	for _, obj := range objects {
+		rendered[obj.GroupVersionKind().String()+" "+objectKey(obj)] = true
+	}
+	for _, kind := range prunedKinds {
+		current, err := p.Cluster.List(ctx, kind, spec.Namespace(), prunedSelector)
+		if err != nil {
+			return fmt.Errorf("list the %ss of customer %s's optional parts: %w", kind.Kind, spec.CustomerID, err)
+		}
+		for _, obj := range current {
+			if rendered[kind.String()+" "+objectKey(&obj)] || obj.GetDeletionTimestamp() != nil || len(obj.GetOwnerReferences()) > 0 {
+				continue
+			}
+			if err := p.Cluster.Delete(ctx, kind, obj.GetNamespace(), obj.GetName()); err != nil {
+				return fmt.Errorf("delete %s %s: %w", kind.Kind, objectKey(&obj), err)
+			}
+			p.Logger.Info("deleted, as the template no longer renders it", "kind", kind.Kind, "object", objectKey(&obj), "tenant", spec.CustomerID)
+		}
+	}
+	return nil
 }
 
 // observe reports the readiness of the objects of one kind: that of the

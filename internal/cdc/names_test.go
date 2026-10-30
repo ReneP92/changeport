@@ -3,6 +3,8 @@ package cdc
 import (
 	"strings"
 	"testing"
+
+	"github.com/ReneP92/changeport/internal/provisioning"
 )
 
 func TestValidateName(t *testing.T) {
@@ -161,5 +163,18 @@ func TestTopicsCollidesWithExistingByDotsAndUnderscores(t *testing.T) {
 	got := Topics("app", []Table{{"public", "orders"}}, []string{"app_public_orders"})
 	if !strings.Contains(got[0].Problem, "collides with the existing topic app_public_orders") {
 		t.Errorf("problem = %q", got[0].Problem)
+	}
+}
+
+// The provisioner renders only names that its own check accepts, which must
+// accept every name internal/cdc does.
+func TestProvisioningAcceptsEverySourceName(t *testing.T) {
+	for _, name := range []string{"app", "a", "app-db", "pg14", strings.Repeat("a", MaxSourceNameLength), strings.Repeat("a", MaxSourceNameLength+1), "App", "1app", "app-", "app_db"} {
+		if (ValidateName(name) == nil) && provisioning.ValidateSourceName(name) != nil {
+			t.Errorf("internal/cdc accepts %q, but the provisioner does not", name)
+		}
+		if provisioning.ValidateSourceName(name) == nil && !strings.HasPrefix(name, "changeport") && ValidateName(name) != nil {
+			t.Errorf("the provisioner accepts %q, but internal/cdc does not", name)
+		}
 	}
 }

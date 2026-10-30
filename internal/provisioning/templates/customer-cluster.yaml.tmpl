@@ -17,6 +17,31 @@ and its Platform says where it runs.
 {{- define "broker-selector" -}}
 {matchLabels: {strimzi.io/cluster: {{ quote .ClusterName }}, strimzi.io/pool-name: {{ .NodePoolName }}}}
 {{- end -}}
+{{- /* The labels of the objects of the CDC runtime, which the provisioner deletes once they are no longer rendered. */ -}}
+{{- define "cdc-labels" }}
+    {{ .CDC.PartLabel }}: {{ .CDC.Part }}
+{{- template "labels" . }}
+{{- end -}}
+{{- define "connect-selector" -}}
+{matchLabels: {strimzi.io/cluster: {{ .CDC.ConnectCluster }}, strimzi.io/kind: KafkaConnect}}
+{{- end -}}
+{{- define "registry-selector" -}}
+{matchLabels: {app.kubernetes.io/name: {{ .CDC.Registry }}}}
+{{- end -}}
+{{- /* Places a pod of the CDC runtime on the customer's dedicated nodes, never on a broker's node. */ -}}
+{{- define "cdc-placement" }}
+      affinity:
+{{- if .Platform.DedicatedNodes }}
+        nodeAffinity: {{ template "tenant-node-affinity" . }}
+{{- end }}
+        podAntiAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            - topologyKey: kubernetes.io/hostname
+              labelSelector: {{ template "broker-selector" . }}
+{{- if .Platform.DedicatedNodes }}
+      tolerations: {{ template "tenant-tolerations" . }}
+{{- end }}
+{{- end -}}
 apiVersion: v1
 kind: Namespace
 metadata:
@@ -565,4 +590,357 @@ spec:
         - name: cluster-ca
           secret:
             secretName: {{ $.ClusterCASecret }}
+{{- end }}
+{{- if .CDC }}
+---
+# The Kafka Connect worker's user on the internal listener, for the customer's
+# Postgres CDC sources (docs/cdc.md). It creates and writes each source's
+# topics, but never reads the customer's topics.
+apiVersion: kafka.strimzi.io/v1
+kind: KafkaUser
+metadata:
+  name: {{ .CDC.ConnectUser }}
+  namespace: {{ .Namespace }}
+  labels:
+    strimzi.io/cluster: {{ quote .ClusterName }}
+{{- template "cdc-labels" . }}
+spec:
+  authentication:
+    type: tls
+  authorization:
+    type: simple
+    acls:
+      # Connect's own topics, of connector configurations, offsets and status,
+      # and its group.
+      - resource:
+          type: topic
+          name: changeport.connect.
+          patternType: prefix
+        operations: [Create, Describe, DescribeConfigs, Read, Write]
+      - resource:
+          type: group
+          name: changeport.connect
+          patternType: literal
+        operations: [Describe, Read]
+      # The sources' snapshot signals, progress notifications and heartbeats.
+      - resource:
+          type: topic
+          name: changeport.cdc.
+          patternType: prefix
+        operations: [Create, Describe, DescribeConfigs, Read, Write]
+      - resource:
+          type: group
+          name: changeport.cdc.
+          patternType: prefix
+        operations: [Describe, Read]
+{{- range .CDC.Sources }}
+      # The topics of source {{ .Name }}'s tables.
+      - resource:
+          type: topic
+          name: {{ quote (printf "%s." .Name) }}
+          patternType: prefix
+        operations: [Create, Describe, DescribeConfigs, Write]
+{{- end }}
+      - resource:
+          type: cluster
+        operations: [Describe, DescribeConfigs]
+---
+# The schema registry's user on the internal listener: it keeps its schemas
+# in its own topics, and touches nothing else.
+apiVersion: kafka.strimzi.io/v1
+kind: KafkaUser
+metadata:
+  name: {{ .CDC.RegistryUser }}
+  namespace: {{ .Namespace }}
+  labels:
+    strimzi.io/cluster: {{ quote .ClusterName }}
+{{- template "cdc-labels" . }}
+spec:
+  authentication:
+    type: tls
+  authorization:
+    type: simple
+    acls:
+      - resource:
+          type: topic
+          name: changeport.registry.
+          patternType: prefix
+        operations: [Create, Describe, DescribeConfigs, Read, Write]
+      - resource:
+          type: group
+          name: changeport.registry.
+          patternType: prefix
+        operations: [Describe, Read]
+      - resource:
+          type: cluster
+        operations: [Describe, DescribeConfigs]
+---
+# The Kafka Connect worker that runs the customer's Postgres CDC sources, one
+# KafkaConnector each, with Debezium and Apicurio's Avro converter
+# (images/connect).
+apiVersion: kafka.strimzi.io/v1
+kind: KafkaConnect
+metadata:
+  name: {{ .CDC.ConnectCluster }}
+  namespace: {{ .Namespace }}
+  labels:
+{{- template "cdc-labels" . }}
+  annotations:
+    strimzi.io/use-connector-resources: "true"
+spec:
+  version: {{ .KafkaVersion }}
+  image: {{ .Platform.ConnectImage }}
+  replicas: 1
+  bootstrapServers: "{{ .ClusterName }}-kafka-bootstrap:{{ .InternalPort }}"
+  groupId: changeport.connect
+  configStorageTopic: changeport.connect.configs
+  offsetStorageTopic: changeport.connect.offsets
+  statusStorageTopic: changeport.connect.status
+  tls:
+    trustedCertificates:
+      - secretName: {{ .ClusterCASecret }}
+        certificate: ca.crt
+  authentication:
+    type: tls
+    certificateAndKey:
+      secretName: {{ .CDC.ConnectUser }}
+      certificate: user.crt
+      key: user.key
+  config:
+    config.storage.replication.factor: {{ .Profile.ReplicationFactor }}
+    offset.storage.replication.factor: {{ .Profile.ReplicationFactor }}
+    status.storage.replication.factor: {{ .Profile.ReplicationFactor }}
+    # Connector configurations name the files of the mounted Secrets rather
+    # than holding passwords: ${directory:/mnt/sources:<source>}.
+    config.providers: directory
+    config.providers.directory.class: org.apache.kafka.common.config.provider.DirectoryConfigProvider
+  resources:
+    requests:
+      cpu: "{{ .Profile.ConnectCPURequest }}"
+      memory: "{{ .Profile.ConnectMemory }}"
+    limits:
+      memory: "{{ .Profile.ConnectMemory }}"
+  template:
+    pod:
+{{- template "cdc-placement" . }}
+      volumes:
+        # The sources' database passwords, which the source controller writes.
+        - name: sources
+          secret:
+            secretName: {{ .CDC.ConnectSourcesSecret }}
+            optional: true
+        # The worker's own certificate and the cluster CA, for the clients
+        # Debezium starts itself, such as the snapshot signal consumer.
+        - name: connect-user
+          secret:
+            secretName: {{ .CDC.ConnectUser }}
+        - name: cluster-ca
+          secret:
+            secretName: {{ .ClusterCASecret }}
+    connectContainer:
+      volumeMounts:
+        - name: sources
+          mountPath: /mnt/sources
+        - name: connect-user
+          mountPath: /mnt/connect-user
+        - name: cluster-ca
+          mountPath: /mnt/cluster-ca
+---
+# The schema registry, Apicurio Registry, which keeps the Avro schemas of the
+# sources' topics in the customer's Kafka. Customers reach it through the
+# registry gateway; the Connect worker inside the cluster.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ .CDC.Registry }}
+  namespace: {{ .Namespace }}
+  labels:
+    app.kubernetes.io/name: {{ .CDC.Registry }}
+{{- template "cdc-labels" . }}
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: {{ .CDC.Registry }}
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: {{ .CDC.Registry }}
+        changeport.io/tenant: {{ quote .Tenant }}
+    spec:
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
+{{- template "cdc-placement" . }}
+      containers:
+        - name: registry
+          image: {{ .CDC.RegistryImage }}
+          env:
+            - name: APICURIO_STORAGE_KIND
+              value: kafkasql
+            - name: APICURIO_KAFKASQL_BOOTSTRAP_SERVERS
+              value: "{{ .ClusterName }}-kafka-bootstrap:{{ .InternalPort }}"
+            - name: APICURIO_KAFKASQL_TOPIC
+              value: changeport.registry.journal
+            - name: APICURIO_KAFKASQL_SNAPSHOTS_TOPIC
+              value: changeport.registry.snapshots
+            - name: APICURIO_EVENTS_KAFKA_TOPIC
+              value: changeport.registry.events
+            - name: APICURIO_KAFKASQL_CONSUMER_GROUP_PREFIX
+              value: changeport.registry.
+            - name: APICURIO_KAFKASQL_SECURITY_PROTOCOL
+              value: SSL
+            - name: APICURIO_KAFKASQL_SECURITY_SSL_KEYSTORE_TYPE
+              value: PKCS12
+            - name: APICURIO_KAFKASQL_SECURITY_SSL_KEYSTORE_LOCATION
+              value: /mnt/user/user.p12
+            - name: APICURIO_KAFKASQL_SECURITY_SSL_KEYSTORE_PASSWORD
+              valueFrom:
+                secretKeyRef: {name: {{ .CDC.RegistryUser }}, key: user.password}
+            - name: APICURIO_KAFKASQL_SECURITY_SSL_TRUSTSTORE_TYPE
+              value: PKCS12
+            - name: APICURIO_KAFKASQL_SECURITY_SSL_TRUSTSTORE_LOCATION
+              value: /mnt/cluster-ca/ca.p12
+            - name: APICURIO_KAFKASQL_SECURITY_SSL_TRUSTSTORE_PASSWORD
+              valueFrom:
+                secretKeyRef: {name: {{ .ClusterCASecret }}, key: ca.password}
+          ports:
+            - name: http
+              containerPort: {{ .CDC.RegistryPort }}
+            - name: management
+              containerPort: {{ .CDC.RegistryManagementPort }}
+          readinessProbe:
+            httpGet:
+              path: /health/ready
+              port: management
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /health/live
+              port: management
+            initialDelaySeconds: 60
+            periodSeconds: 30
+          resources:
+            requests:
+              cpu: "{{ .Profile.RegistryCPURequest }}"
+              memory: "{{ .Profile.RegistryMemory }}"
+            limits:
+              memory: "{{ .Profile.RegistryMemory }}"
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: [ALL]
+          volumeMounts:
+            - name: user
+              mountPath: /mnt/user
+              readOnly: true
+            - name: cluster-ca
+              mountPath: /mnt/cluster-ca
+              readOnly: true
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        # The certificate of the registry's KafkaUser, from the User Operator.
+        - name: user
+          secret:
+            secretName: {{ .CDC.RegistryUser }}
+        - name: cluster-ca
+          secret:
+            secretName: {{ .ClusterCASecret }}
+        - name: tmp
+          emptyDir:
+            sizeLimit: 64Mi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ .CDC.Registry }}
+  namespace: {{ .Namespace }}
+  labels:
+{{- template "cdc-labels" . }}
+spec:
+  selector:
+    app.kubernetes.io/name: {{ .CDC.Registry }}
+  ports:
+    - name: http
+      port: {{ .CDC.RegistryPort }}
+      targetPort: http
+---
+# The Connect worker reaches only DNS, the brokers, the registry, the other
+# workers, the Kubernetes API, which Strimzi's config provider reads its
+# certificates from, and databases on the internet; never the cluster's own
+# networks or the cloud's metadata service.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ .CDC.ConnectCluster }}-egress
+  namespace: {{ .Namespace }}
+  labels:
+{{- template "cdc-labels" . }}
+spec:
+  podSelector: {{ template "connect-selector" . }}
+  policyTypes: [Egress]
+  egress:
+    - ports:
+        - {protocol: UDP, port: 53}
+        - {protocol: TCP, port: 53}
+    - to:
+        - podSelector: {matchLabels: {strimzi.io/cluster: {{ quote .ClusterName }}, strimzi.io/kind: Kafka}}
+      ports:
+        - {protocol: TCP, port: {{ .InternalPort }}}
+    - to:
+        - podSelector: {{ template "registry-selector" . }}
+      ports:
+        - {protocol: TCP, port: {{ .CDC.RegistryPort }}}
+    - to:
+        - podSelector: {{ template "connect-selector" . }}
+      ports:
+        - {protocol: TCP, port: 8083}
+{{- range .CDC.KubernetesAPI }}
+    - to:
+        - ipBlock: {cidr: {{ .CIDR }}}
+      ports:
+        - {protocol: TCP, port: {{ .Port }}}
+{{- end }}
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+            except:
+{{- range .CDC.PrivateRanges }}
+              - {{ . }}
+{{- end }}
+{{- with .Platform.SourceDatabaseNamespace }}
+    # The databases that stand in for customers' on this platform.
+    - to:
+        - namespaceSelector: {matchLabels: {kubernetes.io/metadata.name: {{ . }}}}
+{{- end }}
+---
+# Only the Connect worker reaches the registry, and the registry reaches only
+# DNS and the brokers.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ .CDC.Registry }}
+  namespace: {{ .Namespace }}
+  labels:
+{{- template "cdc-labels" . }}
+spec:
+  podSelector: {{ template "registry-selector" . }}
+  policyTypes: [Ingress, Egress]
+  ingress:
+    - from:
+        - podSelector: {{ template "connect-selector" . }}
+      ports:
+        - {protocol: TCP, port: {{ .CDC.RegistryPort }}}
+  egress:
+    - ports:
+        - {protocol: UDP, port: 53}
+        - {protocol: TCP, port: 53}
+    - to:
+        - podSelector: {matchLabels: {strimzi.io/cluster: {{ quote .ClusterName }}, strimzi.io/kind: Kafka}}
+      ports:
+        - {protocol: TCP, port: {{ .InternalPort }}}
 {{- end }}

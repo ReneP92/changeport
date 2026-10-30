@@ -53,7 +53,26 @@ credentials, so the `client.properties` from the console covers both.
 
 Everything a customer's sources need is rendered from the one template
 (`internal/provisioning/templates/customer-cluster.yaml.tmpl`) into the
-customer's namespace. It exists only while the customer has a source.
+customer's namespace. It exists only while the customer has a source:
+
+- the KafkaUsers `changeport-connect` and `changeport-registry`;
+- the KafkaConnect `changeport-connect`;
+- the registry's Deployment and Service, `changeport-registry`;
+- a NetworkPolicy for each of the two.
+
+These objects are labelled `changeport.io/part: cdc`. Once the template no
+longer renders one, after the last source is gone, the provisioner deletes
+it. It is the only part of the template that is pruned.
+
+The Customer controller watches the sources, so adding the first one or
+removing the last reconciles the Customer. Its `CDCReady` condition says
+whether the runtime runs, or what it waits for. `Ready` does not include it,
+so it keeps meaning that clients can connect.
+
+The platforms name the Connect image and the registry image, and the
+profiles size them. On EKS with dedicated nodes, the NodePool gets one more
+node for them. A platform without a Connect image, such as EKS until the
+image is first published, runs no sources, and `CDCReady` says so.
 
 ### Sources
 
@@ -102,7 +121,17 @@ include, so `Ready` keeps meaning that clients can connect.
     node.
   - It connects as the mTLS user `changeport-connect`. That user may create
     and write each source's topics and use Connect's own topics
-    (`changeport.connect.*`), but never read the customer's topics.
+    (`changeport.connect.*`) and the sources' signal, notification and
+    heartbeat topics (`changeport.cdc.*`), but never read the customer's
+    topics.
+  - Its NetworkPolicy lets it reach only DNS, the brokers, the registry,
+    the Kubernetes API server and the internet. It can't reach private
+    address ranges or the metadata service, so a source's host can never
+    point it inside the platform.
+    - Strimzi's config provider reads the worker's certificates from the
+      API server. The provisioner looks up the server's addresses in the
+      `kubernetes` Service's EndpointSlice, and allows only those.
+    - On kind it may also reach the namespace `source-postgres`.
 - **The image:** `images/connect`, Strimzi's Kafka image with the Debezium
   Postgres connector and Apicurio's Avro converter, pinned and checksummed.
 - **Replication:** with `pgoutput`.
@@ -137,6 +166,10 @@ include, so `Ready` keeps meaning that clients can connect.
 - **Registry:** Apicurio Registry 3, one per customer, keeping its schemas in
   the customer's Kafka in three topics, `changeport.registry.journal`,
   `.snapshots` and `.events`. It connects over mTLS as `changeport-registry`.
+  - That user may use only topics and consumer groups starting with
+    `changeport.registry.`.
+  - Its NetworkPolicy lets only the Connect worker reach it, and lets it
+    reach only DNS and the brokers.
 - **Message format:** the converter writes Confluent's wire format, so
   standard Avro deserializers read the topics.
 - **Access:** customers reach the registry through `registry-gateway`, a small

@@ -164,8 +164,8 @@ prints the same `client.properties`.
 Provision more customers from the same template, or run the end-to-end
 check. Its core suite provisions a second customer, protected from deletion,
 smoke tests both clusters, runs the metrics, deletion protection, agent, lag,
-client telemetry, console, tiered storage, host access, connection guide and
-Postgres tests, and removes the second customer again; its failover suite freezes a zone and drains a
+client telemetry, console, tiered storage, host access, connection guide,
+Postgres and CDC runtime tests, and removes the second customer again; its failover suite freezes a zone and drains a
 broker of a three-zone customer. CI runs the two on separate clusters at once;
 locally `just e2e` runs both, one after the other:
 

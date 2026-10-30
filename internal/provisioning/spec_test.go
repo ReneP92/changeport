@@ -82,9 +82,19 @@ func TestKindImagesMatchDevScripts(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for variable, image := range map[string]string{"KAFKA_IMAGE": KindPlatform.KafkaImage, "AGENT_IMAGE": KindPlatform.AgentImage} {
+	for variable, image := range map[string]string{"KAFKA_IMAGE": KindPlatform.KafkaImage, "AGENT_IMAGE": KindPlatform.AgentImage, "CONNECT_IMAGE": KindPlatform.ConnectImage} {
 		if !strings.Contains(string(lib), "\n"+variable+"="+image+"\n") {
 			t.Errorf("hack/lib.sh does not set %s=%s, the kind platform's image", variable, image)
+		}
+	}
+	// kind runs the registry by the tag hack/lib.sh preloads, which is the
+	// one EKS pins by digest.
+	if !strings.Contains(string(lib), "\n  "+KindPlatform.RegistryImage+"\n") {
+		t.Errorf("hack/lib.sh does not preload %s", KindPlatform.RegistryImage)
+	}
+	for _, platform := range []Platform{EKSDevPlatform, EKSProdPlatform} {
+		if !strings.HasPrefix(platform.RegistryImage, KindPlatform.RegistryImage+"@sha256:") {
+			t.Errorf("%s runs registry image %s, want %s pinned by digest", platform.Name, platform.RegistryImage, KindPlatform.RegistryImage)
 		}
 	}
 }

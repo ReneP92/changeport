@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Builds the Kafka, agent, provisioner and console images, creates the local
+# Builds the Kafka, agent, Connect, provisioner and console images, creates the local
 # kind cluster with cloud-provider-kind for load balancers, installs the
 # platform components (Strimzi, cert-manager, the provisioning controller,
 # the console) and gives the console its Clerk keys from .env, creates the
@@ -18,6 +18,7 @@ ensure_kubectl
 
 build_kafka_image
 build_agent_image
+build_connect_image
 build_provisioner_image
 build_console_image
 check_docker_disk

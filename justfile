@@ -194,6 +194,11 @@ agent-test customer="demo":
 lag-test customer="demo":
     hack/lag-test.sh {{ customer }}
 
+# Check that a customer's first Postgres source brings Kafka Connect and the schema registry, and the last takes them
+[group('Local development (kind + Strimzi)')]
+cdc-runtime-test customer="demo":
+    hack/cdc-runtime-test.sh {{customer}}
+
 # Check the Postgres on kind that stands in for a customer's database: seed, logical replication, TLS only
 [group('Local development (kind + Strimzi)')]
 postgres-test:

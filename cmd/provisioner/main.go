@@ -12,6 +12,7 @@ import (
 	"log/slog"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -104,15 +105,17 @@ func (c *commonFlags) register(fs *flag.FlagSet) {
 // platformFlags select the platform clusters run on, and optionally other
 // images than the platform's, such as locally built ones.
 type platformFlags struct {
-	platform   string
-	kafkaImage string
-	agentImage string
+	platform     string
+	kafkaImage   string
+	agentImage   string
+	connectImage string
 }
 
 func (p *platformFlags) register(fs *flag.FlagSet) {
 	fs.StringVar(&p.platform, "platform", provisioning.KindPlatform.Name, "where the clusters run: kind, eks-dev or eks-prod")
 	fs.StringVar(&p.kafkaImage, "kafka-image", "", "broker image to use instead of the platform's")
 	fs.StringVar(&p.agentImage, "agent-image", "", "Kafka agent image to use instead of the platform's")
+	fs.StringVar(&p.connectImage, "connect-image", "", "Kafka Connect image to use instead of the platform's")
 }
 
 func (p *platformFlags) resolve() (provisioning.Platform, error) {
@@ -125,6 +128,9 @@ func (p *platformFlags) resolve() (provisioning.Platform, error) {
 	}
 	if p.agentImage != "" {
 		platform.AgentImage = p.agentImage
+	}
+	if p.connectImage != "" {
+		platform.ConnectImage = p.connectImage
 	}
 	return platform, nil
 }
@@ -287,6 +293,7 @@ func runRender(args []string, stdout, stderr io.Writer) error {
 	fs := flag.NewFlagSet("render", flag.ContinueOnError)
 	fs.SetOutput(stderr)
 	customer := fs.String("customer", "", "customer ID, for example acme (required)")
+	sources := fs.String("sources", "", "comma-separated names of Postgres CDC sources the customer has, for example app,billing")
 	var cluster clusterFlags
 	cluster.register(fs)
 	if err := fs.Parse(args); err != nil {
@@ -295,6 +302,11 @@ func runRender(args []string, stdout, stderr io.Writer) error {
 	spec, err := cluster.spec(*customer)
 	if err != nil {
 		return err
+	}
+	if *sources != "" {
+		for name := range strings.SplitSeq(*sources, ",") {
+			spec.Sources = append(spec.Sources, provisioning.Source{Name: name})
+		}
 	}
 	rendered, err := provisioning.RenderYAML(spec)
 	if err != nil {
@@ -373,7 +385,7 @@ func runController(ctx context.Context, args []string, logger *slog.Logger, stde
 	if err := mgr.AddReadyzCheck("ping", healthz.Ping); err != nil {
 		return err
 	}
-	logger.Info("controller starting", "platform", platform.Name, "kafkaImage", platform.KafkaImage, "agentImage", platform.AgentImage)
+	logger.Info("controller starting", "platform", platform.Name, "kafkaImage", platform.KafkaImage, "agentImage", platform.AgentImage, "connectImage", platform.ConnectImage)
 	return mgr.Start(ctx)
 }
 

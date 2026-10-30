@@ -25,7 +25,8 @@ TERRAFORM_VERSION=1.16.6
 # internal/provisioning.KindPlatform. dev-up builds it and loads it into kind.
 KAFKA_IMAGE=changeport/kafka:local
 # The Kafka Connect image from images/connect, which runs the Postgres CDC
-# source (docs/cdc.md). dev-up builds it and loads it into kind.
+# sources (docs/cdc.md), as named by internal/provisioning.KindPlatform.
+# dev-up builds it and loads it into kind.
 CONNECT_IMAGE=changeport/connect:local
 # The Kafka agent's image from images/agent, as named by
 # internal/provisioning.KindPlatform. dev-up builds it and loads it into kind.
@@ -68,6 +69,7 @@ KIND_PRELOAD_IMAGES=(
   quay.io/jetstack/cert-manager-controller:v1.21.2
   quay.io/jetstack/cert-manager-webhook:v1.21.2
   postgres:17.11
+  quay.io/apicurio/apicurio-registry:3.3.3
 )
 
 CLUSTER_NAME=${CLUSTER_NAME:-changeport}
@@ -303,15 +305,16 @@ KIND_LOCAL_OVERLAY="$ROOT/deploy/overlays/kind-local"
 
 # Writes KIND_LOCAL_OVERLAY: the kind overlay with the locally built images.
 # The provisioner and the console run the content tags of their images, and
-# the provisioner gives customers those of the Kafka and agent images, so
-# that every pod rolls when its image is rebuilt.
+# the provisioner gives customers those of the Kafka, agent and Connect
+# images, so that every pod rolls when its image is rebuilt.
 kind_local_overlay() {
-  local image kafka agent provisioner console
-  for image in "$KAFKA_IMAGE" "$AGENT_IMAGE" "$PROVISIONER_IMAGE" "$CONSOLE_IMAGE"; do
+  local image kafka agent connect provisioner console
+  for image in "$KAFKA_IMAGE" "$AGENT_IMAGE" "$CONNECT_IMAGE" "$PROVISIONER_IMAGE" "$CONSOLE_IMAGE"; do
     docker image inspect "$image" >/dev/null 2>&1 || die "$image has not been built; run just dev-up"
   done
   kafka=$(content_tag "$KAFKA_IMAGE")
   agent=$(content_tag "$AGENT_IMAGE")
+  connect=$(content_tag "$CONNECT_IMAGE")
   provisioner=$(content_tag "$PROVISIONER_IMAGE")
   console=$(content_tag "$CONSOLE_IMAGE")
   mkdir -p "$KIND_LOCAL_OVERLAY"
@@ -337,6 +340,9 @@ patches:
       - op: add
         path: /spec/template/spec/containers/0/args/-
         value: -agent-image=$agent
+      - op: add
+        path: /spec/template/spec/containers/0/args/-
+        value: -connect-image=$connect
 KUSTOMIZATION
 }
 
@@ -345,8 +351,8 @@ cluster_exists() { kind get clusters 2>/dev/null | grep -x "$CLUSTER_NAME" >/dev
 # Creates the kind cluster from deploy/kind/cluster.yaml, or checks that the
 # existing one still matches it: three zone-labelled workers on the pinned
 # Kubernetes version. Then preloads KIND_PRELOAD_IMAGES into its workers, and
-# the content tags of KAFKA_IMAGE, AGENT_IMAGE, PROVISIONER_IMAGE and
-# CONSOLE_IMAGE once they have been built.
+# the content tags of KAFKA_IMAGE, AGENT_IMAGE, CONNECT_IMAGE,
+# PROVISIONER_IMAGE and CONSOLE_IMAGE once they have been built.
 ensure_kind_cluster() {
   if cluster_exists; then
     check_kind_cluster
@@ -367,7 +373,7 @@ ensure_kind_cluster() {
   log "Loading images into the kind workers"
   kind_load "$workers" "${KIND_PRELOAD_IMAGES[@]}"
   local image
-  for image in "$KAFKA_IMAGE" "$AGENT_IMAGE" "$PROVISIONER_IMAGE" "$CONSOLE_IMAGE"; do
+  for image in "$KAFKA_IMAGE" "$AGENT_IMAGE" "$CONNECT_IMAGE" "$PROVISIONER_IMAGE" "$CONSOLE_IMAGE"; do
     if docker image inspect "$image" >/dev/null 2>&1; then
       kind_load "$workers" "$(content_tag "$image")"
       prune_node_images "$image" "$workers"
