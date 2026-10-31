@@ -75,6 +75,15 @@ const SourceFinalizer = "changeport.io/drop-slot"
 // database to.
 const SlotDroppedAnnotation = "changeport.io/slot-dropped"
 
+// CatalogRequestAnnotation asks the source controller to list the tables of
+// a source's database into status.catalog, for the console's table picker:
+// the console cannot read the source's password. Its value is the request's
+// time, which the catalog then answers.
+const CatalogRequestAnnotation = "changeport.io/catalog-requested"
+
+// MaxCatalogTables caps the tables a source's catalog lists.
+const MaxCatalogTables = 1000
+
 // The reasons of a PostgresSource's Ready condition.
 const (
 	// SourceReasonStreaming: changes stream. Ready is True.
@@ -267,6 +276,67 @@ type TableStatus struct {
 	// Message says why the snapshot waits or failed.
 	// +optional
 	Message string `json:"message,omitempty"`
+
+	// AskedAt is when the source controller asked for the table's snapshot,
+	// until Debezium answers with a notification about it.
+	// +optional
+	AskedAt *metav1.Time `json:"askedAt,omitempty"`
+}
+
+// CatalogTable is a table of a source's database, as the table picker shows
+// it.
+type CatalogTable struct {
+	// Schema is the table's schema.
+	Schema string `json:"schema"`
+
+	// Name is the table's name.
+	Name string `json:"name"`
+
+	// Partitioned reports whether the table is partitioned; it syncs with
+	// its partitions, through one topic.
+	// +optional
+	Partitioned bool `json:"partitioned,omitempty"`
+
+	// EstimatedRows is Postgres's estimate of the table's rows, or -1
+	// before the table was first analyzed.
+	EstimatedRows int64 `json:"estimatedRows"`
+
+	// Readable reports whether the source's role may read the table.
+	// +optional
+	Readable bool `json:"readable,omitempty"`
+
+	// Keyed reports whether the table has a primary key the source can key
+	// its messages and copy its rows by.
+	// +optional
+	Keyed bool `json:"keyed,omitempty"`
+
+	// Reason says why the table is not keyed.
+	// +optional
+	Reason string `json:"reason,omitempty"`
+}
+
+// TableCatalog is the tables of a source's database, which the source
+// controller lists when CatalogRequestAnnotation asks it to.
+type TableCatalog struct {
+	// RequestedAt is the value of CatalogRequestAnnotation the catalog
+	// answers.
+	RequestedAt string `json:"requestedAt"`
+
+	// ListedAt is when the controller listed the tables, or tried to.
+	ListedAt metav1.Time `json:"listedAt"`
+
+	// Tables are the database's tables, by schema and name, at most
+	// MaxCatalogTables of them.
+	// +optional
+	Tables []CatalogTable `json:"tables,omitempty"`
+
+	// Truncated reports whether the database has more tables than Tables.
+	// +optional
+	Truncated bool `json:"truncated,omitempty"`
+
+	// Message says why the tables could not be listed.
+	// +optional
+	Message string `json:"message,omitempty"`
 }
 
 // PostgresSourceStatus is how far the source is.
@@ -302,6 +372,11 @@ type PostgresSourceStatus struct {
 	// +listMapKey=name
 	// +optional
 	Tables []TableStatus `json:"tables,omitempty"`
+
+	// Catalog is the tables of the source's database, listed on request
+	// and forgotten again after a while.
+	// +optional
+	Catalog *TableCatalog `json:"catalog,omitempty"`
 
 	// Conditions say what the source waits for, or why it failed.
 	// +listType=map

@@ -163,6 +163,12 @@ include, so `Ready` keeps meaning that clients can connect.
     - Debezium copies a table once per signal, even a signal sent before a
       restart. So the controller sends a table's signal once, and remembers
       it for ten minutes in case recording that in the status fails.
+    - A signal Debezium does not answer with a notification about the table
+      within five minutes was lost: Debezium reads signals every five
+      seconds and answers at once. The controller then asks again, and the
+      table's status says so meanwhile. Asking twice is safe, as rows
+      arrive at least once. It was seen once on kind under load, with
+      nothing logged.
     - It follows the progress in the notification topic, decoding the
       notifications' Avro with their schemas from the registry.
     - Each table's status shows its snapshot, Pending, Running, Done or
@@ -286,6 +292,14 @@ So:
     confirms once they have run it, which sets the annotation
     `changeport.io/slot-dropped: "true"`.
   - Slots are never dropped any other way.
+- **Deprovisioning a customer:** its sources go before its namespace. The
+  provisioner deletes the sources, their connectors and their KafkaTopics,
+  and deletes the namespace only once they are all gone. Deleting the
+  namespace at once would take the credentials each source needs to drop its
+  slot, and the Topic Operator that lets the KafkaTopics go, and leave both
+  stuck. Meanwhile the Customer's status names what it waits for; a source
+  whose database cannot be reached waits for an operator to drop its slot
+  and confirm it, as a customer would.
 - **A lost slot:** when the database invalidates a slot because it held back
   too much WAL, the source fails, saying so plainly. Recovery is a new slot
   and a new snapshot.
@@ -375,6 +389,7 @@ in the audit log.
 | `POST sources/{source}/sql` | The SQL of a change: adding or removing tables, a new password, cleaning up, or dropping the slot |
 | `PUT sources/{source}/password` | Uses a new password, once it logs in |
 | `POST sources/{source}/slot-dropped` | Records that the customer dropped a deleted source's slot themselves, when Changeport cannot reach the database |
+| `POST`, `GET sources/{source}/catalog` | Asks the source controller for the tables of an existing source's database, for adding tables, then reads them |
 
 - **Passwords:** the console keeps no password. It returns a generated
   password once, writes a password the admin enters straight into its
@@ -386,6 +401,13 @@ in the audit log.
   when it starts. kind has none, and its console may check databases on
   private addresses (`-allow-private-databases`), as its stand-in database
   is one.
+- **Adding tables:** the table picker of an existing source needs the
+  database's tables, and the console cannot log in to the database: it
+  never sees the password again. So it asks the source controller, through
+  the annotation `changeport.io/catalog-requested`, and the controller lists
+  them, at most 1,000, into the source's `status.catalog`. It forgets them,
+  with the request, 15 minutes later, as they would make every update of the
+  status larger.
 - **Access:** the console's service account may read and change
   `PostgresSource` resources, and create the password Secrets the admission
   policy allows, but no other Secret. `hack/console-access-test.sh` checks
@@ -491,7 +513,11 @@ of this design with the Connect image, Apicurio 3.3.3 and Postgres 17:
   and the guardrails, and run the console's Kubernetes calls against a real
   API server (envtest) as its service account, with its ClusterRole and its
   admission policy.
-- **A Playwright spec** runs the console's wizard against the same database.
+- **The console's pages** (`web/e2e/clerk/sources.spec.ts`, in the Clerk
+  suite) run the wizard against the same database as an admin, running the
+  SQL it shows, then pause and resume the source, add and remove a table,
+  give it a new password, change its retention, show it to a member, and
+  delete it. The screenshot tour adds a source too ([console.md](console.md)).
 
 ## Steps
 

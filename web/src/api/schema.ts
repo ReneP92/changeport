@@ -348,6 +348,27 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/customer/sources/{source}/catalog": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The source's name, which prefixes its topics */
+                source: components["parameters"]["SourceName"];
+            };
+            cookie?: never;
+        };
+        /** The tables of an existing source's database, as the source controller last listed them for the table picker; for organization admins */
+        get: operations["getSourceCatalog"];
+        put?: never;
+        /** Asks the source controller to list the tables of an existing source's database, which the console cannot log in to; for organization admins */
+        post: operations["requestSourceCatalog"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/customer/throughput": {
         parameters: {
             query?: never;
@@ -632,6 +653,18 @@ export interface components {
         };
         SourceTableList: {
             tables: components["schemas"]["SourceTable"][];
+        };
+        SourceCatalog: {
+            /** @description Whether the catalog answers the latest request */
+            ready: boolean;
+            /** Format: date-time */
+            listedAt?: string;
+            /** @description The database's tables, each with its topic as the source would name it */
+            tables: components["schemas"]["SourceTable"][];
+            /** @description Whether the database has more tables than listed */
+            truncated: boolean;
+            /** @description Why the tables could not be listed */
+            message?: string;
         };
         NewSource: {
             name: string;
@@ -1491,6 +1524,61 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content?: never;
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            503: components["responses"]["NotConfigured"];
+        };
+    };
+    getSourceCatalog: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The source's name, which prefixes its topics */
+                source: components["parameters"]["SourceName"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The catalog */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SourceCatalog"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            503: components["responses"]["NotConfigured"];
+        };
+    };
+    requestSourceCatalog: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The source's name, which prefixes its topics */
+                source: components["parameters"]["SourceName"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The catalog, which answers the request once ready is true */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SourceCatalog"];
+                };
             };
             401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];

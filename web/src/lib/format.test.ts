@@ -1,5 +1,12 @@
 import { describe, expect, test } from "bun:test";
-import { formatBytes, formatDuration, formatLag, formatRate, formatRetention } from "@/lib/format";
+import {
+  formatAgo,
+  formatBytes,
+  formatDuration,
+  formatLag,
+  formatRate,
+  formatRetention,
+} from "@/lib/format";
 
 describe("formatBytes", () => {
   test("uses powers of 1,000", () => {
@@ -52,5 +59,14 @@ describe("formatLag", () => {
   });
   test("gives a lower bound when the lag is capped", () => {
     expect(formatLag(23 * 3600, 9000, true)).toBe("More than 23 hours behind");
+  });
+});
+
+describe("formatAgo", () => {
+  test("says how long ago, coarsely", () => {
+    const now = Date.parse("2026-10-30T12:00:00Z");
+    expect(formatAgo("2026-10-30T11:59:30Z", now)).toBe("just now");
+    expect(formatAgo("2026-10-30T11:57:00Z", now)).toBe("3 minutes ago");
+    expect(formatAgo("2026-10-30T12:00:05Z", now)).toBe("just now");
   });
 });

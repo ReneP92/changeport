@@ -679,6 +679,23 @@ type Source struct {
 // SourceState defines model for Source.State.
 type SourceState string
 
+// SourceCatalog defines model for SourceCatalog.
+type SourceCatalog struct {
+	ListedAt *time.Time `json:"listedAt,omitempty"`
+
+	// Message Why the tables could not be listed
+	Message *string `json:"message,omitempty"`
+
+	// Ready Whether the catalog answers the latest request
+	Ready bool `json:"ready"`
+
+	// Tables The database's tables, each with its topic as the source would name it
+	Tables []SourceTable `json:"tables"`
+
+	// Truncated Whether the database has more tables than listed
+	Truncated bool `json:"truncated"`
+}
+
 // SourceChange defines model for SourceChange.
 type SourceChange struct {
 	RetentionMs *int64             `json:"retentionMs,omitempty"`
@@ -992,6 +1009,12 @@ type ServerInterface interface {
 	// ChangeSource Changes a source's tables, retention or state, for organization admins
 	// (PATCH /api/customer/sources/{source})
 	ChangeSource(w http.ResponseWriter, r *http.Request, source SourceName)
+	// GetSourceCatalog The tables of an existing source's database, as the source controller last listed them for the table picker; for organization admins
+	// (GET /api/customer/sources/{source}/catalog)
+	GetSourceCatalog(w http.ResponseWriter, r *http.Request, source SourceName)
+	// RequestSourceCatalog Asks the source controller to list the tables of an existing source's database, which the console cannot log in to; for organization admins
+	// (POST /api/customer/sources/{source}/catalog)
+	RequestSourceCatalog(w http.ResponseWriter, r *http.Request, source SourceName)
 	// SetSourcePassword Gives a source the role's new password, once it logs in; for organization admins
 	// (PUT /api/customer/sources/{source}/password)
 	SetSourcePassword(w http.ResponseWriter, r *http.Request, source SourceName)
@@ -1298,6 +1321,58 @@ func (siw *ServerInterfaceWrapper) ChangeSource(w http.ResponseWriter, r *http.R
 
 	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		siw.Handler.ChangeSource(w, r, source)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// GetSourceCatalog operation middleware
+func (siw *ServerInterfaceWrapper) GetSourceCatalog(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "source" -------------
+	var source SourceName
+
+	err = runtime.BindStyledParameterWithOptions("simple", "source", r.PathValue("source"), &source, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "source", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.GetSourceCatalog(w, r, source)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// RequestSourceCatalog operation middleware
+func (siw *ServerInterfaceWrapper) RequestSourceCatalog(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "source" -------------
+	var source SourceName
+
+	err = runtime.BindStyledParameterWithOptions("simple", "source", r.PathValue("source"), &source, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "source", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.RequestSourceCatalog(w, r, source)
 	}))
 
 	for _, middleware := range siw.HandlerMiddlewares {
@@ -1749,6 +1824,8 @@ func HandlerWithOptions(si ServerInterface, options StdHTTPServerOptions) http.H
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/customer/sources/{source}/sql", wrapper.GetSourceSQL)
 	m.HandleFunc(http.MethodPut+" "+options.BaseURL+"/api/customer/sources/{source}/password", wrapper.SetSourcePassword)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/customer/sources/{source}/slot-dropped", wrapper.ConfirmSlotDropped)
+	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/customer/sources/{source}/catalog", wrapper.GetSourceCatalog)
+	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/customer/sources/{source}/catalog", wrapper.RequestSourceCatalog)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/customer/throughput", wrapper.GetThroughput)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/customer/consumer-groups", wrapper.ListConsumerGroups)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/operator/customers", wrapper.ListCustomers)
@@ -3026,6 +3103,176 @@ func (response ChangeSource503JSONResponse) VisitChangeSourceResponse(w http.Res
 	return err
 }
 
+type GetSourceCatalogRequestObject struct {
+	Source SourceName `json:"source"`
+}
+
+type GetSourceCatalogResponseObject interface {
+	VisitGetSourceCatalogResponse(w http.ResponseWriter) error
+}
+
+type GetSourceCatalog200JSONResponse SourceCatalog
+
+func (response GetSourceCatalog200JSONResponse) VisitGetSourceCatalogResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GetSourceCatalog401JSONResponse struct{ UnauthorizedJSONResponse }
+
+func (response GetSourceCatalog401JSONResponse) VisitGetSourceCatalogResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(401)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GetSourceCatalog403JSONResponse struct{ ForbiddenJSONResponse }
+
+func (response GetSourceCatalog403JSONResponse) VisitGetSourceCatalogResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(403)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GetSourceCatalog404JSONResponse struct{ NotFoundJSONResponse }
+
+func (response GetSourceCatalog404JSONResponse) VisitGetSourceCatalogResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(404)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GetSourceCatalog503JSONResponse struct{ NotConfiguredJSONResponse }
+
+func (response GetSourceCatalog503JSONResponse) VisitGetSourceCatalogResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(503)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type RequestSourceCatalogRequestObject struct {
+	Source SourceName `json:"source"`
+}
+
+type RequestSourceCatalogResponseObject interface {
+	VisitRequestSourceCatalogResponse(w http.ResponseWriter) error
+}
+
+type RequestSourceCatalog202JSONResponse SourceCatalog
+
+func (response RequestSourceCatalog202JSONResponse) VisitRequestSourceCatalogResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(202)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type RequestSourceCatalog401JSONResponse struct{ UnauthorizedJSONResponse }
+
+func (response RequestSourceCatalog401JSONResponse) VisitRequestSourceCatalogResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(401)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type RequestSourceCatalog403JSONResponse struct{ ForbiddenJSONResponse }
+
+func (response RequestSourceCatalog403JSONResponse) VisitRequestSourceCatalogResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(403)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type RequestSourceCatalog404JSONResponse struct{ NotFoundJSONResponse }
+
+func (response RequestSourceCatalog404JSONResponse) VisitRequestSourceCatalogResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(404)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type RequestSourceCatalog409JSONResponse struct{ ConflictJSONResponse }
+
+func (response RequestSourceCatalog409JSONResponse) VisitRequestSourceCatalogResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(409)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type RequestSourceCatalog503JSONResponse struct{ NotConfiguredJSONResponse }
+
+func (response RequestSourceCatalog503JSONResponse) VisitRequestSourceCatalogResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(503)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
 type SetSourcePasswordRequestObject struct {
 	Source SourceName `json:"source"`
 	Body   *SetSourcePasswordJSONRequestBody
@@ -4251,6 +4498,12 @@ type StrictServerInterface interface {
 	// ChangeSource Changes a source's tables, retention or state, for organization admins
 	// (PATCH /api/customer/sources/{source})
 	ChangeSource(ctx context.Context, request ChangeSourceRequestObject) (ChangeSourceResponseObject, error)
+	// GetSourceCatalog The tables of an existing source's database, as the source controller last listed them for the table picker; for organization admins
+	// (GET /api/customer/sources/{source}/catalog)
+	GetSourceCatalog(ctx context.Context, request GetSourceCatalogRequestObject) (GetSourceCatalogResponseObject, error)
+	// RequestSourceCatalog Asks the source controller to list the tables of an existing source's database, which the console cannot log in to; for organization admins
+	// (POST /api/customer/sources/{source}/catalog)
+	RequestSourceCatalog(ctx context.Context, request RequestSourceCatalogRequestObject) (RequestSourceCatalogResponseObject, error)
 	// SetSourcePassword Gives a source the role's new password, once it logs in; for organization admins
 	// (PUT /api/customer/sources/{source}/password)
 	SetSourcePassword(ctx context.Context, request SetSourcePasswordRequestObject) (SetSourcePasswordResponseObject, error)
@@ -4729,6 +4982,58 @@ func (sh *strictHandler) ChangeSource(w http.ResponseWriter, r *http.Request, so
 		sh.options.ResponseErrorHandlerFunc(w, r, err)
 	} else if validResponse, ok := response.(ChangeSourceResponseObject); ok {
 		if err := validResponse.VisitChangeSourceResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// GetSourceCatalog operation middleware
+func (sh *strictHandler) GetSourceCatalog(w http.ResponseWriter, r *http.Request, source SourceName) {
+	var request GetSourceCatalogRequestObject
+
+	request.Source = source
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.GetSourceCatalog(ctx, request.(GetSourceCatalogRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "GetSourceCatalog")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(GetSourceCatalogResponseObject); ok {
+		if err := validResponse.VisitGetSourceCatalogResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// RequestSourceCatalog operation middleware
+func (sh *strictHandler) RequestSourceCatalog(w http.ResponseWriter, r *http.Request, source SourceName) {
+	var request RequestSourceCatalogRequestObject
+
+	request.Source = source
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.RequestSourceCatalog(ctx, request.(RequestSourceCatalogRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "RequestSourceCatalog")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(RequestSourceCatalogResponseObject); ok {
+		if err := validResponse.VisitRequestSourceCatalogResponse(w); err != nil {
 			sh.options.ResponseErrorHandlerFunc(w, r, err)
 		}
 	} else if response != nil {

@@ -146,6 +146,12 @@ func TestKubeSourcesAsTheConsole(t *testing.T) {
 		t.Errorf("Get() of an invalid name = %v, %v", missing, err)
 	}
 
+	// The console asks the controller for the database's tables.
+	requested, err := sources.RequestCatalog(ctx, got)
+	if err != nil || got.Annotations[v1alpha1.CatalogRequestAnnotation] != requested {
+		t.Fatalf("RequestCatalog() = %q, %v; annotations %v", requested, err, got.Annotations)
+	}
+
 	// A new password is a new Secret, which the source then names.
 	if err := sources.SetPassword(ctx, got, "New-p4ssword"); err != nil {
 		t.Fatal(err)

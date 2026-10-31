@@ -534,6 +534,47 @@ paths:
           $ref: "#/components/responses/Conflict"
         "503":
           $ref: "#/components/responses/NotConfigured"
+  /api/customer/sources/{source}/catalog:
+    parameters:
+      - $ref: "#/components/parameters/SourceName"
+    get:
+      operationId: getSourceCatalog
+      summary: The tables of an existing source's database, as the source controller last listed them for the table picker; for organization admins
+      responses:
+        "200":
+          description: The catalog
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SourceCatalog"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "503":
+          $ref: "#/components/responses/NotConfigured"
+    post:
+      operationId: requestSourceCatalog
+      summary: Asks the source controller to list the tables of an existing source's database, which the console cannot log in to; for organization admins
+      responses:
+        "202":
+          description: The catalog, which answers the request once ready is true
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SourceCatalog"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "503":
+          $ref: "#/components/responses/NotConfigured"
   /api/customer/throughput:
     get:
       operationId: getThroughput
@@ -1128,6 +1169,27 @@ components:
           type: array
           items:
             $ref: "#/components/schemas/SourceTable"
+    SourceCatalog:
+      type: object
+      required: [ready, tables, truncated]
+      properties:
+        ready:
+          type: boolean
+          description: Whether the catalog answers the latest request
+        listedAt:
+          type: string
+          format: date-time
+        tables:
+          type: array
+          description: The database's tables, each with its topic as the source would name it
+          items:
+            $ref: "#/components/schemas/SourceTable"
+        truncated:
+          type: boolean
+          description: Whether the database has more tables than listed
+        message:
+          type: string
+          description: Why the tables could not be listed
     NewSource:
       type: object
       required: [name, id, provider, connection, tables, retentionMs]

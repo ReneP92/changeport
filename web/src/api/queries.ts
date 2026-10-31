@@ -6,7 +6,12 @@ import {
   unwrap,
   type ApiClient,
   type NewCustomer,
+  type NewSource,
   type NewTopic,
+  type SetupSQLRequest,
+  type SourceChange,
+  type SourceCheckRequest,
+  type SourceSQLRequest,
   type ThroughputRange,
 } from "@/api/client";
 
@@ -249,4 +254,216 @@ export function useDeleteTopic() {
     },
     onSuccess: () => queries.invalidateQueries({ queryKey: ["customer", "topics"] }),
   });
+}
+
+/** What adding a Postgres source offers: providers, presets and the egress addresses. */
+export function useSourceOptions() {
+  const api = useApi();
+  const organization = useOrganizationKey();
+  return useQuery({
+    queryKey: ["customer", "source-options", organization],
+    queryFn: async () => unwrap(await api.GET("/api/customer/source-options")),
+    staleTime: Infinity,
+  });
+}
+
+/** The active organization's Postgres sources. */
+export function useSources() {
+  const api = useApi();
+  const organization = useOrganizationKey();
+  return useQuery({
+    queryKey: ["customer", "sources", organization],
+    queryFn: async () => unwrap(await api.GET("/api/customer/sources")).sources,
+    refetchInterval: 10_000,
+  });
+}
+
+/**
+ * One Postgres source, refreshed often while it copies tables or is being
+ * deleted. Once it is gone, the query fails with a 404.
+ */
+export function useSource(name: string) {
+  const api = useApi();
+  const organization = useOrganizationKey();
+  return useQuery({
+    queryKey: ["customer", "sources", organization, name],
+    queryFn: async () =>
+      unwrap(
+        await api.GET("/api/customer/sources/{source}", { params: { path: { source: name } } }),
+      ),
+    refetchInterval: (query) => {
+      if (query.state.error instanceof ApiError && query.state.error.status === 404) {
+        return false;
+      }
+      const source = query.state.data;
+      return source?.phase === "Streaming" || source?.phase === "Stopped" ? 10_000 : 3_000;
+    },
+    retry: (failures, error) =>
+      !(error instanceof ApiError && error.status === 404) && failures < 3,
+  });
+}
+
+/** The SQL of a new source's steps, which the first step's answer alone holds a password in. */
+export function useSetupSQL() {
+  const api = useApi();
+  return useMutation({
+    mutationFn: async (request: SetupSQLRequest) =>
+      unwrap(await api.POST("/api/customer/sources/setup-sql", { body: request })),
+  });
+}
+
+/** Checks a database for a source, keeping nothing. */
+export function useCheckSource() {
+  const api = useApi();
+  return useMutation({
+    mutationFn: async (request: SourceCheckRequest) =>
+      unwrap(await api.POST("/api/customer/sources/checks", { body: request })),
+  });
+}
+
+/** Lists a database's tables for the table picker of a new source. */
+export function useListSourceTables() {
+  const api = useApi();
+  return useMutation({
+    mutationFn: async (request: SourceCheckRequest) =>
+      unwrap(await api.POST("/api/customer/sources/tables", { body: request })).tables,
+  });
+}
+
+/** Creates a source, then refreshes the sources. */
+export function useCreateSource() {
+  const api = useApi();
+  const queries = useQueryClient();
+  return useMutation({
+    mutationFn: async (source: NewSource) =>
+      unwrap(await api.POST("/api/customer/sources", { body: source })),
+    onSuccess: () => queries.invalidateQueries({ queryKey: ["customer", "sources"] }),
+  });
+}
+
+/** Changes a source's tables, retention or state, then refreshes the sources and topics. */
+export function useChangeSource(name: string) {
+  const api = useApi();
+  const queries = useQueryClient();
+  return useMutation({
+    mutationFn: async (change: SourceChange) =>
+      unwrap(
+        await api.PATCH("/api/customer/sources/{source}", {
+          params: { path: { source: name } },
+          body: change,
+        }),
+      ),
+    onSuccess: async () => {
+      await queries.invalidateQueries({ queryKey: ["customer", "sources"] });
+      await queries.invalidateQueries({ queryKey: ["customer", "topics"] });
+    },
+  });
+}
+
+/** Deletes a source, with its name typed, then refreshes the sources. */
+export function useDeleteSource(name: string) {
+  const api = useApi();
+  const queries = useQueryClient();
+  return useMutation({
+    mutationFn: async () => {
+      const { error, response } = await api.DELETE("/api/customer/sources/{source}", {
+        params: { path: { source: name }, query: { confirm: name } },
+      });
+      if (!response.ok) {
+        throw new ApiError(response.status, error);
+      }
+    },
+    onSuccess: () => queries.invalidateQueries({ queryKey: ["customer", "sources"] }),
+  });
+}
+
+/** The SQL of a change to an existing source's database. */
+export function useSourceSQL(name: string) {
+  const api = useApi();
+  return useMutation({
+    mutationFn: async (request: SourceSQLRequest) =>
+      unwrap(
+        await api.POST("/api/customer/sources/{source}/sql", {
+          params: { path: { source: name } },
+          body: request,
+        }),
+      ),
+  });
+}
+
+/** Has a source use a new password, once it logs in. */
+export function useSetSourcePassword(name: string) {
+  const api = useApi();
+  const queries = useQueryClient();
+  return useMutation({
+    mutationFn: async (password: string) => {
+      const { error, response } = await api.PUT("/api/customer/sources/{source}/password", {
+        params: { path: { source: name } },
+        body: { password },
+      });
+      if (!response.ok) {
+        throw new ApiError(response.status, error);
+      }
+    },
+    onSuccess: () => queries.invalidateQueries({ queryKey: ["customer", "sources"] }),
+  });
+}
+
+/** Confirms that the customer dropped a deleted source's slot themselves. */
+export function useConfirmSlotDropped(name: string) {
+  const api = useApi();
+  const queries = useQueryClient();
+  return useMutation({
+    mutationFn: async () => {
+      const { error, response } = await api.POST("/api/customer/sources/{source}/slot-dropped", {
+        params: { path: { source: name } },
+      });
+      if (!response.ok) {
+        throw new ApiError(response.status, error);
+      }
+    },
+    onSuccess: () => queries.invalidateQueries({ queryKey: ["customer", "sources"] }),
+  });
+}
+
+/**
+ * The tables of an existing source's database, which the source controller
+ * lists on request: the console cannot log in to the database itself. While
+ * enabled, it asks once, then polls until the answer is there.
+ */
+export function useSourceCatalog(name: string, enabled: boolean) {
+  const api = useApi();
+  const organization = useOrganizationKey();
+  const queries = useQueryClient();
+  const key = ["customer", "source-catalog", organization, name];
+  const request = useQuery({
+    queryKey: [...key, "request"],
+    queryFn: async () =>
+      unwrap(
+        await api.POST("/api/customer/sources/{source}/catalog", {
+          params: { path: { source: name } },
+        }),
+      ),
+    enabled,
+    staleTime: 0,
+    gcTime: 0,
+    retry: false,
+  });
+  const catalog = useQuery({
+    queryKey: key,
+    queryFn: async () =>
+      unwrap(
+        await api.GET("/api/customer/sources/{source}/catalog", {
+          params: { path: { source: name } },
+        }),
+      ),
+    enabled: enabled && request.isSuccess,
+    gcTime: 0,
+    refetchInterval: (query) => (query.state.data?.ready ? false : 1_000),
+  });
+  return {
+    data: catalog.data?.ready ? catalog.data : undefined,
+    error: request.error ?? catalog.error,
+    retry: () => queries.resetQueries({ queryKey: key }),
+  };
 }

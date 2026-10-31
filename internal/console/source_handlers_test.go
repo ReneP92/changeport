@@ -6,6 +6,7 @@ import (
 	"errors"
 	"net/http"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -99,6 +100,19 @@ func (f *fakeSources) Delete(_ context.Context, source *v1alpha1.PostgresSource)
 func (f *fakeSources) ConfirmSlotDropped(_ context.Context, source *v1alpha1.PostgresSource) error {
 	f.slotDropped = append(f.slotDropped, strings.TrimPrefix(source.Namespace, "customer-")+"/"+source.Name)
 	return nil
+}
+
+func (f *fakeSources) RequestCatalog(_ context.Context, source *v1alpha1.PostgresSource) (string, error) {
+	customerID := strings.TrimPrefix(source.Namespace, "customer-")
+	i := f.index(customerID, source.Name)
+	if i < 0 {
+		return "", errors.New("no such source")
+	}
+	stored := &f.sources[customerID][i]
+	requested := "request-" + strconv.Itoa(len(stored.Annotations[v1alpha1.CatalogRequestAnnotation])+1)
+	stored.Annotations = map[string]string{v1alpha1.CatalogRequestAnnotation: requested}
+	source.Annotations = stored.Annotations
+	return requested, nil
 }
 
 // addApp puts the running source app of the tables, with ID k3x9q2, in acme.
@@ -207,6 +221,8 @@ func TestMembersReadSourcesAndOnlyAdminsChangeThem(t *testing.T) {
 			{http.MethodPost, "/api/customer/sources/app/sql", `{"step":"password"}`},
 			{http.MethodPut, "/api/customer/sources/app/password", `{"password":"New-p4ssword"}`},
 			{http.MethodPost, "/api/customer/sources/app/slot-dropped", ""},
+			{http.MethodPost, "/api/customer/sources/app/catalog", ""},
+			{http.MethodGet, "/api/customer/sources/app/catalog", ""},
 		} {
 			if status, body := send(t, f.handler, r.method, r.path, token, r.body); status != 403 {
 				t.Errorf("%s: %s %s = %d %s, want 403", name, r.method, r.path, status, body)
@@ -696,5 +712,57 @@ func TestSourcesTopicsStayTheirs(t *testing.T) {
 	_, body, _ = get(t, f.handler, "/api/customer/consumer-groups", admin)
 	if strings.Contains(body, "changeport") {
 		t.Errorf("consumer groups %s, want the platform's left out", body)
+	}
+}
+
+func TestAddingTablesListsThemThroughTheController(t *testing.T) {
+	f := newFixture(t)
+	source := f.sources.addApp("public.orders")
+	// The source's own topic is no collision; another existing one is.
+	f.clusters.topics["acme"] = []topics.Topic{
+		{Name: "app.public.orders", Partitions: 1, ReplicationFactor: 1},
+		{Name: "app.public.invoices", Partitions: 1, ReplicationFactor: 1},
+	}
+	admin := f.signer.token(t, session{user: "user_3", org: "org_acme", role: "admin"})
+	status, body := send(t, f.handler, http.MethodPost, "/api/customer/sources/app/catalog", admin, "")
+	if catalog := decode[api.SourceCatalog](t, body); status != 202 || catalog.Ready || len(catalog.Tables) != 0 {
+		t.Fatalf("asking for the tables = %d %s, want 202 and not ready", status, body)
+	}
+	requested := source.Annotations[v1alpha1.CatalogRequestAnnotation]
+	if requested == "" {
+		t.Fatal("the request did not reach the source")
+	}
+
+	// The controller answers an older request, then this one.
+	source.Status.Catalog = &v1alpha1.TableCatalog{RequestedAt: "older", ListedAt: metav1.Now()}
+	if _, body, _ := get(t, f.handler, "/api/customer/sources/app/catalog", admin); decode[api.SourceCatalog](t, body).Ready {
+		t.Errorf("an answer to an older request is ready: %s", body)
+	}
+	source.Status.Catalog = &v1alpha1.TableCatalog{RequestedAt: requested, ListedAt: metav1.Now(), Truncated: true, Tables: []v1alpha1.CatalogTable{
+		{Schema: "public", Name: "orders", EstimatedRows: 10, Readable: true, Keyed: true},
+		{Schema: "public", Name: "invoices", EstimatedRows: 5, Keyed: true},
+		{Schema: "public", Name: "events", EstimatedRows: -1, Reason: "Its primary key has a timestamp column."},
+	}}
+	_, body, _ = get(t, f.handler, "/api/customer/sources/app/catalog", admin)
+	catalog := decode[api.SourceCatalog](t, body)
+	if !catalog.Ready || !catalog.Truncated || catalog.ListedAt == nil || len(catalog.Tables) != 3 {
+		t.Fatalf("catalog %s", body)
+	}
+	if orders := catalog.Tables[0]; orders.Topic != "app.public.orders" || orders.TopicProblem != nil {
+		t.Errorf("orders %+v, want its own topic without a problem", orders)
+	}
+	if invoices := catalog.Tables[1]; invoices.TopicProblem == nil || !strings.Contains(*invoices.TopicProblem, "exists already") {
+		t.Errorf("invoices %+v, want its topic's collision", invoices)
+	}
+	if events := catalog.Tables[2]; events.Keyed || events.Reason == nil {
+		t.Errorf("events %+v, want it unkeyed with the reason", events)
+	}
+
+	source.DeletionTimestamp = &metav1.Time{Time: time.Now()}
+	if status, body := send(t, f.handler, http.MethodPost, "/api/customer/sources/app/catalog", admin, ""); status != 409 {
+		t.Errorf("asking for a deleted source's tables = %d %s, want 409", status, body)
+	}
+	if status, body := send(t, f.handler, http.MethodPost, "/api/customer/sources/unknown/catalog", admin, ""); status != 404 {
+		t.Errorf("asking for an unknown source's tables = %d %s, want 404", status, body)
 	}
 }

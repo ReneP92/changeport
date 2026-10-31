@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"slices"
 	"strings"
+	"time"
 
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -37,6 +38,10 @@ type Sources interface {
 	// ConfirmSlotDropped records that the customer dropped a deleted
 	// source's slot themselves.
 	ConfirmSlotDropped(ctx context.Context, source *v1alpha1.PostgresSource) error
+	// RequestCatalog asks the source controller to list the tables of the
+	// source's database, and returns the request, which the catalog in the
+	// source's status then answers.
+	RequestCatalog(ctx context.Context, source *v1alpha1.PostgresSource) (string, error)
 }
 
 // ErrSourceExists means a source of that name exists already.
@@ -173,4 +178,18 @@ func (k KubeSources) ConfirmSlotDropped(ctx context.Context, source *v1alpha1.Po
 		return fmt.Errorf("confirm the slot of source %s dropped: %w", source.Name, err)
 	}
 	return nil
+}
+
+// RequestCatalog implements Sources.
+func (k KubeSources) RequestCatalog(ctx context.Context, source *v1alpha1.PostgresSource) (string, error) {
+	requested := time.Now().UTC().Format(time.RFC3339Nano)
+	patch := client.MergeFrom(source.DeepCopy())
+	if source.Annotations == nil {
+		source.Annotations = map[string]string{}
+	}
+	source.Annotations[v1alpha1.CatalogRequestAnnotation] = requested
+	if err := k.Client.Patch(ctx, source, patch); err != nil {
+		return "", fmt.Errorf("ask for the tables of source %s: %w", source.Name, err)
+	}
+	return requested, nil
 }

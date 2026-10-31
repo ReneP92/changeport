@@ -12,6 +12,21 @@ export type TopicPolicy = components["schemas"]["TopicPolicy"];
 export type NewTopic = components["schemas"]["NewTopic"];
 export type NewCustomer = components["schemas"]["NewCustomer"];
 export type ConsumerGroupLag = components["schemas"]["ConsumerGroupLag"];
+export type Source = components["schemas"]["Source"];
+export type SourceOptions = components["schemas"]["SourceOptions"];
+export type SourceSQL = components["schemas"]["SourceSQL"];
+export type SourceSQLRequest = components["schemas"]["SourceSQLRequest"];
+export type SetupSQLRequest = components["schemas"]["SetupSQLRequest"];
+export type SourceConnection = components["schemas"]["SourceConnection"];
+export type SourceCheckRequest = components["schemas"]["SourceCheckRequest"];
+export type CheckReport = components["schemas"]["CheckReport"];
+export type CheckResult = components["schemas"]["CheckResult"];
+export type SourceTable = components["schemas"]["SourceTable"];
+export type SourceCatalog = components["schemas"]["SourceCatalog"];
+export type SourceChange = components["schemas"]["SourceChange"];
+export type NewSource = components["schemas"]["NewSource"];
+export type TableRef = components["schemas"]["TableRef"];
+export type Provider = components["schemas"]["Provider"];
 export type ThroughputRange = NonNullable<
   NonNullable<paths["/api/customer/throughput"]["get"]["parameters"]["query"]>["range"]
 >;
@@ -25,6 +40,11 @@ export class ApiError extends Error {
     super(problem?.title ?? `The console answered ${String(status)}`);
     this.name = "ApiError";
   }
+}
+
+/** What went wrong, for people: the problem's detail, or its title. */
+export function errorText(error: Error): string {
+  return error instanceof ApiError ? (error.problem?.detail ?? error.message) : error.message;
 }
 
 export type ApiClient = Client<paths>;

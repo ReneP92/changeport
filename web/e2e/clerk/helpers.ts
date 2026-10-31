@@ -1,8 +1,8 @@
 import { execFileSync, spawn } from "node:child_process";
 import path from "node:path";
 import { clerk } from "@clerk/testing/playwright";
-import { expect, type Page } from "@playwright/test";
-import { env, type UserFixture } from "./fixtures";
+import { expect, test, type Locator, type Page } from "@playwright/test";
+import { env, kubectl, type UserFixture } from "./fixtures";
 
 /** Signs user in and opens the overview of their ready cluster. */
 export async function openOverview(page: Page, user: UserFixture): Promise<void> {
@@ -108,5 +108,113 @@ export async function expectNoSidewaysScroll(page: Page): Promise<void> {
     .toBeLessThanOrEqual(390);
   if (size) {
     await page.setViewportSize(size);
+  }
+}
+
+/**
+ * Runs SQL on the Postgres on kind that stands in for a customer's database
+ * (deploy/base/source-postgres), as its owner, and returns the rows.
+ */
+export function psql(sql: string): string {
+  return kubectl(
+    [
+      "-n",
+      "source-postgres",
+      "exec",
+      "-i",
+      "deploy/postgres",
+      "--",
+      "psql",
+      "-U",
+      "postgres",
+      "-d",
+      "app",
+      "-v",
+      "ON_ERROR_STOP=1",
+      "-qtA",
+    ],
+    sql,
+  ).trim();
+}
+
+/** The CA that signs the stand-in database's certificate. */
+export function postgresCA(): string {
+  return Buffer.from(
+    kubectl([
+      "-n",
+      "source-postgres",
+      "get",
+      "secret",
+      "postgres-tls",
+      "-o",
+      "jsonpath={.data.ca\\.crt}",
+    ]),
+    "base64",
+  ).toString();
+}
+
+/** The SQL a step of the console shows, as the customer copies it. */
+export async function shownSQL(scope: Locator): Promise<string> {
+  const code = scope.locator("pre code");
+  await expect(code).toBeVisible();
+  return (await code.textContent()) ?? "";
+}
+
+/**
+ * The SQL that removes what sources left in the stand-in database: the
+ * slots no connector reads, the publications and the roles whose names
+ * start with prefix, such as changeport_shop_k3x9q2.
+ */
+export function sourceLeftovers(prefix: string): string {
+  return `DO $$ DECLARE r record; BEGIN
+  FOR r IN SELECT slot_name FROM pg_replication_slots WHERE starts_with(slot_name, '${prefix}') AND NOT active LOOP
+    PERFORM pg_drop_replication_slot(r.slot_name);
+  END LOOP;
+  FOR r IN SELECT pubname FROM pg_publication WHERE starts_with(pubname, '${prefix}') LOOP
+    EXECUTE format('DROP PUBLICATION %I', r.pubname);
+  END LOOP;
+  FOR r IN SELECT rolname FROM pg_roles WHERE starts_with(rolname, '${prefix}') LOOP
+    EXECUTE format('DROP OWNED BY %I', r.rolname);
+    EXECUTE format('DROP ROLE %I', r.rolname);
+  END LOOP;
+END $$;`;
+}
+
+/**
+ * Waits until a Postgres source streams, as its page shows it. When it does
+ * not, it attaches what tells why to the test: the source's status and its
+ * Connect worker's log.
+ */
+export async function expectStreaming(
+  page: Page,
+  customerID: string,
+  source: string,
+  timeout: number,
+): Promise<void> {
+  try {
+    await expect(
+      page
+        .getByRole("main")
+        .locator("header [data-slot=badge]")
+        .filter({ hasText: /^Streaming$/ }),
+    ).toBeVisible({ timeout });
+  } catch (error) {
+    const namespace = `customer-${customerID}`;
+    const read = (args: string[]) => {
+      try {
+        return kubectl(["-n", namespace, ...args]);
+      } catch (failure) {
+        return String(failure);
+      }
+    };
+    await test.info().attach("source.yaml", {
+      body: read(["get", "postgressource", source, "-o", "yaml"]),
+      contentType: "text/yaml",
+    });
+    await test.info().attach("connect.log", {
+      body: read(["logs", "changeport-connect-connect-0", "--tail=2000"]),
+      contentType: "text/plain",
+    });
+    throw error;
   }
 }
