@@ -1,3 +1,4 @@
+import { Link } from "react-router";
 import { useTopics } from "@/api/queries";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -30,8 +31,6 @@ export function TopicsCard({ admin }: { admin: boolean }) {
         {topics.data && topics.data.length > 0 && (
           // Wide tables scroll sideways on phones instead of overflowing; relative
           // keeps what is positioned absolutely, such as screen-reader-only
-          // headers, inside the scroll area too. relative
-          // keeps what is positioned absolutely, such as screen-reader-only
           // headers, inside the scroll area too.
           <div className="relative -mx-1 overflow-x-auto px-1">
             <table className="w-full text-left whitespace-nowrap [&_td]:px-3 [&_td:first-child]:pl-0 [&_td:last-child]:pr-0 [&_th]:px-3 [&_th:first-child]:pl-0 [&_th:last-child]:pr-0">
@@ -54,7 +53,21 @@ export function TopicsCard({ admin }: { admin: boolean }) {
               <tbody>
                 {topics.data.map((topic) => (
                   <tr key={topic.name} className="border-b last:border-0">
-                    <td className="py-2 font-medium">{topic.name}</td>
+                    <td className="py-2 font-medium">
+                      <span className="flex items-center gap-2">
+                        {topic.name}
+                        {topic.source && (
+                          <Badge variant="outline" asChild>
+                            <Link
+                              to={`/sources/${topic.source}`}
+                              title={`Postgres source ${topic.source} writes this topic`}
+                            >
+                              Source {topic.source}
+                            </Link>
+                          </Badge>
+                        )}
+                      </span>
+                    </td>
                     <td className="py-2 text-right tabular-nums">{topic.partitions}</td>
                     <td className="py-2">
                       {topic.cleanupPolicy.includes("compact")
@@ -88,7 +101,8 @@ export function TopicsCard({ admin }: { admin: boolean }) {
                     </td>
                     {admin && (
                       <td className="py-1 text-right">
-                        <DeleteTopicDialog topic={topic.name} />
+                        {/* A source's topics go with its table, not on their own. */}
+                        {!topic.source && <DeleteTopicDialog topic={topic.name} />}
                       </td>
                     )}
                   </tr>

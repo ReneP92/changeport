@@ -3,6 +3,7 @@ package controller
 import (
 	"context"
 	"errors"
+	"fmt"
 	"slices"
 	"strings"
 	"testing"
@@ -32,6 +33,8 @@ type fakeSlots struct {
 	err     error
 	dropErr error
 	report  cdc.Report
+	tables  []cdc.TableInfo
+	listErr error
 	calls   []string
 	// last is the connection of the last call.
 	last cdc.Connection
@@ -82,6 +85,12 @@ func (f *fakeSlots) DropSlot(_ context.Context, connection cdc.Connection, slot 
 	f.calls = append(f.calls, "drop "+slot)
 	f.last = connection
 	return true, f.dropErr
+}
+
+func (f *fakeSlots) ListTables(_ context.Context, connection cdc.Connection) ([]cdc.TableInfo, error) {
+	f.calls = append(f.calls, "list tables")
+	f.last = connection
+	return f.tables, f.listErr
 }
 
 const sourcesNamespaceName = "customer-acme"
@@ -337,6 +346,79 @@ func TestSourceReadsItsSlot(t *testing.T) {
 	}
 }
 
+func TestSourceListsItsTablesOnRequest(t *testing.T) {
+	slots := &fakeSlots{
+		state: cdc.SlotState{Exists: true, Active: true},
+		tables: []cdc.TableInfo{
+			{Table: cdc.Table{Schema: "public", Name: "orders"}, EstimatedRows: 1200, Readable: true, Keyed: true},
+			{Table: cdc.Table{Schema: "public", Name: "events"}, EstimatedRows: -1, Partitioned: true, Reason: "Its primary key has a timestamp column."},
+		},
+	}
+	source := handedOver()
+	r, c := newSourceReconciler(t, slots, source, sourcesSecret(), connectorWith("RUNNING", map[string]any{"id": int64(0), "state": "RUNNING"}))
+	reconcileSource(t, r)
+	if catalog := getSource(t, c).Status.Catalog; catalog != nil || slices.Contains(slots.calls, "list tables") {
+		t.Fatalf("listed the tables unasked: %+v", catalog)
+	}
+
+	request := func(at string) {
+		t.Helper()
+		requested := getSource(t, c)
+		requested.Annotations = map[string]string{v1alpha1.CatalogRequestAnnotation: at}
+		if err := c.Update(t.Context(), requested); err != nil {
+			t.Fatal(err)
+		}
+	}
+	request("2026-10-30T12:00:00.1Z")
+	reconcileSource(t, r)
+	catalog := getSource(t, c).Status.Catalog
+	if catalog == nil || catalog.RequestedAt != "2026-10-30T12:00:00.1Z" || !catalog.ListedAt.Time.Equal(testNow) || len(catalog.Tables) != 2 ||
+		catalog.Tables[0] != (v1alpha1.CatalogTable{Schema: "public", Name: "orders", EstimatedRows: 1200, Readable: true, Keyed: true}) ||
+		!catalog.Tables[1].Partitioned || catalog.Tables[1].Keyed || catalog.Tables[1].Reason == "" || catalog.Message != "" {
+		t.Fatalf("catalog = %+v", catalog)
+	}
+	if slots.last.Password != "s3cret" || slots.last.User != "changeport_app_x1y2z3" {
+		t.Errorf("listed as %+v, want the source's role", slots.last)
+	}
+	// The same request is answered once.
+	slots.calls = nil
+	reconcileSource(t, r)
+	if slices.Contains(slots.calls, "list tables") {
+		t.Errorf("listed the tables twice for one request")
+	}
+
+	// A new request is answered anew; a database it cannot reach says so.
+	slots.listErr = errors.New("the server db.example.com does not answer")
+	request("2026-10-30T12:05:00Z")
+	reconcileSource(t, r)
+	if catalog := getSource(t, c).Status.Catalog; catalog == nil || catalog.RequestedAt != "2026-10-30T12:05:00Z" || len(catalog.Tables) != 0 ||
+		catalog.Message != "The server db.example.com does not answer." {
+		t.Errorf("catalog of an unreachable database = %+v", catalog)
+	}
+
+	// After a while, the catalog and its request are forgotten.
+	r.Now = func() time.Time { return testNow.Add(catalogLifetime) }
+	reconcileSource(t, r)
+	forgotten := getSource(t, c)
+	if forgotten.Status.Catalog != nil || forgotten.Annotations[v1alpha1.CatalogRequestAnnotation] != "" {
+		t.Errorf("after %s, catalog %+v and annotations %v remain", catalogLifetime, forgotten.Status.Catalog, forgotten.Annotations)
+	}
+}
+
+func TestSourceCatalogIsCapped(t *testing.T) {
+	slots := &fakeSlots{state: cdc.SlotState{Exists: true}}
+	for i := range v1alpha1.MaxCatalogTables + 5 {
+		slots.tables = append(slots.tables, cdc.TableInfo{Table: cdc.Table{Schema: "public", Name: fmt.Sprintf("t%04d", i)}, Keyed: true})
+	}
+	source := handedOver()
+	source.Annotations = map[string]string{v1alpha1.CatalogRequestAnnotation: "now"}
+	r, c := newSourceReconciler(t, slots, source, sourcesSecret(), connectorWith("RUNNING", map[string]any{"id": int64(0), "state": "RUNNING"}))
+	reconcileSource(t, r)
+	if catalog := getSource(t, c).Status.Catalog; catalog == nil || len(catalog.Tables) != v1alpha1.MaxCatalogTables || !catalog.Truncated {
+		t.Errorf("catalog has %d tables, truncated %t", len(catalog.Tables), catalog.Truncated)
+	}
+}
+
 func deletedSource(source *v1alpha1.PostgresSource) *v1alpha1.PostgresSource {
 	source.DeletionTimestamp = &metav1.Time{Time: testNow}
 	return source
@@ -552,6 +634,47 @@ func TestSourceAsksForEachSnapshotOnce(t *testing.T) {
 	got = getSource(t, c)
 	if got.Status.Phase != v1alpha1.PhaseStreaming || got.Status.NotificationsOffset != 3 || got.Status.Tables[0].RowsCopied != 1000 || got.Status.Tables[1].RowsCopied != 7 {
 		t.Errorf("status = %s, offset %d, tables %+v", got.Status.Phase, got.Status.NotificationsOffset, got.Status.Tables)
+	}
+}
+
+// A signal Debezium never answers, such as one a restarting connector read
+// and lost, is sent again after a while; one it answered is not.
+func TestSourceAsksAgainForAnUnansweredSnapshot(t *testing.T) {
+	source := handedOver()
+	database := &fakeSlots{report: cdc.Report{Results: []cdc.Result{{Check: cdc.Published, Status: cdc.Pass}}}}
+	r, c := newSourceReconciler(t, database, source, sourcesSecret(), runningConnector(source))
+	snapshots := &fakeSnapshots{}
+	r.Snapshots = snapshots
+	reconcileSource(t, r)
+	if asked := getSource(t, c).Status.Tables[0].AskedAt; asked == nil || !asked.Time.Equal(testNow) {
+		t.Fatalf("asked at %v, want now", asked)
+	}
+
+	// Within the wait, nothing happens.
+	r.Now = func() time.Time { return testNow.Add(unansweredAfter - time.Second) }
+	reconcileSource(t, r)
+	if len(snapshots.signals) != 1 {
+		t.Fatalf("signals = %v, want one", snapshots.signals)
+	}
+
+	// Unanswered, it is asked for again, and says so meanwhile.
+	r.Now = func() time.Time { return testNow.Add(unansweredAfter) }
+	reconcileSource(t, r)
+	if want := [][]string{{"public.orders"}, {"public.orders"}}; !slices.EqualFunc(snapshots.signals, want, slices.Equal) {
+		t.Errorf("signals = %v, want the table asked for again", snapshots.signals)
+	}
+	orders := getSource(t, c).Status.Tables[0]
+	if orders.Snapshot != v1alpha1.SnapshotRunning || orders.AskedAt == nil || !orders.AskedAt.Time.Equal(testNow.Add(unansweredAfter)) {
+		t.Errorf("orders = %+v, want it running, asked for again", orders)
+	}
+
+	// Answered, it is not asked for again, however long it takes.
+	snapshots.notifications = []Notification{note("STARTED", map[string]string{"data_collections": "public.orders"})}
+	reconcileSource(t, r)
+	r.Now = func() time.Time { return testNow.Add(3 * unansweredAfter) }
+	reconcileSource(t, r)
+	if orders := getSource(t, c).Status.Tables[0]; len(snapshots.signals) != 2 || orders.AskedAt != nil || orders.Snapshot != v1alpha1.SnapshotRunning {
+		t.Errorf("signals = %v, orders = %+v; want no third signal", snapshots.signals, orders)
 	}
 }
 

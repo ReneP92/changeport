@@ -218,6 +218,76 @@ spec:
           status:
             description: PostgresSourceStatus is how far the source is.
             properties:
+              catalog:
+                description: |-
+                  Catalog is the tables of the source's database, listed on request
+                  and forgotten again after a while.
+                properties:
+                  listedAt:
+                    description: ListedAt is when the controller listed the tables,
+                      or tried to.
+                    format: date-time
+                    type: string
+                  message:
+                    description: Message says why the tables could not be listed.
+                    type: string
+                  requestedAt:
+                    description: |-
+                      RequestedAt is the value of CatalogRequestAnnotation the catalog
+                      answers.
+                    type: string
+                  tables:
+                    description: |-
+                      Tables are the database's tables, by schema and name, at most
+                      MaxCatalogTables of them.
+                    items:
+                      description: |-
+                        CatalogTable is a table of a source's database, as the table picker shows
+                        it.
+                      properties:
+                        estimatedRows:
+                          description: |-
+                            EstimatedRows is Postgres's estimate of the table's rows, or -1
+                            before the table was first analyzed.
+                          format: int64
+                          type: integer
+                        keyed:
+                          description: |-
+                            Keyed reports whether the table has a primary key the source can key
+                            its messages and copy its rows by.
+                          type: boolean
+                        name:
+                          description: Name is the table's name.
+                          type: string
+                        partitioned:
+                          description: |-
+                            Partitioned reports whether the table is partitioned; it syncs with
+                            its partitions, through one topic.
+                          type: boolean
+                        readable:
+                          description: Readable reports whether the source's role
+                            may read the table.
+                          type: boolean
+                        reason:
+                          description: Reason says why the table is not keyed.
+                          type: string
+                        schema:
+                          description: Schema is the table's schema.
+                          type: string
+                      required:
+                      - estimatedRows
+                      - name
+                      - schema
+                      type: object
+                    type: array
+                  truncated:
+                    description: Truncated reports whether the database has more tables
+                      than Tables.
+                    type: boolean
+                required:
+                - listedAt
+                - requestedAt
+                type: object
               conditions:
                 description: Conditions say what the source waits for, or why it failed.
                 items:
@@ -348,6 +418,12 @@ spec:
                 items:
                   description: TableStatus is how far one of a source's tables is.
                   properties:
+                    askedAt:
+                      description: |-
+                        AskedAt is when the source controller asked for the table's snapshot,
+                        until Debezium answers with a notification about it.
+                      format: date-time
+                      type: string
                     message:
                       description: Message says why the snapshot waits or failed.
                       type: string

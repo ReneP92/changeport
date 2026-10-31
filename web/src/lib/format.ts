@@ -76,3 +76,12 @@ export function formatLag(seconds: number, messages: number, capped: boolean): s
   }
   return `${formatDuration(seconds)} behind`;
 }
+
+/** Says how long ago a time was, coarsely: just now, 3 minutes ago. */
+export function formatAgo(at: string, now: number = Date.now()): string {
+  const seconds = Math.max(0, (now - Date.parse(at)) / 1000);
+  if (seconds < 60) {
+    return "just now";
+  }
+  return `${formatDuration(seconds)} ago`;
+}

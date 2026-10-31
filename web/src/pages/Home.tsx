@@ -1,9 +1,8 @@
 import { OrganizationSwitcher } from "@clerk/react";
 import { Navigate } from "react-router";
-import { ApiError } from "@/api/client";
-import { useCustomer, useMe } from "@/api/queries";
-import { CustomerSummary } from "@/components/CustomerSummary";
+import { useMe } from "@/api/queries";
 import { Notice } from "@/components/Notice";
+import { CustomerArea } from "@/pages/CustomerArea";
 import { Overview } from "@/pages/overview/Overview";
 
 /** Where a signed-in user lands: their customer, or the operator console. */
@@ -19,7 +18,7 @@ export function Home() {
     case "operator":
       return <Navigate to="/operator" replace />;
     case "customer":
-      return <CustomerHome admin={me.data.admin ?? false} />;
+      return <CustomerHome />;
     default:
       if (me.data.organizationID) {
         // An organization without a cluster, such as one deprovisioned.
@@ -47,25 +46,10 @@ export function Home() {
   }
 }
 
-function CustomerHome({ admin }: { admin: boolean }) {
-  const customer = useCustomer();
-  if (customer.isPending) {
-    return <Notice title="Loading" busy />;
-  }
-  if (customer.isError) {
-    const missing = customer.error instanceof ApiError && customer.error.status === 404;
-    return (
-      <Notice title={missing ? "No Kafka cluster yet" : "The console is unavailable"}>
-        {missing ? "Your organization has no Changeport cluster yet." : customer.error.message}
-      </Notice>
-    );
-  }
-  if (customer.data.ready) {
-    return <Overview customer={customer.data} admin={admin} />;
-  }
+function CustomerHome() {
   return (
-    <main className="mx-auto max-w-5xl p-6">
-      <CustomerSummary customer={customer.data} />
-    </main>
+    <CustomerArea>
+      {(customer, admin) => <Overview customer={customer} admin={admin} />}
+    </CustomerArea>
   );
 }

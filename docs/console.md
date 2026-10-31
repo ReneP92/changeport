@@ -2,8 +2,9 @@
 
 Every screen of the first console, as `just ui-screenshots` captures it on
 kind: an operator provisions Acme Corp and Globex through the operator
-console, Acme's admin Ada creates topics, producers and consumer groups run
-for a few minutes, and Acme is deprovisioned again. Each screen also has a
+console, Acme's admin Ada creates topics and adds a Postgres source,
+producers and consumer groups run for a few minutes, and Acme is
+deprovisioned again. Each screen also has a
 phone version, under the same name ending in `-phone.png`. To capture them
 again after changing the console, run `just dev-up` with `.env` filled in,
 then:
@@ -49,6 +50,56 @@ to them, an unknown page, and an organization without a cluster.
 ![No such page](screenshots/08-not-found-desktop.png)
 
 ![No cluster](screenshots/09-no-cluster-desktop.png)
+
+## Postgres sources
+
+A customer's Postgres sources, under Sources in the header (see
+[cdc.md](cdc.md)). Ada adds one through the wizard, against the Postgres on
+kind that stands in for a customer's database, and runs its SQL as the
+database's owner would. Members of the organization see everything, and
+change nothing.
+
+![No sources yet](screenshots/20-sources-empty-desktop.png)
+
+The wizard's six steps. First, where the database is, with the addresses to
+allow in and how to check its certificate; Changeport checks that it can
+reach it.
+
+![Connecting](screenshots/21-source-connect-desktop.png)
+
+Then the role Changeport logs in as, with the password the console chose,
+shown only here.
+
+![The role](screenshots/22-source-role-desktop.png)
+
+The tables, each with its topic. Those without a primary key Changeport can
+use are listed, disabled, with the reason.
+
+![Choosing tables](screenshots/23-source-tables-desktop.png)
+
+After the SQL that grants and publishes the tables, every check, each with
+what it found or what to do. The last step starts the source.
+
+![Verifying](screenshots/24-source-verify-desktop.png)
+
+The source copies each table's existing rows, then streams every change.
+
+![A source starting](screenshots/25-source-starting-desktop.png)
+
+![A source streaming](screenshots/26-source-desktop.png)
+
+Adding tables: Changeport's source controller lists the database's tables,
+as the console cannot log in to it, and the new tables' rows are copied once
+their SQL has run.
+
+![Adding tables](screenshots/27-source-add-tables-desktop.png)
+
+Deleting a source takes its name typed, and shows the SQL that removes
+Changeport's role and publication once it is gone. Its topics stay.
+
+![Deleting a source](screenshots/28-source-delete-desktop.png)
+
+![The sources](screenshots/29-sources-desktop.png)
 
 ## Operators
 

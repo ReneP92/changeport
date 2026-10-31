@@ -3,13 +3,25 @@ import path from "node:path";
 import { clerk } from "@clerk/testing/playwright";
 import { expect, test, type Browser, type Page } from "@playwright/test";
 import { clerkClient, kubectl, readFixtures, testEmail, type UserFixture } from "../clerk/fixtures";
-import { connect, downloadClientProperties, kafka, kafkaInBackground } from "../clerk/helpers";
+import {
+  connect,
+  downloadClientProperties,
+  expectStreaming,
+  kafka,
+  kafkaInBackground,
+  postgresCA,
+  psql,
+  shownSQL,
+  sourceLeftovers,
+} from "../clerk/helpers";
 
 // Captures every screen of the console, on a desktop and a phone, into
 // CHANGEPORT_SCREENSHOTS_DIR (just ui-screenshots). An operator provisions
 // Acme Corp and Globex through the operator console; Acme's admin, Ada,
 // creates topics; traffic and consumer groups fill the charts; then Acme is
-// deprovisioned. Everything it creates goes again at the end.
+// deprovisioned. Ada also adds a Postgres source, the Postgres on kind that
+// stands in for a customer's database. Everything it creates goes again at
+// the end.
 
 const out = process.env.CHANGEPORT_SCREENSHOTS_DIR ?? "";
 const devices = [
@@ -53,7 +65,13 @@ async function signIn(browser: Browser, user: UserFixture, at: string): Promise<
 
 let fixtures: ReturnType<typeof readFixtures>;
 // What the tour creates, for the clean-up.
-const created = { users: [] as string[], organizations: [] as string[], customers: [] as string[] };
+const created = {
+  users: [] as string[],
+  organizations: [] as string[],
+  customers: [] as string[],
+  // What the Postgres source leaves in the database start with these.
+  sources: [] as string[],
+};
 const running: Promise<unknown>[] = [];
 
 test.beforeAll(() => {
@@ -63,6 +81,8 @@ test.beforeAll(() => {
 });
 
 test.afterAll(async () => {
+  // Deprovisioning the customers takes a few minutes.
+  test.setTimeout(12 * 60_000);
   await Promise.allSettled(running);
   const clerkAPI = clerkClient();
   for (const id of created.customers) {
@@ -80,6 +100,17 @@ test.afterAll(async () => {
     ]);
     kubectl(["delete", "customer", id, "--wait=false"]);
   }
+  // The sources' leftovers in the database go once the customers are gone:
+  // deprovisioning drops their slots as their roles, which the leftovers
+  // include.
+  if (created.sources.length > 0) {
+    for (const id of created.customers) {
+      kubectl(["wait", "--for=delete", `customer/${id}`, "--timeout=5m"]);
+    }
+    for (const prefix of created.sources) {
+      psql(sourceLeftovers(prefix));
+    }
+  }
   for (const id of created.organizations) {
     await clerkAPI.organizations.deleteOrganization(id).catch(() => undefined);
   }
@@ -89,7 +120,7 @@ test.afterAll(async () => {
 });
 
 test("every screen of the console", async ({ browser }) => {
-  test.setTimeout(20 * 60_000);
+  test.setTimeout(30 * 60_000);
   const clerkAPI = clerkClient();
 
   // Signed out, the console shows Clerk's sign-in.
@@ -197,6 +228,53 @@ test("every screen of the console", async ({ browser }) => {
   await shot(admin, "05-create-topic-guardrails");
   await admin.keyboard.press("Escape");
 
+  // Ada adds a Postgres source through the wizard, running its SQL as the
+  // database's owner would.
+  const nav = admin.getByRole("navigation", { name: "Console" });
+  await nav.getByRole("link", { name: "Sources" }).click();
+  await expect(main.getByText("There are no sources yet.", { exact: false })).toBeVisible();
+  await shot(admin, "20-sources-empty");
+  await main.getByRole("link", { name: "Add source" }).click();
+  await main.getByLabel("Source name").fill("shop");
+  await main.getByLabel("Host", { exact: true }).fill("postgres.source-postgres.svc");
+  await main.getByLabel("Database", { exact: true }).fill("app");
+  await main.getByLabel("CA certificate (optional)").fill(postgresCA());
+  await shot(admin, "21-source-connect");
+  await main.getByRole("button", { name: "Check the connection" }).click();
+  await expect(main.getByRole("heading", { name: "Create the role" })).toBeVisible({
+    timeout: 30_000,
+  });
+  await shot(admin, "22-source-role");
+  psql(await shownSQL(main));
+  await main.getByRole("button", { name: "I ran it" }).click();
+  await expect(main.getByRole("checkbox", { name: /public\.orders/ })).toBeVisible({
+    timeout: 30_000,
+  });
+  await main.getByRole("checkbox", { name: /public\.customers/ }).check();
+  await main.getByRole("checkbox", { name: /public\.orders/ }).check();
+  await shot(admin, "23-source-tables");
+  await main.getByRole("button", { name: "Continue" }).click();
+  await expect(main.getByRole("heading", { name: "Grant and publish" })).toBeVisible();
+  psql(await shownSQL(main));
+  await main.getByRole("button", { name: "I ran it" }).click();
+  await expect(main.getByRole("list", { name: "Checks" })).toBeVisible({ timeout: 30_000 });
+  await shot(admin, "24-source-verify");
+  await main.getByRole("button", { name: "Continue" }).click();
+  await main.getByRole("button", { name: "Start source" }).click();
+  await expect(admin).toHaveURL(/\/sources\/shop$/, { timeout: 30_000 });
+  const sourceID = kubectl([
+    "-n",
+    `customer-${acme.id}`,
+    "get",
+    "postgressource",
+    "shop",
+    "-o",
+    "jsonpath={.spec.id}",
+  ]);
+  created.sources.push(`changeport_shop_${sourceID}`);
+  await shot(admin, "25-source-starting");
+  await nav.getByRole("link", { name: "Cluster" }).click();
+
   // Traffic for a few minutes: producers at a steady rate, two consumer
   // groups keeping up and one left at the start of orders.
   const properties = test.info().outputPath("client.properties");
@@ -265,6 +343,27 @@ test("every screen of the console", async ({ browser }) => {
   await remove.getByLabel(/to confirm/).fill("orders");
   await shot(admin, "06-delete-topic");
   await admin.keyboard.press("Escape");
+
+  // The source, streaming, with what admins change about it.
+  await admin.goto("/sources/shop");
+  await expectStreaming(admin, acme.id, "shop", 10 * 60_000);
+  await shot(admin, "26-source");
+  await main.getByRole("button", { name: "Add tables" }).click();
+  const addTables = admin.getByRole("dialog");
+  await expect(addTables.getByRole("checkbox", { name: /public\.customers/ })).toBeChecked({
+    timeout: 60_000,
+  });
+  await shot(admin, "27-source-add-tables");
+  await admin.keyboard.press("Escape");
+  await main.getByRole("button", { name: "Delete source" }).click();
+  const deleteSource = admin.getByRole("dialog", { name: "Delete shop?" });
+  await expect(deleteSource.locator("pre code")).toBeVisible();
+  await deleteSource.getByLabel(/to confirm/).fill("shop");
+  await shot(admin, "28-source-delete");
+  await admin.keyboard.press("Escape");
+  await admin.goto("/sources");
+  await expect(main.getByRole("link", { name: "shop" })).toBeVisible();
+  await shot(admin, "29-sources");
 
   // Customers cannot open the operator console.
   await admin.goto("/operator");

@@ -357,16 +357,32 @@ func (s *Server) ListSourceTables(ctx context.Context, request api.ListSourceTab
 		return api.ListSourceTables409JSONResponse{ConflictJSONResponse: api.ConflictJSONResponse(problem(http.StatusConflict,
 			"Changeport cannot list the tables", err.Error()))}, nil
 	}
-	existing, err := s.topicNames(ctx, caller.id())
+	list, err := s.pickerTables(ctx, caller.id(), target.Names.Source, tables, nil)
 	if err != nil {
 		return nil, err
 	}
+	return api.ListSourceTables200JSONResponse{Tables: list}, nil
+}
+
+// pickerTables are a source's database's tables as the table picker shows
+// them, each with its topic and what stops the topic. Current are the
+// source's tables, whose topics are its own.
+func (s *Server) pickerTables(ctx context.Context, customerID, source string, tables []cdc.TableInfo, current []cdc.Table) ([]api.SourceTable, error) {
+	existing, err := s.topicNames(ctx, customerID)
+	if err != nil {
+		return nil, err
+	}
+	own := map[string]bool{}
+	for _, t := range current {
+		own[cdc.TopicName(source, t)] = true
+	}
+	existing = slices.DeleteFunc(existing, func(topic string) bool { return own[topic] })
 	refs := make([]cdc.Table, len(tables))
 	for i, t := range tables {
 		refs[i] = t.Table
 	}
-	topicOf := cdc.Topics(target.Names.Source, refs, existing)
-	list := api.ListSourceTables200JSONResponse{Tables: make([]api.SourceTable, 0, len(tables))}
+	topicOf := cdc.Topics(source, refs, existing)
+	list := make([]api.SourceTable, 0, len(tables))
 	for i, t := range tables {
 		table := api.SourceTable{
 			Schema: t.Schema, Name: t.Name, Partitioned: t.Partitioned, EstimatedRows: t.EstimatedRows,
@@ -378,9 +394,92 @@ func (s *Server) ListSourceTables(ctx context.Context, request api.ListSourceTab
 		if topicOf[i].Problem != "" {
 			table.TopicProblem = ptr.To(capitalizeFirst(topicOf[i].Problem) + ".")
 		}
-		list.Tables = append(list.Tables, table)
+		list = append(list, table)
 	}
 	return list, nil
+}
+
+// GetSourceCatalog implements api.StrictServerInterface.
+func (s *Server) GetSourceCatalog(ctx context.Context, request api.GetSourceCatalogRequestObject) (api.GetSourceCatalogResponseObject, error) {
+	caller, refused, err := s.sourceCaller(ctx, true)
+	switch {
+	case err != nil:
+		return nil, err
+	case refused != nil && forbidden(refused):
+		return api.GetSourceCatalog403JSONResponse{ForbiddenJSONResponse: api.ForbiddenJSONResponse(*refused)}, nil
+	case refused != nil:
+		return api.GetSourceCatalog404JSONResponse{NotFoundJSONResponse: api.NotFoundJSONResponse(*refused)}, nil
+	}
+	source, p, err := s.existingSource(ctx, caller, request.Source)
+	switch {
+	case err != nil:
+		return nil, err
+	case p != nil:
+		return api.GetSourceCatalog404JSONResponse{NotFoundJSONResponse: api.NotFoundJSONResponse(*p)}, nil
+	}
+	catalog, err := s.toAPICatalog(ctx, caller, source)
+	if err != nil {
+		return nil, err
+	}
+	return api.GetSourceCatalog200JSONResponse(catalog), nil
+}
+
+// RequestSourceCatalog implements api.StrictServerInterface.
+func (s *Server) RequestSourceCatalog(ctx context.Context, request api.RequestSourceCatalogRequestObject) (api.RequestSourceCatalogResponseObject, error) {
+	caller, refused, err := s.sourceCaller(ctx, true)
+	switch {
+	case err != nil:
+		return nil, err
+	case refused != nil && forbidden(refused):
+		return api.RequestSourceCatalog403JSONResponse{ForbiddenJSONResponse: api.ForbiddenJSONResponse(*refused)}, nil
+	case refused != nil:
+		return api.RequestSourceCatalog404JSONResponse{NotFoundJSONResponse: api.NotFoundJSONResponse(*refused)}, nil
+	}
+	source, p, err := s.existingSource(ctx, caller, request.Source)
+	switch {
+	case err != nil:
+		return nil, err
+	case p != nil:
+		return api.RequestSourceCatalog404JSONResponse{NotFoundJSONResponse: api.NotFoundJSONResponse(*p)}, nil
+	case source.DeletionTimestamp != nil:
+		return api.RequestSourceCatalog409JSONResponse{ConflictJSONResponse: api.ConflictJSONResponse(sourceDeleting)}, nil
+	}
+	if _, err := s.sources.RequestCatalog(ctx, source); err != nil {
+		return nil, err
+	}
+	catalog, err := s.toAPICatalog(ctx, caller, source)
+	if err != nil {
+		return nil, err
+	}
+	return api.RequestSourceCatalog202JSONResponse(catalog), nil
+}
+
+// toAPICatalog describes a source's catalog for the API; it is ready once it
+// answers the source's latest request.
+func (s *Server) toAPICatalog(ctx context.Context, caller *customerContext, source *v1alpha1.PostgresSource) (api.SourceCatalog, error) {
+	out := api.SourceCatalog{Tables: []api.SourceTable{}}
+	catalog := source.Status.Catalog
+	requested := source.Annotations[v1alpha1.CatalogRequestAnnotation]
+	if catalog == nil || requested == "" || catalog.RequestedAt != requested {
+		return out, nil
+	}
+	out.Ready, out.Truncated, out.ListedAt = true, catalog.Truncated, ptr.To(catalog.ListedAt.UTC())
+	if catalog.Message != "" {
+		out.Message = ptr.To(catalog.Message)
+	}
+	tables := make([]cdc.TableInfo, len(catalog.Tables))
+	for i, t := range catalog.Tables {
+		tables[i] = cdc.TableInfo{
+			Table: cdc.Table{Schema: t.Schema, Name: t.Name}, Partitioned: t.Partitioned, EstimatedRows: t.EstimatedRows,
+			Readable: t.Readable, Keyed: t.Keyed, Reason: t.Reason,
+		}
+	}
+	list, err := s.pickerTables(ctx, caller.id(), source.Name, tables, specTables(source))
+	if err != nil {
+		return api.SourceCatalog{}, err
+	}
+	out.Tables = list
+	return out, nil
 }
 
 // tablesProblem checks the tables of a source, whose topics must not

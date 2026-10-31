@@ -20,6 +20,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/utils/ptr"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller"
@@ -54,6 +55,9 @@ type Database interface {
 	Slot(ctx context.Context, connection cdc.Connection, slot string) (cdc.SlotState, error)
 	// DropSlot drops it.
 	DropSlot(ctx context.Context, connection cdc.Connection, slot string) (bool, error)
+	// ListTables lists the database's tables, for the console's table
+	// picker.
+	ListTables(ctx context.Context, connection cdc.Connection) ([]cdc.TableInfo, error)
 }
 
 var _ Database = cdc.Checker{}
@@ -70,6 +74,8 @@ var _ Database = cdc.Checker{}
 //   - it asks for a snapshot of each table once, when the table is new and
 //     the database checks pass, and follows its progress;
 //   - it reads the slot every SlotInterval, and exports the WAL it keeps;
+//   - it lists the database's tables when the console asks, as the console
+//     cannot read the password;
 //   - once the source is deleted and its connector gone, it drops the slot.
 type PostgresSourceReconciler struct {
 	Client    client.Client
@@ -150,6 +156,9 @@ func (r *PostgresSourceReconciler) reconcile(ctx context.Context, req ctrl.Reque
 	}
 	if status.PasswordSecret != "" && r.slotDue(status) {
 		r.readSlot(ctx, &source, names, status)
+	}
+	if err := r.listCatalog(ctx, &source, names, status); err != nil {
+		return ctrl.Result{}, err
 	}
 	setSourceCondition(status, source.Generation, ready)
 	return ctrl.Result{RequeueAfter: requeue}, r.updateStatus(ctx, &source, status)
@@ -281,6 +290,7 @@ func (r *PostgresSourceReconciler) followSnapshots(ctx context.Context, source *
 			log.Info("could not read the snapshot notifications", "source", source.Name, "error", err.Error())
 		}
 	}
+	r.askAgainUnanswered(ctx, source, status)
 	// A table asked for recently runs, even if the status lost it.
 	running := slices.ContainsFunc(status.Tables, func(t v1alpha1.TableStatus) bool {
 		return t.Snapshot == v1alpha1.SnapshotRunning || t.Snapshot == v1alpha1.SnapshotPending && r.asked(source, t)
@@ -361,9 +371,38 @@ func (r *PostgresSourceReconciler) requestSnapshot(ctx context.Context, source *
 			return
 		}
 		r.remember(source, table)
-		t.Snapshot, t.Message, t.RowsCopied = v1alpha1.SnapshotRunning, "", 0
+		t.Snapshot, t.Message, t.RowsCopied, t.AskedAt = v1alpha1.SnapshotRunning, "", 0, ptr.To(metav1.NewTime(r.now()))
 		return
 	}
+}
+
+// unansweredAfter is how long the controller waits for Debezium to answer
+// a snapshot's signal with a notification about the table. Debezium reads
+// signals every 5 seconds and answers at once, so a signal unanswered this
+// long was lost, such as by a connector that restarted as it read it.
+const unansweredAfter = 5 * time.Minute
+
+// askAgainUnanswered makes a table whose snapshot Debezium never answered
+// pending again, so that it is asked for anew. Asking twice is safe: a
+// table's rows arrive at least once.
+func (r *PostgresSourceReconciler) askAgainUnanswered(ctx context.Context, source *v1alpha1.PostgresSource, status *v1alpha1.PostgresSourceStatus) {
+	for i := range status.Tables {
+		t := &status.Tables[i]
+		if t.Snapshot != v1alpha1.SnapshotRunning || t.AskedAt == nil || r.now().Sub(t.AskedAt.Time) < unansweredAfter {
+			continue
+		}
+		ctrl.LoggerFrom(ctx).Info("asking again for a snapshot Debezium did not answer", "source", source.Name, "table", t.Schema+"."+t.Name)
+		t.Snapshot, t.AskedAt = v1alpha1.SnapshotPending, nil
+		t.Message = "Debezium did not start copying the table within 5 minutes, so Changeport asks again."
+		r.forget(source, cdc.Table{Schema: t.Schema, Name: t.Name})
+	}
+}
+
+// forget forgets that a table's snapshot was asked for.
+func (r *PostgresSourceReconciler) forget(source *v1alpha1.PostgresSource, table cdc.Table) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	delete(r.signalled, string(source.UID)+"/"+table.String())
 }
 
 // remember notes that a table's snapshot was asked for, and forgets those
@@ -536,6 +575,56 @@ func (r *PostgresSourceReconciler) readSlot(ctx context.Context, source *v1alpha
 		Name: names.Slot, Active: state.Active, RetainedWALBytes: state.RetainedBytes,
 		WALStatus: state.WALStatus, SafeWALSizeBytes: state.SafeWALSize, CheckedAt: metav1.NewTime(r.now()),
 	}
+}
+
+// catalogLifetime is how long a source's catalog stays in its status, which
+// it would otherwise make larger with every update.
+const catalogLifetime = 15 * time.Minute
+
+// listCatalog lists the database's tables into the status when
+// CatalogRequestAnnotation asks for them, and forgets them, with the
+// request, catalogLifetime later.
+func (r *PostgresSourceReconciler) listCatalog(ctx context.Context, source *v1alpha1.PostgresSource, names cdc.Names, status *v1alpha1.PostgresSourceStatus) error {
+	requested := source.Annotations[v1alpha1.CatalogRequestAnnotation]
+	switch {
+	case requested == "":
+		status.Catalog = nil
+		return nil
+	case status.Catalog != nil && status.Catalog.RequestedAt == requested:
+		if r.now().Sub(status.Catalog.ListedAt.Time) < catalogLifetime {
+			return nil
+		}
+		patch := client.MergeFromWithOptions(source.DeepCopy(), client.MergeFromWithOptimisticLock{})
+		delete(source.Annotations, v1alpha1.CatalogRequestAnnotation)
+		if err := r.Client.Patch(ctx, source, patch); err != nil {
+			return fmt.Errorf("forget the catalog's request: %w", err)
+		}
+		status.Catalog = nil
+		return nil
+	}
+	catalog := &v1alpha1.TableCatalog{RequestedAt: requested, ListedAt: metav1.NewTime(r.now())}
+	status.Catalog = catalog
+	connection, err := r.connection(ctx, source, names)
+	if err != nil {
+		catalog.Message = "Changeport cannot log in to the database yet: " + err.Error() + "."
+		return nil
+	}
+	tables, err := r.Database.ListTables(ctx, connection)
+	if err != nil {
+		catalog.Message = capitalizeFirst(err.Error()) + "."
+		return nil
+	}
+	if len(tables) > v1alpha1.MaxCatalogTables {
+		tables, catalog.Truncated = tables[:v1alpha1.MaxCatalogTables], true
+	}
+	catalog.Tables = make([]v1alpha1.CatalogTable, len(tables))
+	for i, t := range tables {
+		catalog.Tables[i] = v1alpha1.CatalogTable{
+			Schema: t.Schema, Name: t.Name, Partitioned: t.Partitioned, EstimatedRows: t.EstimatedRows,
+			Readable: t.Readable, Keyed: t.Keyed, Reason: t.Reason,
+		}
+	}
+	return nil
 }
 
 // connection is how the controller logs in to the source's database: as its

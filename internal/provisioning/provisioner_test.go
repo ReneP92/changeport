@@ -5,6 +5,7 @@ import (
 	"errors"
 	"io"
 	"log/slog"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -97,12 +98,35 @@ func (f *fakeCluster) Delete(_ context.Context, gvk schema.GroupVersionKind, nam
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	key := fakeKey(gvk, namespace, name)
-	if obj, ok := f.objects[key]; ok {
-		f.gone[key] = obj
-	}
-	delete(f.objects, key)
 	f.deleted = append(f.deleted, key)
+	obj, ok := f.objects[key]
+	if !ok {
+		return nil
+	}
+	// Like the API server, it keeps an object with finalizers, marked as
+	// deleted, until they are gone.
+	if len(obj.GetFinalizers()) > 0 {
+		if obj.GetDeletionTimestamp() == nil {
+			obj.SetDeletionTimestamp(&metav1.Time{Time: time.Now()})
+		}
+		return nil
+	}
+	f.gone[key] = obj
+	delete(f.objects, key)
 	return nil
+}
+
+// finalize takes the finalizers off a deleted object, which the fake then
+// deletes, as the API server does.
+func (f *fakeCluster) finalize(gvk schema.GroupVersionKind, namespace, name string) {
+	f.mu.Lock()
+	key := fakeKey(gvk, namespace, name)
+	obj := f.objects[key]
+	obj.SetFinalizers(nil)
+	f.mu.Unlock()
+	if obj.GetDeletionTimestamp() != nil {
+		_ = f.Delete(context.Background(), gvk, namespace, name)
+	}
 }
 
 // List supports label selectors of comma-separated requirements, each
@@ -334,6 +358,84 @@ func TestDeprovisionDeletesTheNamespace(t *testing.T) {
 	}
 	if got := strings.Join(cluster.deleted, ","); got != "Namespace:/customer-acme" {
 		t.Errorf("deleted %s, want only the namespace on kind", got)
+	}
+}
+
+// A customer's Postgres sources, their connectors and their KafkaTopics go
+// before the namespace: their finalizers need what is in it.
+func TestDeprovisionRetiresSourcesFirst(t *testing.T) {
+	cluster := newFakeCluster()
+	addKubernetesAPI(cluster, "172.19.0.5")
+	p := testProvisioner(cluster)
+	spec := acme
+	spec.Sources = sources
+	provision(t, p, spec)
+	finalized := func(gvk schema.GroupVersionKind, name, finalizer string) {
+		obj := &unstructured.Unstructured{}
+		if stored, ok := cluster.objects[fakeKey(gvk, spec.Namespace(), name)]; ok {
+			obj = stored
+		} else {
+			obj.SetGroupVersionKind(gvk)
+			obj.SetNamespace(spec.Namespace())
+			obj.SetName(name)
+			cluster.objects[fakeKey(gvk, spec.Namespace(), name)] = obj
+		}
+		obj.SetFinalizers([]string{finalizer})
+	}
+	for _, source := range sources {
+		finalized(sourceGVK, source.Name, "changeport.io/drop-slot")
+		finalized(topicGVK, "changeport.cdc.signals."+source.Name, "strimzi.io/topic-operator")
+	}
+	app := cluster.objects[fakeKey(sourceGVK, spec.Namespace(), sources[0].Name)]
+	app.Object["status"] = map[string]any{"conditions": []any{map[string]any{
+		"type": "Ready", "status": "False", "reason": "Deleting", "message": "Waiting for the connector to let go of the replication slot.",
+	}}}
+
+	var retired []string
+	for _, kind := range []schema.GroupVersionKind{sourceGVK, connectorGVK, topicGVK} {
+		objects, _ := cluster.List(t.Context(), kind, spec.Namespace(), "")
+		for _, obj := range objects {
+			retired = append(retired, fakeKey(kind, obj.GetNamespace(), obj.GetName()))
+		}
+	}
+	if len(retired) < 6 {
+		t.Fatalf("the sources, connector and topics to retire are %v", retired)
+	}
+
+	if err := p.Deprovision(t.Context(), spec); err != nil {
+		t.Fatal(err)
+	}
+	namespace := fakeKey(schema.GroupVersionKind{Version: "v1", Kind: "Namespace"}, "", spec.Namespace())
+	if slices.Contains(cluster.deleted, namespace) {
+		t.Fatal("deleted the namespace before the sources were gone")
+	}
+	for _, key := range retired {
+		if !slices.Contains(cluster.deleted, key) {
+			t.Errorf("did not delete %s; deleted %v", key, cluster.deleted)
+		}
+	}
+	deleted, status, err := p.Deleted(t.Context(), spec)
+	if err != nil || deleted || !strings.Contains(status, "PostgresSource customer-acme/"+sources[0].Name+" is being deleted: Waiting for the connector to let go of the replication slot.") {
+		t.Errorf("Deleted() = %v, %q, %v", deleted, status, err)
+	}
+
+	// Calling it again deletes nothing twice.
+	cluster.deleted = nil
+	if err := p.Deprovision(t.Context(), spec); err != nil || len(cluster.deleted) != 0 {
+		t.Errorf("deprovisioning again deleted %v, %v", cluster.deleted, err)
+	}
+
+	// Once the source controller and the Topic Operator let them go, the
+	// namespace goes.
+	for _, source := range sources {
+		cluster.finalize(sourceGVK, spec.Namespace(), source.Name)
+		cluster.finalize(topicGVK, spec.Namespace(), "changeport.cdc.signals."+source.Name)
+	}
+	if err := p.Deprovision(t.Context(), spec); err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Contains(cluster.deleted, namespace) {
+		t.Errorf("deleted %v, want the namespace once the sources are gone", cluster.deleted)
 	}
 }
 

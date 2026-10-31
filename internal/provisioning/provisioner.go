@@ -30,6 +30,7 @@ var (
 	sliceGVK       = schema.GroupVersionKind{Group: "discovery.k8s.io", Version: "v1", Kind: "EndpointSlice"}
 	connectorGVK   = schema.GroupVersionKind{Group: "kafka.strimzi.io", Version: "v1", Kind: "KafkaConnector"}
 	topicGVK       = schema.GroupVersionKind{Group: "kafka.strimzi.io", Version: "v1", Kind: "KafkaTopic"}
+	sourceGVK      = schema.GroupVersionKind{Group: "changeport.io", Version: "v1alpha1", Kind: "PostgresSource"}
 )
 
 // prunedKinds are the kinds of the template's optional parts
@@ -339,12 +340,17 @@ func (p *Provisioner) observe(ctx context.Context, objects []*unstructured.Unstr
 // else in it, and on platforms with dedicated nodes the NodePool and
 // NodeClass, which removes the nodes. It is idempotent, and does not wait;
 // Deleted reports when everything is gone. It refuses a spec with deletion
-// protection, and before deleting the namespace it takes the namespace's
-// protection label off and marks the customer's volumes with when it was
-// deprovisioned.
+// protection. The customer's Postgres sources go first (retireSources), and
+// the namespace only once they are gone; before deleting the namespace it
+// takes the namespace's protection label off and marks the customer's
+// volumes with when it was deprovisioned.
 func (p *Provisioner) Deprovision(ctx context.Context, spec Spec) error {
 	if spec.DeletionProtection {
 		return fmt.Errorf("customer %s has deletion protection", spec.CustomerID)
+	}
+	left, err := p.retireSources(ctx, spec)
+	if err != nil || len(left) > 0 {
+		return err
 	}
 	objects, err := clusterScoped(spec)
 	if err != nil {
@@ -384,6 +390,66 @@ func (p *Provisioner) Deprovision(ctx context.Context, spec Spec) error {
 	return nil
 }
 
+// retiredKinds are what retireSources deletes before the namespace, in this
+// order, with the selector of those it deletes: the customer's Postgres
+// sources, and the CDC runtime's connectors and KafkaTopics.
+var retiredKinds = []struct {
+	kind     schema.GroupVersionKind
+	selector string
+}{
+	{sourceGVK, ""},
+	{connectorGVK, prunedSelector},
+	{topicGVK, prunedSelector},
+}
+
+// retireSources deletes the customer's Postgres sources, their connectors
+// and the CDC runtime's KafkaTopics, and returns what of them is left. They
+// go before the namespace, as deleting it deletes everything at once: each
+// source's finalizer drops its replication slot in the customer's database
+// once its connector is gone, with credentials in the namespace, and only
+// the Topic Operator, which goes with the Kafka cluster, deletes a
+// KafkaTopic's topic and lets the KafkaTopic go. A slot left behind would
+// keep WAL in the customer's database until its disk is full.
+func (p *Provisioner) retireSources(ctx context.Context, spec Spec) ([]string, error) {
+	for _, retired := range retiredKinds {
+		current, err := p.Cluster.List(ctx, retired.kind, spec.Namespace(), retired.selector)
+		if err != nil {
+			return nil, fmt.Errorf("list the %ss of customer %s: %w", retired.kind.Kind, spec.CustomerID, err)
+		}
+		for _, obj := range current {
+			if obj.GetDeletionTimestamp() != nil {
+				continue
+			}
+			if err := p.Cluster.Delete(ctx, retired.kind, obj.GetNamespace(), obj.GetName()); err != nil {
+				return nil, fmt.Errorf("delete %s %s: %w", retired.kind.Kind, objectKey(&obj), err)
+			}
+			p.Logger.Info("deleting before the namespace", "kind", retired.kind.Kind, "object", objectKey(&obj), "tenant", spec.CustomerID)
+		}
+	}
+	return p.sourcesLeft(ctx, spec)
+}
+
+// sourcesLeft says what of the customer's Postgres sources, their
+// connectors and the CDC runtime's KafkaTopics is still there, and why for
+// a source, whose status says what its deletion waits for.
+func (p *Provisioner) sourcesLeft(ctx context.Context, spec Spec) ([]string, error) {
+	var left []string
+	for _, retired := range retiredKinds {
+		current, err := p.Cluster.List(ctx, retired.kind, spec.Namespace(), retired.selector)
+		if err != nil {
+			return nil, fmt.Errorf("list the %ss of customer %s: %w", retired.kind.Kind, spec.CustomerID, err)
+		}
+		for _, obj := range current {
+			what := fmt.Sprintf("%s %s is being deleted", retired.kind.Kind, objectKey(&obj))
+			if message := conditionMessage(&obj, "Ready"); retired.kind == sourceGVK && message != "" {
+				what += ": " + message
+			}
+			left = append(left, what)
+		}
+	}
+	return left, nil
+}
+
 // releaseNamespace readies the customer's namespace for deletion: it takes
 // the protection label off, which the admission policy would refuse the
 // deletion for, by applying the namespace as rendered for the unprotected
@@ -421,6 +487,13 @@ func (p *Provisioner) releaseNamespace(ctx context.Context, spec Spec, rendered,
 // platforms with dedicated nodes whether the nodes are, and otherwise what
 // is left, without waiting.
 func (p *Provisioner) Deleted(ctx context.Context, spec Spec) (bool, string, error) {
+	left, err := p.sourcesLeft(ctx, spec)
+	if err != nil {
+		return false, "", err
+	}
+	if len(left) > 0 {
+		return false, strings.Join(left, "; "), nil
+	}
 	objects, err := clusterScoped(spec)
 	if err != nil {
 		return false, "", err
@@ -494,6 +567,19 @@ func strimziReady(obj *unstructured.Unstructured) (bool, string) {
 		return false, "operator has not reconciled the latest spec; last status " + message
 	}
 	return ready, message
+}
+
+// conditionMessage is the message of an object's condition of a type, or
+// empty.
+func conditionMessage(obj *unstructured.Unstructured, conditionType string) string {
+	conditions, _, _ := unstructured.NestedSlice(obj.Object, "status", "conditions")
+	for _, c := range conditions {
+		if condition, ok := c.(map[string]any); ok && condition["type"] == conditionType {
+			message, _ := condition["message"].(string)
+			return message
+		}
+	}
+	return ""
 }
 
 // readyCondition reports whether conditions hold Ready=True, and otherwise

@@ -27,10 +27,11 @@ rules:
   - apiGroups: [changeport.io]
     resources: [customers/finalizers]
     verbs: [update]
-  # The Postgres CDC sources in customers' namespaces (docs/cdc.md).
+  # The Postgres CDC sources in customers' namespaces (docs/cdc.md), which
+  # deprovisioning deletes before the namespace.
   - apiGroups: [changeport.io]
     resources: [postgressources]
-    verbs: [get, list, watch, patch, update]
+    verbs: [get, list, watch, patch, update, delete]
   - apiGroups: [changeport.io]
     resources: [postgressources/status]
     verbs: [get, patch, update]

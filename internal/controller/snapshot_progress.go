@@ -57,12 +57,12 @@ func applyNotifications(tables []v1alpha1.TableStatus, notifications []Notificat
 		case "STARTED":
 			for collection := range strings.SplitSeq(n.Data["data_collections"], ",") {
 				if t := table(collection); t != nil && t.Snapshot != v1alpha1.SnapshotDone {
-					t.Snapshot, t.RowsCopied, t.Message = v1alpha1.SnapshotRunning, 0, ""
+					t.Snapshot, t.RowsCopied, t.Message, t.AskedAt = v1alpha1.SnapshotRunning, 0, "", nil
 				}
 			}
 		case "IN_PROGRESS":
 			if t := table(n.Data["current_collection_in_progress"]); t != nil {
-				t.Snapshot, t.Message = v1alpha1.SnapshotRunning, ""
+				t.Snapshot, t.Message, t.AskedAt = v1alpha1.SnapshotRunning, "", nil
 				t.RowsEstimated = number(n.Data, "total_rows")
 				// A chunk holds up to SnapshotChunkSize rows; the last one is
 				// counted when the table is done.
@@ -73,6 +73,7 @@ func applyNotifications(tables []v1alpha1.TableStatus, notifications []Notificat
 			if t == nil {
 				continue
 			}
+			t.AskedAt = nil
 			switch status := n.Data["status"]; status {
 			case "SUCCEEDED", "EMPTY":
 				// A read-only snapshot reads a chunk again while transactions
