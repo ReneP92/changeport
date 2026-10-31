@@ -377,6 +377,11 @@ spec:
                 - Failed
                 - Deleting
                 type: string
+              resnapshot:
+                description: |-
+                  Resnapshot is the last value of ResnapshotAnnotation the controller
+                  acted on.
+                type: string
               slot:
                 description: Slot is the health of the source's replication slot.
                 properties:

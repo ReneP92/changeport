@@ -74,6 +74,10 @@ rules:
   - apiGroups: [networking.k8s.io]
     resources: [networkpolicies]
     verbs: [get, create, patch, list, delete]
+  # The Kafka Connect worker's metrics configuration.
+  - apiGroups: [""]
+    resources: [configmaps]
+    verbs: [get, create, patch, list, delete]
   # The console's access to the Secrets it needs in each customer namespace.
   # Granting it needs no more than the controller holds itself.
   - apiGroups: [rbac.authorization.k8s.io]

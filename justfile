@@ -204,6 +204,11 @@ lag-test customer="demo":
 cdc-test customer="demo":
     hack/cdc-test.sh {{customer}}
 
+# Make the database lose a Postgres CDC source's slot, and recover the source as the runbook says
+[group('Local development (kind + Strimzi)')]
+cdc-recovery-test customer="demo":
+    hack/cdc-recovery-test.sh {{customer}}
+
 # Check that a customer's first Postgres source brings Kafka Connect and the schema registry, and the last takes them
 [group('Local development (kind + Strimzi)')]
 cdc-runtime-test customer="demo":

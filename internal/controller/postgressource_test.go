@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/testutil"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -320,8 +321,28 @@ func TestSourceReadsItsSlot(t *testing.T) {
 	if slot == nil || !slot.Active || slot.RetainedWALBytes != 123_456 || slot.WALStatus != "reserved" || *slot.SafeWALSizeBytes != safe || !slot.CheckedAt.Time.Equal(testNow) {
 		t.Errorf("slot = %+v", slot)
 	}
-	if got := testutil.ToFloat64(retainedWAL.WithLabelValues("acme", "app")); got != 123_456 {
-		t.Errorf("retained WAL metric = %v", got)
+	for name, test := range map[string]struct {
+		gauge *prometheus.GaugeVec
+		want  float64
+	}{
+		"retained WAL":    {retainedWAL, 123_456},
+		"safe WAL":        {safeWAL, float64(safe)},
+		"slot lost":       {slotLost, 0},
+		"slot checked at": {slotChecked, float64(testNow.Unix())},
+	} {
+		if got := testutil.ToFloat64(test.gauge.WithLabelValues("acme", "app")); got != test.want {
+			t.Errorf("%s metric = %v, want %v", name, got, test.want)
+		}
+	}
+	phase := getSource(t, c).Status.Phase
+	for _, p := range phases {
+		want := 0.0
+		if p == phase {
+			want = 1
+		}
+		if got := testutil.ToFloat64(sourcePhase.WithLabelValues("acme", "app", p)); got != want {
+			t.Errorf("phase %s = %v, want %v in phase %s", p, got, want, phase)
+		}
 	}
 	want := cdc.Connection{
 		Host: "app.abc123.us-east-1.rds.amazonaws.com", Port: 5432, Database: "app", User: "changeport_app_x1y2z3",
@@ -337,12 +358,28 @@ func TestSourceReadsItsSlot(t *testing.T) {
 	if len(slots.calls) != 0 {
 		t.Errorf("read the slot again within a minute: %v", slots.calls)
 	}
-	// A database it cannot reach leaves the last reading.
+	// A database it cannot reach leaves the last reading, and when it was.
 	r.Now = func() time.Time { return testNow.Add(2 * time.Minute) }
 	slots.err = errors.New("cannot reach")
 	reconcileSource(t, r)
 	if got := getSource(t, c).Status.Slot; got == nil || got.RetainedWALBytes != 123_456 {
 		t.Errorf("after a failed reading, slot = %+v", got)
+	}
+	if got := testutil.ToFloat64(slotChecked.WithLabelValues("acme", "app")); got != float64(testNow.Unix()) {
+		t.Errorf("after a failed reading, checked at %v, want the last reading's time", got)
+	}
+
+	// A lost slot says so; without max_slot_wal_keep_size, there is no
+	// safe size.
+	r.Now = func() time.Time { return testNow.Add(4 * time.Minute) }
+	slots.err = nil
+	slots.state = cdc.SlotState{Exists: true, RetainedBytes: 9_000_000_000, WALStatus: "lost"}
+	reconcileSource(t, r)
+	if got := testutil.ToFloat64(slotLost.WithLabelValues("acme", "app")); got != 1 {
+		t.Errorf("slot lost metric = %v, want 1", got)
+	}
+	if n := testutil.CollectAndCount(safeWAL, "changeport_source_slot_safe_wal_bytes"); n != 0 {
+		t.Errorf("%d safe WAL series without a limit, want none", n)
 	}
 }
 
@@ -491,7 +528,7 @@ func TestExplain(t *testing.T) {
 	names, _ := cdc.NamesFor("app", "x1y2z3")
 	for trace, want := range map[string]string{
 		"PSQLException: FATAL: no pg_hba.conf entry for host \"1.2.3.4\", user \"x\", database \"app\", no encryption":    "The database refused the connection: no pg_hba.conf entry for host \"1.2.3.4\", user \"x\", database \"app\", no encryption. Let the role connect from Changeport's addresses over TLS.",
-		"ERROR: replication slot \"changeport_app_x1y2z3\" can no longer get changes":                                     "The database lost the replication slot changeport_app_x1y2z3, probably because it held back more WAL than max_slot_wal_keep_size allows. The source needs a new slot and a new snapshot.",
+		"ERROR: replication slot \"changeport_app_x1y2z3\" can no longer get changes":                                     "The database lost the replication slot changeport_app_x1y2z3, probably because it held back more WAL than max_slot_wal_keep_size allows. The source needs a new slot and a new copy of its tables, which Changeport's operators set up with you.",
 		"ERROR: publication \"changeport_app_x1y2z3\" does not exist":                                                     "The publication changeport_app_x1y2z3 does not exist. Run the second step's SQL.",
 		"ERROR: permission denied for table orders":                                                                       "The database refused the role access: permission denied for table orders. Run the SQL that grants it.",
 		"javax.net.ssl.SSLHandshakeException: PKIX path building failed":                                                  "The certificate of app.abc123.us-east-1.rds.amazonaws.com is not trusted: SSLHandshakeException: PKIX path building failed.",
@@ -634,6 +671,101 @@ func TestSourceAsksForEachSnapshotOnce(t *testing.T) {
 	got = getSource(t, c)
 	if got.Status.Phase != v1alpha1.PhaseStreaming || got.Status.NotificationsOffset != 3 || got.Status.Tables[0].RowsCopied != 1000 || got.Status.Tables[1].RowsCopied != 7 {
 		t.Errorf("status = %s, offset %d, tables %+v", got.Status.Phase, got.Status.NotificationsOffset, got.Status.Tables)
+	}
+}
+
+// Asked to, the controller copies every table again, once per request.
+func TestSourceCopiesItsTablesAgainWhenAsked(t *testing.T) {
+	source := handedOver()
+	source.Status.Tables = []v1alpha1.TableStatus{
+		{Schema: "public", Name: "orders", Topic: "app.public.orders", Snapshot: v1alpha1.SnapshotDone, RowsCopied: 1000, RowsEstimated: 1000},
+		{Schema: "Sales", Name: "Order Lines", Topic: "app.Sales.Order_Lines", Snapshot: v1alpha1.SnapshotDone, RowsCopied: 7, RowsEstimated: 7},
+	}
+	database := &fakeSlots{report: cdc.Report{Results: []cdc.Result{{Check: cdc.Published, Status: cdc.Pass}}}}
+	r, c := newSourceReconciler(t, database, source, sourcesSecret(), runningConnector(source))
+	snapshots := &fakeSnapshots{}
+	r.Snapshots = snapshots
+	reconcileSource(t, r)
+	if len(snapshots.signals) != 0 {
+		t.Fatalf("signals = %v for copied tables", snapshots.signals)
+	}
+
+	requested := getSource(t, c)
+	requested.Annotations = map[string]string{v1alpha1.ResnapshotAnnotation: "2026-10-31"}
+	if err := c.Update(t.Context(), requested); err != nil {
+		t.Fatal(err)
+	}
+	reconcileSource(t, r)
+	got := getSource(t, c)
+	if want := [][]string{{"public.orders"}}; !slices.EqualFunc(snapshots.signals, want, slices.Equal) {
+		t.Errorf("signals = %v, want %v", snapshots.signals, want)
+	}
+	if got.Status.Resnapshot != "2026-10-31" || got.Status.Tables[0].Snapshot != v1alpha1.SnapshotRunning ||
+		got.Status.Tables[1].Snapshot != v1alpha1.SnapshotPending || got.Status.Tables[1].RowsCopied != 0 {
+		t.Errorf("status = %+v", got.Status)
+	}
+
+	// The same request is acted on once.
+	got.Status.Tables[0] = v1alpha1.TableStatus{Schema: "public", Name: "orders", Topic: "app.public.orders", Snapshot: v1alpha1.SnapshotDone}
+	got.Status.Tables[1] = v1alpha1.TableStatus{Schema: "Sales", Name: "Order Lines", Topic: "app.Sales.Order_Lines", Snapshot: v1alpha1.SnapshotDone}
+	if err := c.Status().Update(t.Context(), got); err != nil {
+		t.Fatal(err)
+	}
+	reconcileSource(t, r)
+	if len(snapshots.signals) != 1 {
+		t.Errorf("signals = %v, want no more for the same request", snapshots.signals)
+	}
+}
+
+// A deleted source's series go with it.
+// A lost slot fails the source at once, though Debezium keeps trying to take
+// it for half an hour without a word, and the slot is read on every pass
+// until the source has a new one.
+func TestSourceWithALostSlotFails(t *testing.T) {
+	slots := &fakeSlots{state: cdc.SlotState{Exists: true, WALStatus: "lost", RetainedBytes: 1}}
+	source := handedOver()
+	r, c := newSourceReconciler(t, slots, source, sourcesSecret(), connectorWith("RUNNING"))
+	reconcileSource(t, r)
+	reconcileSource(t, r)
+	got := getSource(t, c)
+	ready := sourceReady(t, got)
+	if got.Status.Phase != v1alpha1.PhaseFailed || !strings.Contains(ready.Message, "lost the replication slot changeport_app_x1y2z3") {
+		t.Errorf("phase %s, Ready %q", got.Status.Phase, ready.Message)
+	}
+
+	// Recovered: within the slot interval, a new slot is read at once.
+	slots.state = cdc.SlotState{Exists: true, Active: true, WALStatus: "reserved"}
+	reconcileSource(t, r)
+	reconcileSource(t, r)
+	if got := getSource(t, c); got.Status.Phase == v1alpha1.PhaseFailed || got.Status.Slot.WALStatus != "reserved" {
+		t.Errorf("after recovery, phase %s, slot %+v", got.Status.Phase, got.Status.Slot)
+	}
+
+	// Paused, it says it is paused.
+	slots.state = cdc.SlotState{Exists: true, WALStatus: "lost"}
+	reconcileSource(t, r)
+	stopped := getSource(t, c)
+	stopped.Spec.State = v1alpha1.StateStopped
+	if err := c.Update(t.Context(), stopped); err != nil {
+		t.Fatal(err)
+	}
+	reconcileSource(t, r)
+	if got := getSource(t, c); got.Status.Phase != v1alpha1.PhaseStopped {
+		t.Errorf("paused with a lost slot, phase %s", got.Status.Phase)
+	}
+}
+
+func TestDeletedSourceForgetsItsMetrics(t *testing.T) {
+	recordSlot(newSource(), cdc.SlotState{Exists: true, RetainedBytes: 1}, testNow)
+	recordPhase(newSource(), v1alpha1.PhaseStreaming)
+	forgetSourceMetrics(newSource())
+	for _, gauge := range []*prometheus.GaugeVec{retainedWAL, safeWAL, slotLost, slotChecked} {
+		if gauge.DeleteLabelValues("acme", "app") {
+			t.Error("a series of the deleted source is left")
+		}
+	}
+	if n := sourcePhase.DeletePartialMatch(prometheus.Labels{"tenant": "acme", "source": "app"}); n != 0 {
+		t.Errorf("%d phase series of the deleted source are left", n)
 	}
 }
 

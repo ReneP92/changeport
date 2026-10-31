@@ -9,7 +9,7 @@
 # shellcheck source=lib.sh
 source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 
-namespace=source-postgres
+namespace="source-postgres"
 host=postgres.$namespace.svc
 role="changeport_check_$RANDOM"
 password="check-$RANDOM$RANDOM"

@@ -71,3 +71,51 @@ scrape_configs:
         target_label: cluster
       - source_labels: [__meta_kubernetes_pod_name]
         target_label: instance
+  # The Kafka Connect worker of every customer with Postgres CDC sources:
+  # Debezium's and Connect's metrics from its JMX exporter on port 9404,
+  # each labelled with its source. On dedicated clusters the Kafka cluster
+  # is named after the tenant.
+  - job_name: kafka-connect
+    kubernetes_sd_configs:
+      - role: pod
+    relabel_configs:
+      - source_labels: [__meta_kubernetes_pod_label_strimzi_io_kind, __meta_kubernetes_pod_container_port_number]
+        regex: KafkaConnect;9404
+        action: keep
+      - source_labels: [__meta_kubernetes_pod_label_changeport_io_tenant]
+        regex: .+
+        action: keep
+      - source_labels: [__meta_kubernetes_pod_label_changeport_io_tenant]
+        target_label: tenant
+      - source_labels: [__meta_kubernetes_pod_label_changeport_io_tenant]
+        target_label: cluster
+      - source_labels: [__meta_kubernetes_pod_name]
+        target_label: instance
+    metric_relabel_configs:
+      # The exporter always exports the JVM's metrics; keep memory, garbage
+      # collection, threads and CPU, as for the brokers.
+      - if: '{__name__=~"jvm_.*|process_.*", __name__!~"jvm_memory_(used|max)_bytes|jvm_gc_collection_seconds_(count|sum)|jvm_threads_current|process_cpu_seconds_total|process_open_fds"}'
+        action: drop
+  # The provisioner, whose source controller exports what it reads of each
+  # Postgres CDC source's slot and phase (changeport_source_*), each series
+  # with its own tenant and source labels, which this job keeps.
+  - job_name: changeport-provisioner
+    honor_labels: true
+    kubernetes_sd_configs:
+      - role: pod
+        namespaces:
+          names: [changeport]
+    relabel_configs:
+      - source_labels: [__meta_kubernetes_pod_label_app_kubernetes_io_name, __meta_kubernetes_pod_container_port_name]
+        regex: changeport-provisioner;metrics
+        action: keep
+      - source_labels: [__meta_kubernetes_pod_name]
+        target_label: instance
+    metric_relabel_configs:
+      # On dedicated clusters the Kafka cluster is named after the tenant.
+      - source_labels: [tenant]
+        regex: (.+)
+        target_label: cluster
+      # The controllers' own health besides; not Go's or the workqueues'.
+      - if: '{__name__!~"changeport_.*|controller_runtime_reconcile_(errors_)?total"}'
+        action: drop

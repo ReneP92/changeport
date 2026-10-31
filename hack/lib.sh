@@ -548,38 +548,123 @@ metrics_query() {
     sed -nE 's/.*"value":\[[^,]*,"([^"]*)"\].*/\1/p'
 }
 
+# Creates a Postgres CDC source of the stand-in database on kind
+# (deploy/base/source-postgres) as the console does, as its service account,
+# as internal/console's KubeSources does: the source first, which waits for
+# its password, then the write-once password Secret, which the source owns.
+# Tables are comma-separated, such as public.customers,public.orders.
+# Usage: create_source_as_console namespace source id password tables retention-ms
+create_source_as_console() {
+  local namespace=$1 source=$2 id=$3 password=$4 tables=$5 retention=$6
+  local console="system:serviceaccount:changeport:changeport-console" ca table yaml_tables="" uid
+  ca=$(kubectl -n source-postgres get secret postgres-tls -o jsonpath='{.data.ca\.crt}' | base64 -d | sed 's/^/        /')
+  for table in ${tables//,/ }; do
+    yaml_tables+="    - {schema: ${table%%.*}, name: ${table#*.}}"$'\n'
+  done
+  kubectl create --as "$console" -f - >/dev/null <<SOURCE
+apiVersion: changeport.io/v1alpha1
+kind: PostgresSource
+metadata:
+  name: $source
+  namespace: $namespace
+spec:
+  id: $id
+  provider: generic
+  connection:
+    host: postgres.source-postgres.svc
+    database: app
+    passwordSecret: postgres-password-$source-1
+    tls:
+      mode: verify-full
+      ca: |
+$ca
+  tables:
+$yaml_tables  retentionMs: $retention
+SOURCE
+  uid=$(kubectl -n "$namespace" get postgressource "$source" -o jsonpath='{.metadata.uid}')
+  kubectl create --as "$console" -f - >/dev/null <<SECRET
+apiVersion: v1
+kind: Secret
+metadata:
+  name: postgres-password-$source-1
+  namespace: $namespace
+  labels:
+    changeport.io/source: $source
+  ownerReferences:
+    - {apiVersion: changeport.io/v1alpha1, kind: PostgresSource, name: $source, uid: $uid}
+type: changeport.io/postgres-password
+immutable: true
+stringData:
+  password: $password
+SECRET
+}
+
+# Port-forwards to the local VictoriaMetrics in the background, and sets
+# METRICS_PORT to the local port and METRICS_FORWARD to the process, which the
+# caller kills.
+metrics_port_forward() {
+  local output
+  output=$(mktemp)
+  kubectl -n metrics port-forward svc/victoria-metrics :8428 >"$output" 2>&1 &
+  METRICS_FORWARD=$!
+  METRICS_PORT=""
+  for _ in $(seq 50); do
+    METRICS_PORT=$(sed -nE 's/^Forwarding from 127\.0\.0\.1:([0-9]+) .*/\1/p' "$output")
+    [[ -n $METRICS_PORT ]] && break
+    sleep 0.2
+  done
+  if [[ -z $METRICS_PORT ]]; then
+    kill "$METRICS_FORWARD" 2>/dev/null || true
+    die "could not port-forward to VictoriaMetrics:"$'\n'"$(cat "$output")"
+  fi
+  rm -f "$output"
+}
+
 # Runs the console's named metrics queries (internal/metrics) against the
 # local VictoriaMetrics for tenant, through a port-forward. Each query must
 # succeed, and those in expected (comma-separated names) must return series.
 check_named_queries() {
-  local tenant=$1 expected=$2 output port pid
+  local tenant=$1 expected=$2 output
   output=$(mktemp)
-  kubectl -n metrics port-forward svc/victoria-metrics :8428 >"$output" 2>&1 &
-  pid=$!
-  for _ in $(seq 50); do
-    port=$(sed -nE 's/^Forwarding from 127\.0\.0\.1:([0-9]+) .*/\1/p' "$output")
-    [[ -n $port ]] && break
-    sleep 0.2
-  done
-  if [[ -z $port ]]; then
-    kill "$pid" 2>/dev/null || true
-    die "could not port-forward to VictoriaMetrics:"$'\n'"$(cat "$output")"
-  fi
+  metrics_port_forward
   # Rates need two scrapes, 30 seconds apart, after the traffic they measure,
   # so a customer that just served its first messages may take a minute.
   local attempt
   for attempt in $(seq 10); do
-    CHANGEPORT_METRICS_URL="http://127.0.0.1:$port" CHANGEPORT_METRICS_TENANT="$tenant" \
+    CHANGEPORT_METRICS_URL="http://127.0.0.1:$METRICS_PORT" CHANGEPORT_METRICS_TENANT="$tenant" \
       CHANGEPORT_METRICS_EXPECT="$expected" go test -count=1 -run TestQueriesAgainstVictoriaMetrics ./internal/metrics >"$output" 2>&1 && break
     if [[ $attempt -eq 10 ]]; then
-      kill "$pid" 2>/dev/null || true
+      kill "$METRICS_FORWARD" 2>/dev/null || true
       die "the console's metrics queries failed for tenant $tenant:"$'\n'"$(cat "$output")"
     fi
     sleep 10
   done
-  kill "$pid" 2>/dev/null || true
+  kill "$METRICS_FORWARD" 2>/dev/null || true
   rm -f "$output"
   log "The console's metrics queries work for tenant $tenant, with series for $expected"
+}
+
+# Evaluates the alerting rules of deploy/base/victoria-metrics/alerts for a
+# Postgres source of tenant against the local VictoriaMetrics, until exactly
+# the alerts in firing (comma-separated names) have a series for it, ignoring
+# how long they must hold; up to about 3 minutes, as the source controller
+# reads a slot every minute and VictoriaMetrics scrapes every 30 seconds.
+check_source_alerts() {
+  local tenant=$1 source=$2 firing=$3 output attempt
+  output=$(mktemp)
+  metrics_port_forward
+  for attempt in $(seq 18); do
+    CHANGEPORT_METRICS_URL="http://127.0.0.1:$METRICS_PORT" CHANGEPORT_ALERTS_TENANT="$tenant" CHANGEPORT_ALERTS_SOURCE="$source" \
+      CHANGEPORT_ALERTS_FIRING="$firing" go test -count=1 -run TestRulesAgainstVictoriaMetrics ./internal/alerts >"$output" 2>&1 && break
+    if [[ $attempt -eq 18 ]]; then
+      kill "$METRICS_FORWARD" 2>/dev/null || true
+      die "the alerts of source $source of $tenant are not ${firing:-quiet}:"$'\n'"$(cat "$output")"
+    fi
+    sleep 10
+  done
+  kill "$METRICS_FORWARD" 2>/dev/null || true
+  rm -f "$output"
+  log "The alerts of source $source: ${firing:-none} firing"
 }
 
 # Prints a variable of the git-ignored .env at the repository root, without
