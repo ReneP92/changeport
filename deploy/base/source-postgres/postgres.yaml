@@ -30,6 +30,11 @@ kind: ConfigMap
 metadata:
   name: postgres-init
 data:
+  # A slot nobody reads keeps WAL only up to this, as the setup guide
+  # recommends. Set as a customer sets it, so that it can change at runtime:
+  # hack/cdc-recovery-test.sh lowers it to make the database lose a slot.
+  00-settings.sql: |
+    ALTER SYSTEM SET max_slot_wal_keep_size = '1GB';
   10-app.sql: |
     CREATE DATABASE app;
     \c app
@@ -105,10 +110,6 @@ spec:
             - max_replication_slots=10
             - -c
             - max_wal_senders=10
-            # A slot nobody reads keeps WAL only up to this, as the setup
-            # guide recommends.
-            - -c
-            - max_slot_wal_keep_size=1GB
             - -c
             - ssl=on
             - -c
@@ -147,6 +148,8 @@ spec:
           configMap:
             name: postgres-init
             items:
+              - key: 00-settings.sql
+                path: 00-settings.sql
               - key: 10-app.sql
                 path: 10-app.sql
         - name: config

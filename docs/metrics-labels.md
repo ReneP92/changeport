@@ -66,6 +66,42 @@ outside Kafka are not. When a lookup fails, for example while a topic
 switches to tiered storage, the group keeps its last value instead of
 reporting a wrong one.
 
+## Postgres CDC sources
+
+A customer's Postgres sources (docs/cdc.md) have series from two places,
+each with `tenant`, `cluster`, `env` and `source`, the source's name. The
+alerting rules in `deploy/base/victoria-metrics/alerts` watch them.
+
+The source controller, in the provisioner, reads each source's replication
+slot in the customer's database every minute and exports what it found; the
+`changeport-provisioner` job keeps the series' own `tenant` and `source`
+labels, and copies `tenant` into `cluster`:
+
+| Metric | Meaning |
+| --- | --- |
+| `changeport_source_retained_wal_bytes` | WAL the slot keeps in the database, which grows while the source is paused, failed or behind |
+| `changeport_source_slot_safe_wal_bytes` | How much more WAL the slot may keep before the database invalidates it; absent without `max_slot_wal_keep_size` |
+| `changeport_source_slot_lost` | 1 once the database has invalidated the slot (`wal_status` lost) |
+| `changeport_source_slot_checked_timestamp_seconds` | When the controller last read the slot; it stops moving while the database cannot be reached |
+| `changeport_source_phase` | 1 for the source's phase (`Pending`, `Snapshotting`, `Streaming`, `Stopped`, `Failed` or `Deleting`), 0 for the others |
+
+The Kafka Connect worker of a customer with sources exports Debezium's and
+Connect's metrics through its JMX exporter on port 9404, which the template
+configures; the `kafka-connect` job scrapes it. Only these, besides the
+JVM's own:
+
+| Metric | Meaning |
+| --- | --- |
+| `debezium_streaming_millisecondsbehindsource` | How long ago the last change the source read happened in the database |
+| `debezium_streaming_millisecondssincelastevent` | How long ago the source read its last change |
+| `debezium_streaming_connected` | 1 while the source is connected to the database's replication stream |
+| `debezium_streaming_totalnumberofeventsseen` | Changes the source has read since its connector started |
+| `debezium_streaming_numberofcommittedtransactions` | Transactions the source has read since its connector started |
+| `debezium_streaming_queueremainingcapacity`, `debezium_streaming_queuetotalcapacity` | How full the queue between reading and writing is |
+| `kafka_connect_connector_status`, `kafka_connect_task_status` | 1 for the connector's and its task's state, in `status`: running, paused, stopped, failed or unassigned |
+| `kafka_connect_source_record_poll_total`, `kafka_connect_source_record_write_total` | Records the task has read from Debezium and written to Kafka |
+| `kafka_connect_task_record_errors_total`, `kafka_connect_task_record_failures_total` | Records the task could not handle |
+
 ## Client telemetry
 
 Kafka clients push their own metrics to a broker (KIP-714): Java clients

@@ -512,6 +512,61 @@ spec:
           type: cluster
         operations: [Describe, DescribeConfigs]
 ---
+# What the Kafka Connect worker's JMX exporter exports: Debezium's streaming
+# metrics and each connector's and task's state, labelled with their source.
+# Only what the rules match is exported, besides the JVM's own metrics.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: changeport-connect-metrics
+  namespace: customer-acme
+  labels:
+    changeport.io/part: cdc
+    app.kubernetes.io/managed-by: changeport-provisioner
+    changeport.io/tenant: "acme"
+data:
+  metrics.yaml: |
+    lowercaseOutputName: true
+    lowercaseOutputLabelNames: true
+    includeObjectNames: ["debezium.postgres:*", "kafka.connect:*"]
+    rules:
+      # How far behind its database each source is, whether it is
+      # connected, and what it has read. server is the source's name. The
+      # exporter matches "<bean><>attribute: value", so the colon keeps
+      # MilliSecondsBehindSource from matching its averages too.
+      - pattern: "debezium.postgres<type=connector-metrics, context=streaming, server=([^>]+)><>(MilliSecondsBehindSource|MilliSecondsSinceLastEvent|Connected|TotalNumberOfEventsSeen|NumberOfCommittedTransactions|QueueRemainingCapacity|QueueTotalCapacity):"
+        name: debezium_streaming_$2
+        labels:
+          source: "$1"
+      # The state of each source's connector and task: running, paused,
+      # stopped, failed or unassigned. Connectors are named <source>-<id>.
+      - pattern: "kafka.connect<type=connector-metrics, connector=([^>]+)-([a-z0-9]{6})><>status: ([a-z-]+)"
+        name: kafka_connect_connector_status
+        value: 1
+        labels:
+          source: "$1"
+          status: "$3"
+      - pattern: "kafka.connect<type=connector-task-metrics, connector=([^>]+)-([a-z0-9]{6}), task=([0-9]+)><>status: ([a-z-]+)"
+        name: kafka_connect_task_status
+        value: 1
+        labels:
+          source: "$1"
+          task: "$3"
+          status: "$4"
+      # Records each source's task wrote to Kafka, and errors on the way.
+      - pattern: "kafka.connect<type=source-task-metrics, connector=([^>]+)-([a-z0-9]{6}), task=([0-9]+)><>source-record-(write|poll)-total"
+        name: kafka_connect_source_record_$4
+        type: COUNTER
+        labels:
+          source: "$1"
+          task: "$3"
+      - pattern: "kafka.connect<type=task-error-metrics, connector=([^>]+)-([a-z0-9]{6}), task=([0-9]+)><>total-record-(errors|failures)"
+        name: kafka_connect_task_record_$4
+        type: COUNTER
+        labels:
+          source: "$1"
+          task: "$3"
+---
 # The Kafka Connect worker that runs the customer's Postgres CDC sources, one
 # KafkaConnector each, with Debezium and Apicurio's Avro converter
 # (images/connect).
@@ -559,6 +614,14 @@ spec:
       memory: "3Gi"
     limits:
       memory: "3Gi"
+  # Debezium's and Connect's metrics on port 9404, which VictoriaMetrics
+  # scrapes with the tenant label (docs/metrics-labels.md).
+  metricsConfig:
+    type: jmxPrometheusExporter
+    valueFrom:
+      configMapKeyRef:
+        name: changeport-connect-metrics
+        key: metrics.yaml
   # Strimzi's default heap of three quarters of the memory leaves too little
   # for the rest of the worker.
   jvmOptions:

@@ -24,6 +24,10 @@ it and runs in the namespace `customer-c-7f3k2q`, with brokers
 - [Rotating a customer's password](#rotating-a-customers-password)
 - [Upgrading Strimzi](#upgrading-strimzi)
 - [Upgrading Kafka](#upgrading-kafka)
+- [A Postgres source fails](#a-postgres-source-fails)
+- [A source's database is unreachable](#a-sources-database-is-unreachable)
+- [A replication slot left behind](#a-replication-slot-left-behind)
+- [A lost replication slot](#a-lost-replication-slot)
 
 ## Where to look
 
@@ -47,6 +51,22 @@ it and runs in the namespace `customer-c-7f3k2q`, with brokers
   has no under-replicated or offline partitions, one active controller and
   three active brokers.
 - **The provisioner's logs:** `kubectl -n changeport logs deploy/changeport-provisioner`.
+- **A customer's Postgres sources** ([cdc.md](cdc.md)): each `PostgresSource`
+  says in its status what it does or waits for, how far each table's copy
+  is, and its slot's health, as the console's source page shows them:
+
+  ```bash
+  kubectl -n customer-c-7f3k2q get postgressources
+  kubectl -n customer-c-7f3k2q get postgressource shop -o jsonpath='{.status.phase}: {.status.conditions[?(@.type=="Ready")].message}{"\n"}'
+  kubectl -n customer-c-7f3k2q get postgressource shop -o jsonpath='{.status.slot}{"\n"}{.status.tables}{"\n"}'
+  ```
+
+  Its connector is the `KafkaConnector` `<source>-<id>`, and the Kafka Connect
+  worker logs as `kubectl -n customer-c-7f3k2q logs changeport-connect-connect-0`.
+  Their metrics (`changeport_source_*`, `debezium_streaming_*`,
+  `kafka_connect_*`, by `tenant` and `source`) and the alerts on them, in
+  `deploy/base/victoria-metrics/alerts/postgres-sources.yaml`, link to the
+  sections below.
 
 ## Provisioning a customer
 
@@ -126,6 +146,12 @@ not deleted at once:
   deprovisioning. Other environments delete volumes with the namespace.
 - **Tiered storage.** Topic history in S3, under the customer's prefix
   `customer-<id>/` in the platform's tiered storage bucket, stays.
+
+A customer's Postgres sources go first: the controller deletes them, and
+deletes the namespace only once each has dropped its replication slot in the
+customer's database. Until then the `Customer`'s status names the source it
+waits for; one whose database cannot be reached waits for its slot to be
+dropped by hand ([A replication slot left behind](#a-replication-slot-left-behind)).
 
 The data is kept for 30 days, so that a customer deprovisioned by mistake can
 be restored, and then purged. Do not reuse a deprovisioned customer's ID
@@ -362,3 +388,160 @@ The metadata version can never go back down, so upgrade in two steps:
 2. **The metadata version**, once the new version has run for a while:
    change `MetadataVersion`, test, merge and deploy the same way. From now
    on the clusters cannot go back to the earlier version.
+
+## A Postgres source fails
+
+Alerts: `PostgresSourceFailed`, `PostgresSourceTaskFailed`,
+`PostgresSourceBehind`, `PostgresSourceRetainedWALHigh`,
+`PostgresSourceSlotNearLimit`, `PostgresSourcePausedLong`.
+
+A source that does not stream keeps its replication slot, and the slot keeps
+every change since in the customer's database: its WAL grows on the
+database's disk until the source runs again, or, with
+`max_slot_wal_keep_size`, until the database invalidates the slot. So a
+failed or long-paused source is urgent for the customer even when nobody
+reads its topics.
+
+1. **Read what the source says.** Its status explains the common failures
+   in plain language, as the console's source page shows it ([Where to
+   look](#where-to-look)). The usual causes, and what fixes them:
+
+   | The status says | Fix |
+   | --- | --- |
+   | The password is wrong, or the role does not exist | The customer gives the source a new password in the console (New password), which it uses once it logs in |
+   | The database refused the connection, or does not answer | [A source's database is unreachable](#a-sources-database-is-unreachable) |
+   | The publication does not exist, or does not publish a table | The customer runs the SQL the console shows for the source's tables again |
+   | The certificate is not trusted, or is for another name | The customer's database changed certificates or its name. An operator sets the new CA or host in the source's `spec.connection` (`kubectl -n customer-c-7f3k2q edit postgressource shop`); the controller hands the CA to the connector, which uses it when it connects again |
+   | The database lost the replication slot | [A lost replication slot](#a-lost-replication-slot) |
+
+   Otherwise the connector's own error is in the `KafkaConnector`'s status
+   and the Kafka Connect worker's log.
+
+2. **Let it restart, or restart it.** Strimzi restarts a failed connector
+   by itself, more and more slowly. Once the cause is fixed, restart it at
+   once with:
+
+   ```bash
+   kubectl -n customer-c-7f3k2q annotate kafkaconnector shop-x1y2z3 strimzi.io/restart=true
+   ```
+
+3. **A source that runs but falls behind** (`PostgresSourceBehind`): the
+   database writes changes faster than the source reads them, or the Kafka
+   Connect worker is short of CPU or memory. Check the worker's pod
+   (`kubectl -n customer-c-7f3k2q top pod changeport-connect-connect-0`) and
+   the brokers' health; `debezium_streaming_queueremainingcapacity` near 0
+   means Kafka is the bottleneck.
+
+4. **WAL close to the limit** (`PostgresSourceSlotNearLimit`): the database
+   invalidates the slot once it keeps `max_slot_wal_keep_size` of WAL, after
+   which the source needs a new slot and copies its tables again. Fix the
+   cause within the hour, or ask the customer to raise the limit for now.
+   Without a limit (`PostgresSourceRetainedWALHigh`), the WAL fills the
+   database's disk instead; the customer should set one.
+
+## A source's database is unreachable
+
+Alert: `PostgresSourceDatabaseUnreachable`.
+
+The source controller reads each source's slot every minute; when it cannot
+reach the database, it keeps the last reading, and nobody sees the WAL grow.
+The connector usually fails too.
+
+1. Find what the controller and the connector say:
+
+   ```bash
+   kubectl -n changeport logs deploy/changeport-provisioner | grep 'source=shop'
+   kubectl -n customer-c-7f3k2q get postgressource shop -o jsonpath='{.status.conditions[?(@.type=="Ready")].message}{"\n"}'
+   ```
+
+2. The usual causes, all on the customer's side: the database is down, its
+   firewall or security group no longer lets Changeport's addresses in (the
+   console lists them; they are the NAT gateways' `nat_public_ips`), its
+   `pg_hba.conf` no longer lets the role in over TLS, or its host name
+   changed. Ask the customer to check them in that order.
+3. Meanwhile the customer can watch their slot themselves:
+
+   ```sql
+   SELECT slot_name, active, wal_status,
+          pg_size_pretty(pg_wal_lsn_diff(pg_current_wal_lsn(), restart_lsn)) AS retained
+   FROM pg_replication_slots WHERE slot_name LIKE 'changeport\_%';
+   ```
+
+## A replication slot left behind
+
+Alert: `PostgresSourceSlotNotDropped`.
+
+Changeport drops a source's slot when the source is deleted, as the source's
+role. A slot left behind keeps WAL in the customer's database for ever, so
+it must go.
+
+- **A deleted source waits for its slot** (`Deleting` for 30 minutes): the
+  database cannot be reached, and the source's status, like its page in the
+  console, shows the SQL that drops the slot. Once the customer has run it,
+  they confirm with "I dropped the slot" in the console, and the source goes;
+  an operator can confirm for them, once they have said so:
+
+  ```bash
+  kubectl -n customer-c-7f3k2q annotate postgressource shop changeport.io/slot-dropped=true
+  ```
+
+  A deprovisioned customer's namespace waits for its sources the same way.
+- **A slot without a source,** such as one a customer confirmed without
+  dropping: Changeport no longer knows of it. Slots and roles are named
+  `changeport_<source>_<id>`, as the console shows each source's role. Ask
+  the customer to list them with the query in [A source's database is
+  unreachable](#a-sources-database-is-unreachable), and to drop each
+  inactive one that belongs to no source in the console:
+
+  ```sql
+  SELECT pg_drop_replication_slot('changeport_shop_x1y2z3');
+  ```
+
+## A lost replication slot
+
+Alerts: `PostgresSourceSlotLost`, then `PostgresSourceFailed`.
+
+The database invalidated the source's slot, as it held back more WAL than
+`max_slot_wal_keep_size` allows: the source was paused, failed or behind for
+too long. Debezium cannot read the changes since, so the source needs a new
+slot and a new copy of its tables. Tell the customer what that means: every
+row arrives again, and rows deleted while the slot was lost were never
+deleted from the topics, so consumers that keep a copy of the tables keep
+those rows. Find and fix why the source fell behind first ([A Postgres
+source fails](#a-postgres-source-fails)).
+
+`hack/cdc-recovery-test.sh` (in the `cdc` suite) loses a slot on kind and
+recovers it with these steps:
+
+1. Pause the source, in the console or with:
+
+   ```bash
+   kubectl -n customer-c-7f3k2q patch postgressource shop --type merge -p '{"spec":{"state":"Stopped"}}'
+   kubectl -n customer-c-7f3k2q get postgressource shop -o jsonpath='{.status.phase}{"\n"}'   # Stopped
+   ```
+
+2. The customer drops the lost slot:
+
+   ```sql
+   SELECT pg_drop_replication_slot('changeport_shop_x1y2z3');
+   ```
+
+3. Reset the stopped connector's offsets, so that it starts afresh from a new
+   slot. Strimzi takes the annotation off once it is done:
+
+   ```bash
+   kubectl -n customer-c-7f3k2q annotate kafkaconnector shop-x1y2z3 strimzi.io/connector-offsets=reset
+   kubectl -n customer-c-7f3k2q get kafkaconnector shop-x1y2z3 -o jsonpath='{.metadata.annotations}{"\n"}'
+   ```
+
+4. Ask for a new copy of every table; each new value of the annotation asks
+   once:
+
+   ```bash
+   kubectl -n customer-c-7f3k2q annotate postgressource shop changeport.io/resnapshot="$(date -u +%FT%TZ)" --overwrite
+   ```
+
+5. Resume the source, in the console or by patching its state back to
+   `Running`. The connector creates a new slot and streams from now on, and
+   the source copies its tables one at a time, as its page shows.
+

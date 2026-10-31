@@ -82,49 +82,10 @@ cdcsql -step role -password "$password" | pg
 cdcsql -step tables -tables "$tables" | pg
 
 log "Creating source $source_name as the console does"
-# As the console's service account, as internal/console's KubeSources does:
-# the source first, which waits for its password, then the write-once
-# password Secret, which the source owns.
+# The console's service account, which the test changes and deletes the
+# source as, too.
 console="system:serviceaccount:changeport:changeport-console"
-ca=$(kubectl -n source-postgres get secret postgres-tls -o jsonpath='{.data.ca\.crt}' | base64 -d | sed 's/^/        /')
-kubectl create --as "$console" -f - >/dev/null <<SOURCE
-apiVersion: changeport.io/v1alpha1
-kind: PostgresSource
-metadata:
-  name: $source_name
-  namespace: $namespace
-spec:
-  id: $id
-  provider: generic
-  connection:
-    host: postgres.source-postgres.svc
-    database: app
-    passwordSecret: postgres-password-$source_name-1
-    tls:
-      mode: verify-full
-      ca: |
-$ca
-  tables:
-    - {schema: public, name: customers}
-    - {schema: public, name: orders}
-  retentionMs: 3600000
-SOURCE
-source_uid=$(source_field .metadata.uid)
-kubectl create --as "$console" -f - >/dev/null <<SECRET
-apiVersion: v1
-kind: Secret
-metadata:
-  name: postgres-password-$source_name-1
-  namespace: $namespace
-  labels:
-    changeport.io/source: $source_name
-  ownerReferences:
-    - {apiVersion: changeport.io/v1alpha1, kind: PostgresSource, name: $source_name, uid: $source_uid}
-type: changeport.io/postgres-password
-immutable: true
-stringData:
-  password: $password
-SECRET
+create_source_as_console "$namespace" "$source_name" "$id" "$password" "$tables" 3600000
 wait_phase Streaming
 log "The tables' existing rows arrived first"
 customers_rows=$(pg -c "SELECT count(*) FROM customers")
@@ -143,6 +104,16 @@ if kubectl -n "$namespace" get secret "postgres-password-$source_name-1" >/dev/n
   die "the console's password Secret is left after the handover"
 fi
 [[ $(slot_active) == t ]] || die "the source streams, but its slot $slot is not active"
+check_source_alerts "$customer" "$source_name" ""
+# The Kafka Connect worker's and the source controller's metrics reach
+# VictoriaMetrics with the source's tenant and name.
+for _ in $(seq 24); do
+  connected=$(metrics_query "debezium_streaming_connected{tenant=\"$customer\", source=\"$source_name\"}")
+  running=$(metrics_query "kafka_connect_task_status{tenant=\"$customer\", source=\"$source_name\", status=\"running\"}")
+  [[ $connected == 1 && $running == 1 ]] && break
+  sleep 5
+done
+[[ $connected == 1 && $running == 1 ]] || die "VictoriaMetrics has no Debezium or Connect metrics of source $source_name: connected '$connected', task running '$running'"
 
 # Prints the topic's messages as key|value, a null value for a tombstone,
 # with the bytes of Avro as they are. It reads the one partition directly,

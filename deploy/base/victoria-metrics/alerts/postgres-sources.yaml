@@ -1,0 +1,115 @@
+# Alerting rules for customers' Postgres CDC sources (docs/cdc.md), in the
+# rule format vmalert reads. Nothing evaluates them yet: vmalert and
+# Alertmanager come with #96, which pages Changeport's operators, and #97
+# alerts customers themselves. Each alert carries tenant, cluster, env and
+# source, says who it is for (audience) and how urgent (severity: page or
+# warn), and links its section of docs/runbook.md. internal/alerts checks
+# them, and the end-to-end tests evaluate them on kind.
+groups:
+  - name: postgres-sources
+    rules:
+      # The database invalidated the slot: changes are lost until the source
+      # gets a new slot and copies its tables again.
+      - alert: PostgresSourceSlotLost
+        expr: changeport_source_slot_lost == 1
+        labels:
+          severity: page
+          audience: operator
+        annotations:
+          summary: "Postgres source {{ $labels.source }} of {{ $labels.tenant }} lost its replication slot"
+          description: "The database invalidated the slot, as it held back more WAL than max_slot_wal_keep_size allows. Changes since then are missing until the source has a new slot and has copied its tables again."
+          runbook: https://github.com/ReneP92/changeport/blob/main/docs/runbook.md#a-lost-replication-slot
+      # The slot is close to max_slot_wal_keep_size: the database will
+      # invalidate it soon unless the source catches up.
+      - alert: PostgresSourceSlotNearLimit
+        expr: >-
+          changeport_source_slot_safe_wal_bytes
+          / (changeport_source_slot_safe_wal_bytes + changeport_source_retained_wal_bytes) < 0.2
+        for: 10m
+        labels:
+          severity: page
+          audience: operator
+        annotations:
+          summary: "Postgres source {{ $labels.source }} of {{ $labels.tenant }} holds back WAL close to the database's limit"
+          description: "The slot keeps more than 80% of the WAL max_slot_wal_keep_size allows. If the source does not catch up, the database invalidates the slot."
+          runbook: https://github.com/ReneP92/changeport/blob/main/docs/runbook.md#a-postgres-source-fails
+      # The slot keeps a lot of WAL, which fills the customer's disk, most of
+      # all without max_slot_wal_keep_size.
+      - alert: PostgresSourceRetainedWALHigh
+        expr: changeport_source_retained_wal_bytes > 20e9
+        for: 30m
+        labels:
+          severity: warn
+          audience: customer
+        annotations:
+          summary: "Postgres source {{ $labels.source }} of {{ $labels.tenant }} holds back {{ $value | humanize1024 }}B of WAL"
+          description: "The database keeps the WAL the source has not read, on its disk. A paused, failed or slow source makes it grow."
+          runbook: https://github.com/ReneP92/changeport/blob/main/docs/runbook.md#a-postgres-source-fails
+      # The source failed, and stays failed: its connector stopped on an
+      # error its status explains, and its slot keeps WAL meanwhile.
+      - alert: PostgresSourceFailed
+        expr: changeport_source_phase{phase="Failed"} == 1
+        for: 10m
+        labels:
+          severity: page
+          audience: operator
+        annotations:
+          summary: "Postgres source {{ $labels.source }} of {{ $labels.tenant }} failed"
+          description: "The source's connector stopped on an error. Its status says why; its slot keeps WAL until it runs again."
+          runbook: https://github.com/ReneP92/changeport/blob/main/docs/runbook.md#a-postgres-source-fails
+      # Connect's own view, should the source controller not be reporting.
+      - alert: PostgresSourceTaskFailed
+        expr: max by (tenant, cluster, env, source) (kafka_connect_task_status{status="failed"}) == 1
+        for: 15m
+        labels:
+          severity: warn
+          audience: operator
+        annotations:
+          summary: "The connector task of Postgres source {{ $labels.source }} of {{ $labels.tenant }} failed"
+          description: "Kafka Connect reports the source's task as failed, and Strimzi's restarts have not brought it back."
+          runbook: https://github.com/ReneP92/changeport/blob/main/docs/runbook.md#a-postgres-source-fails
+      # The source runs, but the changes it writes are older and older.
+      - alert: PostgresSourceBehind
+        expr: debezium_streaming_millisecondsbehindsource > 15 * 60 * 1000
+        for: 15m
+        labels:
+          severity: warn
+          audience: customer
+        annotations:
+          summary: "Postgres source {{ $labels.source }} of {{ $labels.tenant }} is more than 15 minutes behind its database"
+          description: "The changes the source writes to Kafka happened more than 15 minutes ago in the database."
+          runbook: https://github.com/ReneP92/changeport/blob/main/docs/runbook.md#a-postgres-source-fails
+      # The source controller could not read the slot for a while: the
+      # database does not answer it, and nobody sees the WAL grow.
+      - alert: PostgresSourceDatabaseUnreachable
+        expr: time() - changeport_source_slot_checked_timestamp_seconds > 15 * 60
+        labels:
+          severity: warn
+          audience: customer
+        annotations:
+          summary: "Changeport cannot reach the database of Postgres source {{ $labels.source }} of {{ $labels.tenant }}"
+          description: "The source controller has not read the source's slot for more than 15 minutes."
+          runbook: https://github.com/ReneP92/changeport/blob/main/docs/runbook.md#a-sources-database-is-unreachable
+      # A deleted source waits for its slot to be dropped, which keeps WAL
+      # in the customer's database until it is.
+      - alert: PostgresSourceSlotNotDropped
+        expr: changeport_source_phase{phase="Deleting"} == 1
+        for: 30m
+        labels:
+          severity: warn
+          audience: operator
+        annotations:
+          summary: "The replication slot of deleted Postgres source {{ $labels.source }} of {{ $labels.tenant }} is not dropped"
+          description: "The source was deleted 30 minutes ago or more, and its slot still keeps WAL in the customer's database."
+          runbook: https://github.com/ReneP92/changeport/blob/main/docs/runbook.md#a-replication-slot-left-behind
+      # A source paused for a day keeps a day of WAL.
+      - alert: PostgresSourcePausedLong
+        expr: changeport_source_phase{phase="Stopped"} == 1
+        for: 24h
+        labels:
+          severity: warn
+          audience: customer
+        annotations:
+          summary: "Postgres source {{ $labels.source }} of {{ $labels.tenant }} has been paused for a day"
+          description: "A paused source keeps its slot, which keeps every change since it paused in the database's WAL."
+          runbook: https://github.com/ReneP92/changeport/blob/main/docs/runbook.md#a-postgres-source-fails

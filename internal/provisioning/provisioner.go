@@ -31,12 +31,13 @@ var (
 	connectorGVK   = schema.GroupVersionKind{Group: "kafka.strimzi.io", Version: "v1", Kind: "KafkaConnector"}
 	topicGVK       = schema.GroupVersionKind{Group: "kafka.strimzi.io", Version: "v1", Kind: "KafkaTopic"}
 	sourceGVK      = schema.GroupVersionKind{Group: "changeport.io", Version: "v1alpha1", Kind: "PostgresSource"}
+	configMapGVK   = schema.GroupVersionKind{Version: "v1", Kind: "ConfigMap"}
 )
 
 // prunedKinds are the kinds of the template's optional parts
 // (PartLabel): Reconcile deletes such objects of a customer that the
 // template no longer renders.
-var prunedKinds = []schema.GroupVersionKind{kafkaUserGVK, connectGVK, connectorGVK, topicGVK, deploymentGVK, serviceGVK, policyGVK}
+var prunedKinds = []schema.GroupVersionKind{kafkaUserGVK, connectGVK, connectorGVK, topicGVK, deploymentGVK, serviceGVK, policyGVK, configMapGVK}
 
 // The marks Deprovision leaves on a customer's volumes. Where the storage
 // class retains volumes, as in production, they outlive the namespace, and

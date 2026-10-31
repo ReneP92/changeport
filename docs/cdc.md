@@ -278,6 +278,18 @@ So:
   `changeport_source_retained_wal_bytes{tenant,source}` for alerts.
 - **A setup warning:** the checks warn when `max_slot_wal_keep_size` is
   unlimited.
+- **Monitoring and alerts:** the controller exports each slot's retained
+  WAL, how much more it may keep, whether it was lost and when it was last
+  read, and each source's phase; the Kafka Connect worker exports Debezium's
+  lag behind the database and each connector's state
+  ([metrics-labels.md](metrics-labels.md#postgres-cdc-sources)). The
+  alerting rules in `deploy/base/victoria-metrics/alerts` watch them, and
+  link to the [runbook](runbook.md#a-postgres-source-fails).
+- **A lost slot:** Debezium does not fail when the database has invalidated
+  its slot: it tries to take it again for half an hour. The controller
+  reads the slot itself, and fails the source at once, saying why. The
+  runbook recovers it with a new slot and a new copy of every table, which
+  the annotation `changeport.io/resnapshot` asks for.
 - **Pausing:** `state: Stopped` stops the connector (Strimzi's `stopped`). The
   slot and offsets stay, and the console shows the retained WAL growing
   meanwhile. Running again catches up from where the source stopped.
@@ -304,38 +316,100 @@ So:
   too much WAL, the source fails, saying so plainly. Recovery is a new slot
   and a new snapshot.
 
-## Providers
+## Setting up a database, per provider
 
-The setup differs by provider. The console's instructions
-(`internal/cdc/sql.go`) cover these:
+The console's wizard walks the customer through this; the steps outside SQL
+are `internal/cdc/sql.go`'s, word for word, and this guide is for whoever
+helps a customer through them. Whatever the provider:
 
-- **Plain PostgreSQL:** `wal_level = logical` in `postgresql.conf`, and a
-  `hostssl` line in `pg_hba.conf` per Changeport address.
-- **Amazon RDS and Aurora:**
-  - `rds.logical_replication = 1` in the parameter group;
-  - the role gets `rds_replication` rather than `REPLICATION`;
-  - RDS certificates come from Amazon's own CA, so the customer adds the
-    region's certificate bundle.
-- **Google Cloud SQL:**
-  - the `cloudsql.logical_decoding` flag;
-  - an instance whose certificate does not name its host needs `verify-ca`
-    with the instance's server CA.
-- **Azure Database for PostgreSQL:** the `wal_level` server parameter. On
-  PostgreSQL 16 and newer, the admin needs `REPLICATION` itself before it can
-  give it to a new role.
-- **Supabase:**
-  - logical replication is on by default;
-  - the direct connection is IPv6 only without the IPv4 add-on, and
-    Changeport connects over IPv4;
-  - the pooler cannot replicate.
-- **Neon:**
-  - logical replication is turned on in the project's settings;
-  - roles created with SQL cannot replicate, so the role is created in Neon's
-    console. That makes it a member of `neon_superuser`, more than Changeport
-    needs;
-  - the pooler cannot replicate;
-  - Neon removes slots inactive for about 40 hours, so a source stopped for
-    longer needs a new snapshot.
+- **PostgreSQL 14 or newer**, with logical replication on.
+- **`max_slot_wal_keep_size` set**, such as 50 GB, so that a source that
+  stops reading cannot fill the database's disk. Without it the checks warn.
+- **A free replication slot and WAL sender** per source
+  (`max_replication_slots`, `max_wal_senders`).
+- **Network:** Changeport connects from fixed addresses, which the console
+  shows; the database must be reachable on them, over TLS.
+- **TLS:** `verify-full` checks the certificate's authority and host name.
+  Without a CA, it trusts the public authorities; databases whose
+  certificates come from their provider's own CA need that CA. `verify-ca`
+  checks only the CA, for certificates that do not name the host.
+- **Tables:** each needs a primary key of integer, numeric, text, varchar,
+  char, uuid or date columns. The table picker shows the others, with why.
+- **Two pieces of SQL**, which the console generates for the source: the
+  first creates its role, which may replicate and nothing else; the second,
+  run as the tables' owner, lets the role read the chosen tables and
+  publishes them. Adding or removing tables later, a new password, and
+  cleaning up after a deleted source each come with their own SQL.
+
+### Plain PostgreSQL
+
+1. In `postgresql.conf`, set `wal_level = logical` and
+   `max_slot_wal_keep_size`, then restart Postgres.
+2. Let Changeport's addresses reach the database's port through the
+   firewall.
+3. In `pg_hba.conf`, add a line per Changeport address,
+   `hostssl <database> <role> <address>/32 scram-sha-256`, then reload. The
+   role's name is in the first SQL.
+4. Run the first SQL as a superuser. The CA is the one that signed the
+   server's certificate, unless a public authority did.
+
+### Amazon RDS and Aurora
+
+1. In the instance's DB parameter group (the DB cluster parameter group on
+   Aurora), set `rds.logical_replication = 1` and `max_slot_wal_keep_size`
+   (in MB, such as 50000), then reboot.
+2. Make the instance publicly accessible, and allow Changeport's addresses
+   in its security group.
+3. Use the RDS certificate bundle of the instance's region as the CA: RDS
+   certificates come from Amazon's own CA.
+4. Run the first SQL as the master user. On RDS the role gets
+   `rds_replication` rather than `REPLICATION`.
+
+### Google Cloud SQL
+
+1. Set the database flag `cloudsql.logical_decoding` to on, then restart the
+   instance.
+2. Give the instance a public IP address, and add Changeport's addresses to
+   its authorized networks.
+3. Use the instance's server CA certificate as the CA, with `verify-ca`
+   unless the instance's certificate names its DNS name: Cloud SQL's
+   certificates usually name the instance, not the host.
+4. Run the first SQL as the `postgres` user.
+
+### Azure Database for PostgreSQL
+
+1. Set the server parameter `wal_level` to `logical`, then restart the
+   server.
+2. Allow public access, and add a firewall rule per Changeport address.
+3. Run the first SQL as the server's admin. On PostgreSQL 16 and newer the
+   admin needs `REPLICATION` itself first: `ALTER ROLE <admin> WITH
+   REPLICATION`.
+
+### Supabase
+
+1. Logical replication is on for every project.
+2. Turn on the IPv4 add-on: Changeport connects over IPv4, and without it
+   the direct connection is IPv6 only.
+3. Connect to the direct connection, `db.<project>.supabase.co` on port 5432;
+   the pooler cannot replicate.
+4. If network restrictions are on, allow Changeport's addresses.
+5. Use the project's SSL certificate (Database settings, SSL configuration)
+   as the CA, and run the first SQL as the `postgres` user.
+
+### Neon
+
+1. Turn on logical replication in the project's settings (Settings, Logical
+   replication). This restarts the project's computes.
+2. Connect to the direct connection, the host without `-pooler`; the pooler
+   cannot replicate.
+3. If IP Allow is on, allow Changeport's addresses.
+4. Create the role in the Neon Console (the branch, Roles & Databases, Add
+   role) with the name the console shows, and enter the password Neon shows
+   into the wizard: roles created with SQL cannot replicate on Neon. That
+   makes the role a member of `neon_superuser`, more than Changeport needs.
+5. Neon removes replication slots inactive for about 40 hours, so a source
+   paused for longer loses its slot and needs a new copy of its tables
+   ([runbook](runbook.md#a-lost-replication-slot)).
 
 ## The console's checks
 
@@ -509,6 +583,14 @@ of this design with the Connect image, Apicurio 3.3.3 and Postgres 17:
     with the customer's credentials. It sees the gateway refuse deleting the
     source's schemas, changing their compatibility, a wrong password, and
     then the right one after ten failures.
+- **`hack/cdc-recovery-test.sh`** (`just cdc-recovery-test`), in the same
+  suite, makes the database lose a paused source's slot by lowering
+  `max_slot_wal_keep_size` and filling the WAL. Resumed, the source fails,
+  says why, and its alerts fire; recovered with the runbook's steps, it
+  streams from a new slot with its table copied again, and its alerts are
+  quiet. Both tests evaluate the alerting rules against VictoriaMetrics for
+  their source (`internal/alerts`), whose unit tests also check every rule's
+  runbook section and metrics.
 - **The console's tests** (`internal/console`) cover each route of the API
   and the guardrails, and run the console's Kubernetes calls against a real
   API server (envtest) as its service account, with its ClusterRole and its

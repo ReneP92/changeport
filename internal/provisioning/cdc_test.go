@@ -53,7 +53,7 @@ func TestRenderCDCRuntimeOnlyWithSources(t *testing.T) {
 		}
 	}
 	want := []string{
-		"KafkaUser changeport-connect", "KafkaUser changeport-registry", "KafkaConnect changeport-connect",
+		"KafkaUser changeport-connect", "KafkaUser changeport-registry", "ConfigMap changeport-connect-metrics", "KafkaConnect changeport-connect",
 		"KafkaTopic changeport.cdc.signals.app", "KafkaTopic changeport.cdc.notifications.app", "KafkaConnector app-x1y2z3",
 		"KafkaTopic changeport.cdc.signals.billing", "KafkaTopic changeport.cdc.notifications.billing",
 		"Deployment changeport-registry", "Service changeport-registry",
@@ -256,7 +256,7 @@ func TestProvisionerMayPruneTheCDCRuntime(t *testing.T) {
 			}
 		}
 	}
-	resources := map[string]string{"KafkaUser": "kafkausers", "KafkaConnect": "kafkaconnects", "KafkaConnector": "kafkaconnectors", "KafkaTopic": "kafkatopics", "Deployment": "deployments", "Service": "services", "NetworkPolicy": "networkpolicies"}
+	resources := map[string]string{"KafkaUser": "kafkausers", "KafkaConnect": "kafkaconnects", "KafkaConnector": "kafkaconnectors", "KafkaTopic": "kafkatopics", "Deployment": "deployments", "Service": "services", "NetworkPolicy": "networkpolicies", "ConfigMap": "configmaps"}
 	for _, kind := range prunedKinds {
 		resource, ok := resources[kind.Kind]
 		if !ok {
@@ -421,6 +421,7 @@ func TestReconcilePrunesTheCDCRuntime(t *testing.T) {
 	provision(t, p, spec)
 	slices.Sort(cluster.deleted)
 	want := []string{
+		"ConfigMap:customer-acme/changeport-connect-metrics",
 		"Deployment:customer-acme/changeport-registry", "Deployment:customer-acme/changeport-registry-gateway", "KafkaConnect:customer-acme/changeport-connect", "KafkaConnector:customer-acme/app-x1y2z3",
 		"KafkaTopic:customer-acme/changeport.cdc.notifications.app", "KafkaTopic:customer-acme/changeport.cdc.signals.app",
 		"KafkaUser:customer-acme/changeport-connect", "KafkaUser:customer-acme/changeport-registry",

@@ -81,6 +81,12 @@ const SlotDroppedAnnotation = "changeport.io/slot-dropped"
 // time, which the catalog then answers.
 const CatalogRequestAnnotation = "changeport.io/catalog-requested"
 
+// ResnapshotAnnotation asks the source controller to copy every table's
+// existing rows again, such as after the database lost the source's slot
+// (docs/runbook.md). Each new value asks once; status.resnapshot holds the
+// last one acted on.
+const ResnapshotAnnotation = "changeport.io/resnapshot"
+
 // MaxCatalogTables caps the tables a source's catalog lists.
 const MaxCatalogTables = 1000
 
@@ -372,6 +378,11 @@ type PostgresSourceStatus struct {
 	// +listMapKey=name
 	// +optional
 	Tables []TableStatus `json:"tables,omitempty"`
+
+	// Resnapshot is the last value of ResnapshotAnnotation the controller
+	// acted on.
+	// +optional
+	Resnapshot string `json:"resnapshot,omitempty"`
 
 	// Catalog is the tables of the source's database, listed on request
 	// and forgotten again after a while.

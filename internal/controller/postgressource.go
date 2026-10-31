@@ -12,7 +12,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/prometheus/client_golang/prometheus"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/equality"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -25,24 +24,11 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
-	"sigs.k8s.io/controller-runtime/pkg/metrics"
 
 	"github.com/ReneP92/changeport/api/v1alpha1"
 	"github.com/ReneP92/changeport/internal/cdc"
 	"github.com/ReneP92/changeport/internal/provisioning"
 )
-
-// retainedWAL is the WAL each source's slot holds back in the customer's
-// database, which alerts watch: a source that stops reading makes it grow
-// until the database's disk is full.
-var retainedWAL = prometheus.NewGaugeVec(prometheus.GaugeOpts{
-	Name: "changeport_source_retained_wal_bytes",
-	Help: "The WAL a Postgres CDC source's replication slot keeps in the customer's database, in bytes.",
-}, []string{"tenant", "source"})
-
-func init() {
-	metrics.Registry.MustRegister(retainedWAL)
-}
 
 var kafkaConnectorGVK = schema.GroupVersionKind{Group: "kafka.strimzi.io", Version: "v1", Kind: "KafkaConnector"}
 
@@ -145,6 +131,7 @@ func (r *PostgresSourceReconciler) reconcile(ctx context.Context, req ctrl.Reque
 	if err := r.handOver(ctx, &source, status); err != nil {
 		return ctrl.Result{}, err
 	}
+	r.resnapshot(ctx, &source, status)
 	ready, connector := r.connectorState(ctx, &source, names, status)
 	if status.Phase == v1alpha1.PhaseStreaming {
 		ready = r.followSnapshots(ctx, &source, names, status, connector, ready)
@@ -161,6 +148,7 @@ func (r *PostgresSourceReconciler) reconcile(ctx context.Context, req ctrl.Reque
 		return ctrl.Result{}, err
 	}
 	setSourceCondition(status, source.Generation, ready)
+	recordPhase(&source, status.Phase)
 	return ctrl.Result{RequeueAfter: requeue}, r.updateStatus(ctx, &source, status)
 }
 
@@ -257,6 +245,11 @@ func (r *PostgresSourceReconciler) connectorState(ctx context.Context, source *v
 	state, trace := connectorStatus(connector)
 	stopped := source.Spec.State == v1alpha1.StateStopped
 	switch {
+	// Debezium does not fail on a lost slot: it tries to take it again for
+	// half an hour, and its task reports nothing meanwhile. The slot's own
+	// reading says so at once.
+	case !stopped && status.Slot != nil && status.Slot.WALStatus == walStatusLost:
+		return condition(v1alpha1.PhaseFailed, metav1.ConditionFalse, v1alpha1.SourceReasonFailed, lostSlot(names)), connector
 	case stopped && state == "STOPPED":
 		return condition(v1alpha1.PhaseStopped, metav1.ConditionFalse, v1alpha1.SourceReasonStopped,
 			"The source is stopped. Its slot keeps the database's WAL until it runs again."), connector
@@ -398,6 +391,25 @@ func (r *PostgresSourceReconciler) askAgainUnanswered(ctx context.Context, sourc
 	}
 }
 
+// resnapshot copies every table's existing rows again when
+// ResnapshotAnnotation asks for it with a value it has not acted on, such
+// as after the database lost the source's slot (docs/runbook.md).
+func (r *PostgresSourceReconciler) resnapshot(ctx context.Context, source *v1alpha1.PostgresSource, status *v1alpha1.PostgresSourceStatus) {
+	requested := source.Annotations[v1alpha1.ResnapshotAnnotation]
+	if requested == "" || requested == status.Resnapshot {
+		return
+	}
+	ctrl.LoggerFrom(ctx).Info("copying every table again", "source", source.Name, "request", requested)
+	syncTables(source, status)
+	for i := range status.Tables {
+		t := &status.Tables[i]
+		t.Snapshot, t.RowsCopied, t.RowsEstimated, t.AskedAt = v1alpha1.SnapshotPending, 0, 0, nil
+		t.Message = "Copying the table again, as asked."
+		r.forget(source, cdc.Table{Schema: t.Schema, Name: t.Name})
+	}
+	status.Resnapshot = requested
+}
+
 // forget forgets that a table's snapshot was asked for.
 func (r *PostgresSourceReconciler) forget(source *v1alpha1.PostgresSource, table cdc.Table) {
 	r.mu.Lock()
@@ -483,7 +495,7 @@ var explanations = []struct {
 		return "The database refused the connection: " + detail + ". Let the role connect from Changeport's addresses over TLS."
 	}},
 	{regexp.MustCompile(`(?:replication slot[^\n]*(?:does not exist|has been invalidated|can no longer get changes|lost))[^\n]*`), func(_ *v1alpha1.PostgresSource, names cdc.Names, _ string) string {
-		return fmt.Sprintf("The database lost the replication slot %s, probably because it held back more WAL than max_slot_wal_keep_size allows. The source needs a new slot and a new snapshot.", names.Slot)
+		return lostSlot(names)
 	}},
 	{regexp.MustCompile(`publication "?[^"\s]*"? does not exist`), func(_ *v1alpha1.PostgresSource, names cdc.Names, _ string) string {
 		return fmt.Sprintf("The publication %s does not exist. Run the second step's SQL.", names.Publication)
@@ -540,8 +552,19 @@ func innermostCause(trace string) string {
 }
 
 // slotDue reports whether the slot was last read SlotInterval ago or more.
+// A lost slot is read on every pass, so that the source says so only until
+// it has a new one.
 func (r *PostgresSourceReconciler) slotDue(status *v1alpha1.PostgresSourceStatus) bool {
-	return status.Slot == nil || r.now().Sub(status.Slot.CheckedAt.Time) >= r.SlotInterval
+	return status.Slot == nil || status.Slot.WALStatus == walStatusLost || r.now().Sub(status.Slot.CheckedAt.Time) >= r.SlotInterval
+}
+
+// walStatusLost is Postgres's wal_status of a slot it invalidated.
+const walStatusLost = "lost"
+
+// lostSlot says that the database lost the source's slot, and what it takes.
+func lostSlot(names cdc.Names) string {
+	return fmt.Sprintf("The database lost the replication slot %s, probably because it held back more WAL than max_slot_wal_keep_size allows. "+
+		"The source needs a new slot and a new copy of its tables, which Changeport's operators set up with you.", names.Slot)
 }
 
 func (r *PostgresSourceReconciler) now() time.Time {
@@ -563,14 +586,12 @@ func (r *PostgresSourceReconciler) readSlot(ctx context.Context, source *v1alpha
 		ctrl.LoggerFrom(ctx).Info("could not read the slot", "source", source.Name, "error", err.Error())
 		return
 	}
-	tenant := strings.TrimPrefix(source.Namespace, provisioning.NamespacePrefix)
+	recordSlot(source, state, r.now())
 	if !state.Exists {
 		// Not created yet, or dropped: it is read again on the next pass.
-		retainedWAL.DeleteLabelValues(tenant, source.Name)
 		status.Slot = nil
 		return
 	}
-	retainedWAL.WithLabelValues(tenant, source.Name).Set(float64(state.RetainedBytes))
 	status.Slot = &v1alpha1.SlotStatus{
 		Name: names.Slot, Active: state.Active, RetainedWALBytes: state.RetainedBytes,
 		WALStatus: state.WALStatus, SafeWALSizeBytes: state.SafeWALSize, CheckedAt: metav1.NewTime(r.now()),
@@ -655,6 +676,7 @@ func (r *PostgresSourceReconciler) finalize(ctx context.Context, source *v1alpha
 	}
 	status := source.Status.DeepCopy()
 	status.Phase = v1alpha1.PhaseDeleting
+	recordPhase(source, status.Phase)
 	waiting := func(reason, message string, after time.Duration) (ctrl.Result, error) {
 		setSourceCondition(status, source.Generation, metav1.Condition{Type: v1alpha1.ConditionReady, Status: metav1.ConditionFalse, Reason: reason, Message: message})
 		return ctrl.Result{RequeueAfter: after}, r.updateStatus(ctx, source, status)
@@ -689,7 +711,7 @@ func (r *PostgresSourceReconciler) finalize(ctx context.Context, source *v1alpha
 	if err := r.removeCredentials(ctx, source); err != nil {
 		return ctrl.Result{}, err
 	}
-	retainedWAL.DeleteLabelValues(strings.TrimPrefix(source.Namespace, provisioning.NamespacePrefix), source.Name)
+	forgetSourceMetrics(source)
 	patch := client.MergeFromWithOptions(source.DeepCopy(), client.MergeFromWithOptimisticLock{})
 	controllerutil.RemoveFinalizer(source, v1alpha1.SourceFinalizer)
 	if err := r.Client.Patch(ctx, source, patch); err != nil {
