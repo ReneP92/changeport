@@ -21,6 +21,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	"github.com/ReneP92/changeport/api/v1alpha1"
+	"github.com/ReneP92/changeport/internal/cdc"
 	"github.com/ReneP92/changeport/internal/clusters"
 	"github.com/ReneP92/changeport/internal/console"
 	"github.com/ReneP92/changeport/internal/console/ui"
@@ -46,6 +47,8 @@ func run(ctx context.Context, args []string) error {
 	metricsURL := fs.String("metrics-url", envOr("CHANGEPORT_METRICS_URL", "http://victoria-metrics.metrics.svc:8428"),
 		"address of the metrics store (VictoriaMetrics)")
 	kubeContext := fs.String("context", "", "kubeconfig context to use (default: the current context, or the pod's service account in a cluster)")
+	allowPrivateDatabases := fs.Bool("allow-private-databases", false,
+		"let Postgres sources' databases be on private networks, as on kind, where a Postgres stands in for customers'")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -86,8 +89,13 @@ func run(ctx context.Context, args []string) error {
 		Customers: console.KubeCustomers{Client: kube},
 		Clusters:  console.KubeClusters{Client: kube, Kafka: kafka},
 		Metrics:   metricsClient,
-		UI:        ui.FS(),
-		Logger:    logger,
+		Sources:   console.KubeSources{Client: kube},
+		Databases: cdc.Checker{Guard: cdc.Guard{AllowPrivate: *allowPrivateDatabases}},
+		// The addresses the platform's NAT gateways give its connections
+		// to the internet (Terraform's nat_public_ips).
+		EgressAddresses: splitList(os.Getenv("CHANGEPORT_EGRESS_IPS")),
+		UI:              ui.FS(),
+		Logger:          logger,
 	})
 	if err != nil {
 		return err

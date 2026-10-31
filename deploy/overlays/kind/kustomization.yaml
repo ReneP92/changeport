@@ -20,6 +20,11 @@ patches:
       - op: replace
         path: /spec/template/spec/containers/0/env/0/value
         value: http://localhost:8088,http://localhost:5173
+      # The Postgres that stands in for customers' databases is on the
+      # cluster's own network (deploy/base/source-postgres).
+      - op: add
+        path: /spec/template/spec/containers/0/args/-
+        value: -allow-private-databases
   - target:
       kind: Service
       name: changeport-console

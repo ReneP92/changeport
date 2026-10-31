@@ -221,6 +221,10 @@ type fixture struct {
 	// deletes.
 	customers     *fakeCustomers
 	organizations *fakeOrganizations
+	// sources and databases are the customers' Postgres sources and their
+	// databases.
+	sources   *fakeSources
+	databases *fakeDatabases
 	// log is what the server logged, as JSON lines.
 	log     *bytes.Buffer
 	fetches int
@@ -239,6 +243,8 @@ func newFixture(t *testing.T) *fixture {
 		customers:     newFakeCustomers(),
 		organizations: &fakeOrganizations{names: map[string]string{}},
 		clusters:      newFakeClusters(),
+		sources:       newFakeSources(),
+		databases:     &fakeDatabases{},
 		log:           &bytes.Buffer{},
 	}
 	server, err := New(Config{
@@ -251,8 +257,12 @@ func newFixture(t *testing.T) *fixture {
 		Organizations: f.organizations,
 		Clusters:      f.clusters,
 		Metrics:       fakeMetrics{},
-		UI:            ui,
-		Logger:        slog.New(slog.NewJSONHandler(f.log, nil)),
+		Sources:       f.sources,
+		Databases:     f.databases,
+		// The NAT gateways' addresses of the platform.
+		EgressAddresses: []string{"203.0.113.10", "203.0.113.11"},
+		UI:              ui,
+		Logger:          slog.New(slog.NewJSONHandler(f.log, nil)),
 		Keys: func(context.Context) ([]*clerk.JSONWebKey, error) {
 			f.fetches++
 			return []*clerk.JSONWebKey{f.signer.jwk()}, nil
@@ -629,7 +639,11 @@ func (f *fakeClusters) Topics(_ context.Context, id string) ([]TopicSettings, er
 		return nil, fmt.Errorf("no certificate yet: %w", clusters.ErrNotReady)
 	}
 	week := int64(7 * 24 * time.Hour / time.Millisecond)
-	return []TopicSettings{{Name: id + "-orders", Partitions: 3, ReplicationFactor: 1, Tiered: true, CleanupPolicy: "delete", RetentionMs: &week}}, nil
+	settings := []TopicSettings{{Name: id + "-orders", Partitions: 3, ReplicationFactor: 1, Tiered: true, CleanupPolicy: "delete", RetentionMs: &week}}
+	for _, t := range f.topics[id] {
+		settings = append(settings, TopicSettings{Name: t.Name, Partitions: int(t.Partitions), ReplicationFactor: int(t.ReplicationFactor), CleanupPolicy: "delete", RetentionMs: &week})
+	}
+	return settings, nil
 }
 
 func (f *fakeClusters) AdminCredentials(_ context.Context, id string) (string, error) {
@@ -660,6 +674,8 @@ var fakeLags = []fakeLag{
 	{group: "billing", seconds: 180, messages: 42},
 	{group: "search"},
 	{group: "archive", seconds: 23 * 3600, messages: 9000, capped: true},
+	// The platform's own group, which customers do not see.
+	{group: "changeport-registry", seconds: 1, messages: 1},
 }
 
 func (fakeMetrics) Instant(_ context.Context, tenant string, q metrics.Query, _ metrics.Filter, at time.Time) ([]metrics.Series, error) {

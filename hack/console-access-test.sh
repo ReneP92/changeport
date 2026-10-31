@@ -3,7 +3,10 @@
 # console will use it: from the changeport namespace, as the changeport-console
 # service account and Kafka user. The service account may read exactly the
 # Secrets the console needs in the customer's namespace, and its pods for the
-# brokers' health, and nothing else. Over the internal
+# brokers' health, and nothing else. It manages Postgres sources, and may
+# create their write-once password Secrets, which the admission policy
+# changeport-console-secrets holds to their form, but no other Secret, and
+# never read, change or delete one. Over the internal
 # mTLS listener, the console user may create, describe and delete topics and
 # list consumer groups, but neither produce nor consume, with or without a
 # consumer group.
@@ -41,13 +44,55 @@ for allowed in "get customers" "list customers" "create customers" "delete custo
   # shellcheck disable=SC2086 # the words are separate arguments
   [[ $(can_i $allowed) == yes ]] || die "the console may not $allowed"
 done
-for denied in "update customers" "patch customers" "patch customers/status" "delete namespaces" \
+for denied in "update customers" "patch customers" "patch customers --subresource=status" "delete namespaces" \
   "-n $namespace get secret/tiered-storage-credentials" "-n $namespace get secret/changeport-agent" \
   "-n $namespace list secrets" "-n $namespace create pods/exec" "-n $namespace get configmaps" \
   "-n $namespace delete pods" "-n kube-system list pods" "-n kube-system get secret/admin"; do
   # shellcheck disable=SC2086 # the words are separate arguments
   [[ $(can_i $denied) == no ]] || die "the console may $denied"
 done
+
+log "Console service account's access to Postgres sources and their password Secrets"
+for verb in get list create update patch delete; do
+  [[ $(can_i -n "$namespace" "$verb" postgressources) == yes ]] || die "the console may not $verb postgressources"
+done
+[[ $(can_i -n "$namespace" create secrets) == yes ]] || die "the console may not create the password Secrets of sources"
+for denied in "get secret/postgres-password-app-a1b2c3" "list secrets" "update secrets" "patch secrets" "delete secrets" \
+  "update postgressources --subresource=status" "delete kafkaconnectors"; do
+  # shellcheck disable=SC2086 # the words are separate arguments
+  [[ $(can_i -n "$namespace" $denied) == no ]] || die "the console may $denied"
+done
+# Creates a Secret as the console in a server-side dry run, which admission
+# policies check, and prints the API server's answer.
+create_secret_as_console() {
+  local secret_namespace=$1 secret_name=$2 type=$3 immutable=$4 data=$5
+  kubectl create --as "$console" --dry-run=server -o name -f - 2>&1 <<YAML || true
+apiVersion: v1
+kind: Secret
+metadata: { name: $secret_name, namespace: $secret_namespace }
+type: $type
+immutable: $immutable
+data: $data
+YAML
+}
+password="{password: $(printf 'P4ssword' | base64)}"
+answer=$(create_secret_as_console "$namespace" "postgres-password-access-$run_id" changeport.io/postgres-password true "$password")
+[[ $answer == "secret/postgres-password-access-$run_id" ]] || die "the console cannot create a source's password Secret: $answer"
+refusals=(
+  "$namespace|postgres-password-access-$run_id|Opaque|true|$password"
+  "$namespace|postgres-password-access-$run_id|changeport.io/postgres-password|false|$password"
+  "$namespace|admin-$run_id|changeport.io/postgres-password|true|$password"
+  "$namespace|postgres-password-access-$run_id|changeport.io/postgres-password|true|{password: UA==, user: UA==}"
+  "changeport|postgres-password-access-$run_id|changeport.io/postgres-password|true|$password"
+  "kube-system|postgres-password-access-$run_id|changeport.io/postgres-password|true|$password"
+)
+for refusal in "${refusals[@]}"; do
+  IFS='|' read -r secret_namespace secret_name type immutable data <<<"$refusal"
+  answer=$(create_secret_as_console "$secret_namespace" "$secret_name" "$type" "$immutable" "$data")
+  [[ $answer == *"changeport-console-secrets"*"denied request"* ]] ||
+    die "the admission policy let the console create $secret_namespace/$secret_name ($type, immutable $immutable, data $data): $answer"
+done
+log "The console may create only its password Secrets: ${#refusals[@]} other Secrets refused"
 
 log "Console Kafka user on the internal listener, from the changeport namespace"
 # The pod runs where the console will, so it gets the certificates through a

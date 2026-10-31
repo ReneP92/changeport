@@ -18,6 +18,11 @@ output "vpc_id" {
   value       = module.vpc.vpc_id
 }
 
+output "nat_public_ips" {
+  description = "Where the platform connects to customers' databases from, which they allowlist: the console's CHANGEPORT_EGRESS_IPS."
+  value       = module.vpc.nat_public_ips
+}
+
 output "tiered_storage_bucket" {
   description = "The tiered storage bucket, the Bucket of eksTieredStorage in internal/provisioning/spec.go."
   value       = module.s3.tiered_storage_bucket

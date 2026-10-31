@@ -17,6 +17,30 @@ import (
 	"github.com/oapi-codegen/runtime"
 )
 
+// Defines values for CheckResultStatus.
+const (
+	Fail    CheckResultStatus = "fail"
+	Pass    CheckResultStatus = "pass"
+	Skipped CheckResultStatus = "skipped"
+	Warn    CheckResultStatus = "warn"
+)
+
+// Valid indicates whether the value is a known member of the CheckResultStatus enum.
+func (e CheckResultStatus) Valid() bool {
+	switch e {
+	case Fail:
+		return true
+	case Pass:
+		return true
+	case Skipped:
+		return true
+	case Warn:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for CleanupPolicyOptionName.
 const (
 	CleanupPolicyOptionNameCompact CleanupPolicyOptionName = "compact"
@@ -173,6 +197,159 @@ func (e NewTopicCleanupPolicy) Valid() bool {
 	}
 }
 
+// Defines values for Provider.
+const (
+	Azure    Provider = "azure"
+	Cloudsql Provider = "cloudsql"
+	Generic  Provider = "generic"
+	Neon     Provider = "neon"
+	Rds      Provider = "rds"
+	Supabase Provider = "supabase"
+)
+
+// Valid indicates whether the value is a known member of the Provider enum.
+func (e Provider) Valid() bool {
+	switch e {
+	case Azure:
+		return true
+	case Cloudsql:
+		return true
+	case Generic:
+		return true
+	case Neon:
+		return true
+	case Rds:
+		return true
+	case Supabase:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for SetupSQLRequestStep.
+const (
+	Role   SetupSQLRequestStep = "role"
+	Tables SetupSQLRequestStep = "tables"
+)
+
+// Valid indicates whether the value is a known member of the SetupSQLRequestStep enum.
+func (e SetupSQLRequestStep) Valid() bool {
+	switch e {
+	case Role:
+		return true
+	case Tables:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for SourceState.
+const (
+	SourceStateRunning SourceState = "Running"
+	SourceStateStopped SourceState = "Stopped"
+)
+
+// Valid indicates whether the value is a known member of the SourceState enum.
+func (e SourceState) Valid() bool {
+	switch e {
+	case SourceStateRunning:
+		return true
+	case SourceStateStopped:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for SourceChangeState.
+const (
+	SourceChangeStateRunning SourceChangeState = "Running"
+	SourceChangeStateStopped SourceChangeState = "Stopped"
+)
+
+// Valid indicates whether the value is a known member of the SourceChangeState enum.
+func (e SourceChangeState) Valid() bool {
+	switch e {
+	case SourceChangeStateRunning:
+		return true
+	case SourceChangeStateStopped:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for SourceConnectionTlsMode.
+const (
+	VerifyCa   SourceConnectionTlsMode = "verify-ca"
+	VerifyFull SourceConnectionTlsMode = "verify-full"
+)
+
+// Valid indicates whether the value is a known member of the SourceConnectionTlsMode enum.
+func (e SourceConnectionTlsMode) Valid() bool {
+	switch e {
+	case VerifyCa:
+		return true
+	case VerifyFull:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for SourceSQLRequestStep.
+const (
+	Add      SourceSQLRequestStep = "add"
+	Cleanup  SourceSQLRequestStep = "cleanup"
+	DropSlot SourceSQLRequestStep = "dropSlot"
+	Password SourceSQLRequestStep = "password"
+	Remove   SourceSQLRequestStep = "remove"
+)
+
+// Valid indicates whether the value is a known member of the SourceSQLRequestStep enum.
+func (e SourceSQLRequestStep) Valid() bool {
+	switch e {
+	case Add:
+		return true
+	case Cleanup:
+		return true
+	case DropSlot:
+		return true
+	case Password:
+		return true
+	case Remove:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for SourceTableStatusSnapshot.
+const (
+	SourceTableStatusSnapshotDone    SourceTableStatusSnapshot = "Done"
+	SourceTableStatusSnapshotFailed  SourceTableStatusSnapshot = "Failed"
+	SourceTableStatusSnapshotPending SourceTableStatusSnapshot = "Pending"
+	SourceTableStatusSnapshotRunning SourceTableStatusSnapshot = "Running"
+)
+
+// Valid indicates whether the value is a known member of the SourceTableStatusSnapshot enum.
+func (e SourceTableStatusSnapshot) Valid() bool {
+	switch e {
+	case SourceTableStatusSnapshotDone:
+		return true
+	case SourceTableStatusSnapshotFailed:
+		return true
+	case SourceTableStatusSnapshotPending:
+		return true
+	case SourceTableStatusSnapshotRunning:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for GetThroughputParamsRange.
 const (
 	N1h  GetThroughputParamsRange = "1h"
@@ -204,6 +381,23 @@ type Broker struct {
 	Restarts int     `json:"restarts"`
 	Zone     *string `json:"zone,omitempty"`
 }
+
+// CheckReport defines model for CheckReport.
+type CheckReport struct {
+	// Ok Whether every check passed, warnings included
+	Ok      bool          `json:"ok"`
+	Results []CheckResult `json:"results"`
+}
+
+// CheckResult defines model for CheckResult.
+type CheckResult struct {
+	Check   string            `json:"check"`
+	Message string            `json:"message"`
+	Status  CheckResultStatus `json:"status"`
+}
+
+// CheckResultStatus defines model for CheckResult.Status.
+type CheckResultStatus string
 
 // CleanupPolicyOption defines model for CleanupPolicyOption.
 type CleanupPolicyOption struct {
@@ -363,6 +557,18 @@ type NewCustomer struct {
 // NewCustomerProfile defines model for NewCustomer.Profile.
 type NewCustomerProfile string
 
+// NewSource defines model for NewSource.
+type NewSource struct {
+	Connection SourceConnection `json:"connection"`
+	Id         string           `json:"id"`
+	Name       string           `json:"name"`
+
+	// Provider Where the database runs
+	Provider    Provider   `json:"provider"`
+	RetentionMs int64      `json:"retentionMs"`
+	Tables      []TableRef `json:"tables"`
+}
+
 // NewTopic defines model for NewTopic.
 type NewTopic struct {
 	CleanupPolicy NewTopicCleanupPolicy `json:"cleanupPolicy"`
@@ -397,16 +603,223 @@ type Problem struct {
 	Title  string  `json:"title"`
 }
 
+// Provider Where the database runs
+type Provider string
+
+// ProviderOption defines model for ProviderOption.
+type ProviderOption struct {
+	// Id Where the database runs
+	Id Provider `json:"id"`
+
+	// PasswordFromCustomer Whether the customer brings the role's password, made in the provider's own console
+	PasswordFromCustomer bool   `json:"passwordFromCustomer"`
+	Title                string `json:"title"`
+}
+
 // RetentionPreset defines model for RetentionPreset.
 type RetentionPreset struct {
 	Label string `json:"label"`
 	Ms    int64  `json:"ms"`
 }
 
+// SetupSQLRequest defines model for SetupSQLRequest.
+type SetupSQLRequest struct {
+	// Id The source's ID from the role step, for the tables step
+	Id   *string `json:"id,omitempty"`
+	Name string  `json:"name"`
+
+	// Provider Where the database runs
+	Provider Provider            `json:"provider"`
+	Step     SetupSQLRequestStep `json:"step"`
+	Tables   *[]TableRef         `json:"tables,omitempty"`
+}
+
+// SetupSQLRequestStep defines model for SetupSQLRequest.Step.
+type SetupSQLRequestStep string
+
+// SlotHealth defines model for SlotHealth.
+type SlotHealth struct {
+	Active           bool      `json:"active"`
+	CheckedAt        time.Time `json:"checkedAt"`
+	Name             string    `json:"name"`
+	RetainedWALBytes int64     `json:"retainedWALBytes"`
+	SafeWALSizeBytes *int64    `json:"safeWALSizeBytes,omitempty"`
+	WalStatus        *string   `json:"walStatus,omitempty"`
+}
+
+// Source defines model for Source.
+type Source struct {
+	CreatedAt time.Time `json:"createdAt"`
+	Database  string    `json:"database"`
+	Deleting  *bool     `json:"deleting,omitempty"`
+
+	// DropSlotSQL The SQL to drop the slot, while a deleted source cannot reach its database
+	DropSlotSQL *string `json:"dropSlotSQL,omitempty"`
+	Host        string  `json:"host"`
+	Id          string  `json:"id"`
+	Message     string  `json:"message"`
+	Name        string  `json:"name"`
+
+	// Phase Pending, Snapshotting, Streaming, Stopped, Failed or Deleting
+	Phase string `json:"phase"`
+	Port  int    `json:"port"`
+
+	// Provider Where the database runs
+	Provider    Provider            `json:"provider"`
+	Ready       bool                `json:"ready"`
+	Reason      string              `json:"reason"`
+	RetentionMs int64               `json:"retentionMs"`
+	Role        string              `json:"role"`
+	Slot        *SlotHealth         `json:"slot,omitempty"`
+	State       SourceState         `json:"state"`
+	Tables      []SourceTableStatus `json:"tables"`
+	TlsMode     string              `json:"tlsMode"`
+}
+
+// SourceState defines model for Source.State.
+type SourceState string
+
+// SourceChange defines model for SourceChange.
+type SourceChange struct {
+	RetentionMs *int64             `json:"retentionMs,omitempty"`
+	State       *SourceChangeState `json:"state,omitempty"`
+	Tables      *[]TableRef        `json:"tables,omitempty"`
+}
+
+// SourceChangeState defines model for SourceChange.State.
+type SourceChangeState string
+
+// SourceCheckRequest defines model for SourceCheckRequest.
+type SourceCheckRequest struct {
+	Connection SourceConnection `json:"connection"`
+	Id         string           `json:"id"`
+	Name       string           `json:"name"`
+
+	// Provider Where the database runs
+	Provider Provider `json:"provider"`
+
+	// Tables The chosen tables; without them, the checks of tables and the publication do not run
+	Tables *[]TableRef `json:"tables,omitempty"`
+}
+
+// SourceConnection defines model for SourceConnection.
+type SourceConnection struct {
+	// Ca The PEM certificates of the database's CA; without them, verify-full trusts the public authorities
+	Ca       *string                 `json:"ca,omitempty"`
+	Database string                  `json:"database"`
+	Host     string                  `json:"host"`
+	Password string                  `json:"password"`
+	Port     int                     `json:"port"`
+	TlsMode  SourceConnectionTlsMode `json:"tlsMode"`
+}
+
+// SourceConnectionTlsMode defines model for SourceConnection.TlsMode.
+type SourceConnectionTlsMode string
+
+// SourceList defines model for SourceList.
+type SourceList struct {
+	Sources []Source `json:"sources"`
+}
+
+// SourceOptions defines model for SourceOptions.
+type SourceOptions struct {
+	DefaultRetentionMs int64 `json:"defaultRetentionMs"`
+
+	// EgressAddresses The addresses Changeport connects to databases from, which they allowlist
+	EgressAddresses []string         `json:"egressAddresses"`
+	MaxNameLength   int              `json:"maxNameLength"`
+	MaxTables       int              `json:"maxTables"`
+	Providers       []ProviderOption `json:"providers"`
+
+	// RegistryURL Where clients reach the schema registry, once the customer has a source
+	RegistryURL      *string           `json:"registryURL,omitempty"`
+	RetentionPresets []RetentionPreset `json:"retentionPresets"`
+}
+
+// SourcePassword defines model for SourcePassword.
+type SourcePassword struct {
+	Password string `json:"password"`
+}
+
+// SourceSQL defines model for SourceSQL.
+type SourceSQL struct {
+	Id string `json:"id"`
+
+	// Password A new password for the role, which only this answer holds
+	Password *string `json:"password,omitempty"`
+
+	// Role The role Changeport logs in as
+	Role string `json:"role"`
+
+	// Sql The SQL to run in the source's database; empty when there is none
+	Sql string `json:"sql"`
+
+	// Steps What to do outside SQL, before the SQL
+	Steps []string `json:"steps"`
+}
+
+// SourceSQLRequest defines model for SourceSQLRequest.
+type SourceSQLRequest struct {
+	Step SourceSQLRequestStep `json:"step"`
+
+	// Tables The tables to add or remove
+	Tables *[]TableRef `json:"tables,omitempty"`
+}
+
+// SourceSQLRequestStep defines model for SourceSQLRequest.Step.
+type SourceSQLRequestStep string
+
+// SourceTable defines model for SourceTable.
+type SourceTable struct {
+	// EstimatedRows Postgres's estimate, or -1 before the table was first analyzed
+	EstimatedRows int64 `json:"estimatedRows"`
+
+	// Keyed Whether the table can be synced
+	Keyed       bool   `json:"keyed"`
+	Name        string `json:"name"`
+	Partitioned bool   `json:"partitioned"`
+	Readable    bool   `json:"readable"`
+
+	// Reason Why the table cannot be synced
+	Reason *string `json:"reason,omitempty"`
+	Schema string  `json:"schema"`
+
+	// Topic The table's topic, if it is synced
+	Topic string `json:"topic"`
+
+	// TopicProblem Why the table's topic cannot be created, such as a name that collides
+	TopicProblem *string `json:"topicProblem,omitempty"`
+}
+
+// SourceTableList defines model for SourceTableList.
+type SourceTableList struct {
+	Tables []SourceTable `json:"tables"`
+}
+
+// SourceTableStatus defines model for SourceTableStatus.
+type SourceTableStatus struct {
+	Message       *string                   `json:"message,omitempty"`
+	Name          string                    `json:"name"`
+	RowsCopied    *int64                    `json:"rowsCopied,omitempty"`
+	RowsEstimated *int64                    `json:"rowsEstimated,omitempty"`
+	Schema        string                    `json:"schema"`
+	Snapshot      SourceTableStatusSnapshot `json:"snapshot"`
+	Topic         string                    `json:"topic"`
+}
+
+// SourceTableStatusSnapshot defines model for SourceTableStatus.Snapshot.
+type SourceTableStatusSnapshot string
+
 // Status The Ready condition, which says what the cluster waits for
 type Status struct {
 	Message string `json:"message"`
 	Reason  string `json:"reason"`
+}
+
+// TableRef defines model for TableRef.
+type TableRef struct {
+	Name   string `json:"name"`
+	Schema string `json:"schema"`
 }
 
 // Throughput defines model for Throughput.
@@ -435,6 +848,9 @@ type Topic struct {
 	// RetentionMs How long the topic keeps messages; absent for no limit
 	RetentionMs *int64 `json:"retentionMs,omitempty"`
 
+	// Source The Postgres source that writes the topic, which keeps it from being deleted
+	Source *string `json:"source,omitempty"`
+
 	// Tiered Whether the topic offloads its history to tiered storage
 	Tiered bool `json:"tiered"`
 }
@@ -460,6 +876,9 @@ type TopicPolicy struct {
 // CustomerID defines model for CustomerID.
 type CustomerID = string
 
+// SourceName defines model for SourceName.
+type SourceName = string
+
 // TopicName defines model for TopicName.
 type TopicName = string
 
@@ -484,6 +903,12 @@ type NotReady = Problem
 // Unauthorized An error, after RFC 9457
 type Unauthorized = Problem
 
+// DeleteSourceParams defines parameters for DeleteSource.
+type DeleteSourceParams struct {
+	// Confirm The source's name, typed again
+	Confirm string `form:"confirm" json:"confirm"`
+}
+
 // GetThroughputParams defines parameters for GetThroughput.
 type GetThroughputParams struct {
 	// Range How far back to look
@@ -492,6 +917,27 @@ type GetThroughputParams struct {
 
 // GetThroughputParamsRange defines parameters for GetThroughput.
 type GetThroughputParamsRange string
+
+// CreateSourceJSONRequestBody defines body for CreateSource for application/json ContentType.
+type CreateSourceJSONRequestBody = NewSource
+
+// CheckSourceJSONRequestBody defines body for CheckSource for application/json ContentType.
+type CheckSourceJSONRequestBody = SourceCheckRequest
+
+// GetSetupSQLJSONRequestBody defines body for GetSetupSQL for application/json ContentType.
+type GetSetupSQLJSONRequestBody = SetupSQLRequest
+
+// ListSourceTablesJSONRequestBody defines body for ListSourceTables for application/json ContentType.
+type ListSourceTablesJSONRequestBody = SourceCheckRequest
+
+// ChangeSourceJSONRequestBody defines body for ChangeSource for application/json ContentType.
+type ChangeSourceJSONRequestBody = SourceChange
+
+// SetSourcePasswordJSONRequestBody defines body for SetSourcePassword for application/json ContentType.
+type SetSourcePasswordJSONRequestBody = SourcePassword
+
+// GetSourceSQLJSONRequestBody defines body for GetSourceSQL for application/json ContentType.
+type GetSourceSQLJSONRequestBody = SourceSQLRequest
 
 // CreateTopicJSONRequestBody defines body for CreateTopic for application/json ContentType.
 type CreateTopicJSONRequestBody = NewTopic
@@ -519,6 +965,42 @@ type ServerInterface interface {
 	// GetHealth The brokers and the partitions' health
 	// (GET /api/customer/health)
 	GetHealth(w http.ResponseWriter, r *http.Request)
+	// GetSourceOptions What a new Postgres CDC source may be, and where Changeport connects from
+	// (GET /api/customer/source-options)
+	GetSourceOptions(w http.ResponseWriter, r *http.Request)
+	// ListSources The customer's Postgres CDC sources
+	// (GET /api/customer/sources)
+	ListSources(w http.ResponseWriter, r *http.Request)
+	// CreateSource Creates a source once its database passes the checks, for organization admins
+	// (POST /api/customer/sources)
+	CreateSource(w http.ResponseWriter, r *http.Request)
+	// CheckSource Checks a database for a source, as Changeport will connect to it, for organization admins
+	// (POST /api/customer/sources/checks)
+	CheckSource(w http.ResponseWriter, r *http.Request)
+	// GetSetupSQL The SQL and steps that set a database up for a new source, for organization admins
+	// (POST /api/customer/sources/setup-sql)
+	GetSetupSQL(w http.ResponseWriter, r *http.Request)
+	// ListSourceTables The tables of a database a source may sync, for organization admins
+	// (POST /api/customer/sources/tables)
+	ListSourceTables(w http.ResponseWriter, r *http.Request)
+	// DeleteSource Deletes a source, which drops its slot; for organization admins
+	// (DELETE /api/customer/sources/{source})
+	DeleteSource(w http.ResponseWriter, r *http.Request, source SourceName, params DeleteSourceParams)
+	// GetSource A source, with each table's progress and its slot's health
+	// (GET /api/customer/sources/{source})
+	GetSource(w http.ResponseWriter, r *http.Request, source SourceName)
+	// ChangeSource Changes a source's tables, retention or state, for organization admins
+	// (PATCH /api/customer/sources/{source})
+	ChangeSource(w http.ResponseWriter, r *http.Request, source SourceName)
+	// SetSourcePassword Gives a source the role's new password, once it logs in; for organization admins
+	// (PUT /api/customer/sources/{source}/password)
+	SetSourcePassword(w http.ResponseWriter, r *http.Request, source SourceName)
+	// ConfirmSlotDropped Confirms that the customer dropped a deleted source's slot themselves; for organization admins
+	// (POST /api/customer/sources/{source}/slot-dropped)
+	ConfirmSlotDropped(w http.ResponseWriter, r *http.Request, source SourceName)
+	// GetSourceSQL The SQL for a change to a source's database, for organization admins
+	// (POST /api/customer/sources/{source}/sql)
+	GetSourceSQL(w http.ResponseWriter, r *http.Request, source SourceName)
 	// GetThroughput Bytes in and out per second over the whole cluster
 	// (GET /api/customer/throughput)
 	GetThroughput(w http.ResponseWriter, r *http.Request, params GetThroughputParams)
@@ -638,6 +1120,262 @@ func (siw *ServerInterfaceWrapper) GetHealth(w http.ResponseWriter, r *http.Requ
 
 	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		siw.Handler.GetHealth(w, r)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// GetSourceOptions operation middleware
+func (siw *ServerInterfaceWrapper) GetSourceOptions(w http.ResponseWriter, r *http.Request) {
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.GetSourceOptions(w, r)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// ListSources operation middleware
+func (siw *ServerInterfaceWrapper) ListSources(w http.ResponseWriter, r *http.Request) {
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.ListSources(w, r)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// CreateSource operation middleware
+func (siw *ServerInterfaceWrapper) CreateSource(w http.ResponseWriter, r *http.Request) {
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.CreateSource(w, r)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// CheckSource operation middleware
+func (siw *ServerInterfaceWrapper) CheckSource(w http.ResponseWriter, r *http.Request) {
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.CheckSource(w, r)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// GetSetupSQL operation middleware
+func (siw *ServerInterfaceWrapper) GetSetupSQL(w http.ResponseWriter, r *http.Request) {
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.GetSetupSQL(w, r)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// ListSourceTables operation middleware
+func (siw *ServerInterfaceWrapper) ListSourceTables(w http.ResponseWriter, r *http.Request) {
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.ListSourceTables(w, r)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// DeleteSource operation middleware
+func (siw *ServerInterfaceWrapper) DeleteSource(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "source" -------------
+	var source SourceName
+
+	err = runtime.BindStyledParameterWithOptions("simple", "source", r.PathValue("source"), &source, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "source", Err: err})
+		return
+	}
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params DeleteSourceParams
+
+	// ------------- Required query parameter "confirm" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, true, "confirm", r.URL.Query(), &params.Confirm, runtime.BindQueryParameterOptions{Type: "string", Format: ""})
+	if err != nil {
+		var requiredError *runtime.RequiredParameterError
+		if errors.As(err, &requiredError) {
+			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "confirm"})
+		} else {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "confirm", Err: err})
+		}
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.DeleteSource(w, r, source, params)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// GetSource operation middleware
+func (siw *ServerInterfaceWrapper) GetSource(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "source" -------------
+	var source SourceName
+
+	err = runtime.BindStyledParameterWithOptions("simple", "source", r.PathValue("source"), &source, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "source", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.GetSource(w, r, source)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// ChangeSource operation middleware
+func (siw *ServerInterfaceWrapper) ChangeSource(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "source" -------------
+	var source SourceName
+
+	err = runtime.BindStyledParameterWithOptions("simple", "source", r.PathValue("source"), &source, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "source", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.ChangeSource(w, r, source)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// SetSourcePassword operation middleware
+func (siw *ServerInterfaceWrapper) SetSourcePassword(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "source" -------------
+	var source SourceName
+
+	err = runtime.BindStyledParameterWithOptions("simple", "source", r.PathValue("source"), &source, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "source", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.SetSourcePassword(w, r, source)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// ConfirmSlotDropped operation middleware
+func (siw *ServerInterfaceWrapper) ConfirmSlotDropped(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "source" -------------
+	var source SourceName
+
+	err = runtime.BindStyledParameterWithOptions("simple", "source", r.PathValue("source"), &source, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "source", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.ConfirmSlotDropped(w, r, source)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// GetSourceSQL operation middleware
+func (siw *ServerInterfaceWrapper) GetSourceSQL(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "source" -------------
+	var source SourceName
+
+	err = runtime.BindStyledParameterWithOptions("simple", "source", r.PathValue("source"), &source, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "source", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.GetSourceSQL(w, r, source)
 	}))
 
 	for _, middleware := range siw.HandlerMiddlewares {
@@ -999,6 +1737,18 @@ func HandlerWithOptions(si ServerInterface, options StdHTTPServerOptions) http.H
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/customer/topics/{topic}/consumer-groups", wrapper.ListTopicConsumerGroups)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/customer/topics", wrapper.ListTopics)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/customer/topics", wrapper.CreateTopic)
+	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/customer/source-options", wrapper.GetSourceOptions)
+	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/customer/sources", wrapper.ListSources)
+	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/customer/sources", wrapper.CreateSource)
+	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/customer/sources/setup-sql", wrapper.GetSetupSQL)
+	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/customer/sources/checks", wrapper.CheckSource)
+	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/customer/sources/tables", wrapper.ListSourceTables)
+	m.HandleFunc(http.MethodDelete+" "+options.BaseURL+"/api/customer/sources/{source}", wrapper.DeleteSource)
+	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/customer/sources/{source}", wrapper.GetSource)
+	m.HandleFunc(http.MethodPatch+" "+options.BaseURL+"/api/customer/sources/{source}", wrapper.ChangeSource)
+	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/customer/sources/{source}/sql", wrapper.GetSourceSQL)
+	m.HandleFunc(http.MethodPut+" "+options.BaseURL+"/api/customer/sources/{source}/password", wrapper.SetSourcePassword)
+	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/customer/sources/{source}/slot-dropped", wrapper.ConfirmSlotDropped)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/customer/throughput", wrapper.GetThroughput)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/customer/consumer-groups", wrapper.ListConsumerGroups)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/operator/customers", wrapper.ListCustomers)
@@ -1443,6 +2193,1108 @@ func (response GetHealth404JSONResponse) VisitGetHealthResponse(w http.ResponseW
 type GetHealth503JSONResponse struct{ NotConfiguredJSONResponse }
 
 func (response GetHealth503JSONResponse) VisitGetHealthResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(503)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GetSourceOptionsRequestObject struct {
+}
+
+type GetSourceOptionsResponseObject interface {
+	VisitGetSourceOptionsResponse(w http.ResponseWriter) error
+}
+
+type GetSourceOptions200JSONResponse SourceOptions
+
+func (response GetSourceOptions200JSONResponse) VisitGetSourceOptionsResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GetSourceOptions401JSONResponse struct{ UnauthorizedJSONResponse }
+
+func (response GetSourceOptions401JSONResponse) VisitGetSourceOptionsResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(401)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GetSourceOptions403JSONResponse struct{ ForbiddenJSONResponse }
+
+func (response GetSourceOptions403JSONResponse) VisitGetSourceOptionsResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(403)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GetSourceOptions404JSONResponse struct{ NotFoundJSONResponse }
+
+func (response GetSourceOptions404JSONResponse) VisitGetSourceOptionsResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(404)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GetSourceOptions503JSONResponse struct{ NotConfiguredJSONResponse }
+
+func (response GetSourceOptions503JSONResponse) VisitGetSourceOptionsResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(503)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ListSourcesRequestObject struct {
+}
+
+type ListSourcesResponseObject interface {
+	VisitListSourcesResponse(w http.ResponseWriter) error
+}
+
+type ListSources200JSONResponse SourceList
+
+func (response ListSources200JSONResponse) VisitListSourcesResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ListSources401JSONResponse struct{ UnauthorizedJSONResponse }
+
+func (response ListSources401JSONResponse) VisitListSourcesResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(401)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ListSources403JSONResponse struct{ ForbiddenJSONResponse }
+
+func (response ListSources403JSONResponse) VisitListSourcesResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(403)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ListSources404JSONResponse struct{ NotFoundJSONResponse }
+
+func (response ListSources404JSONResponse) VisitListSourcesResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(404)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ListSources503JSONResponse struct{ NotConfiguredJSONResponse }
+
+func (response ListSources503JSONResponse) VisitListSourcesResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(503)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type CreateSourceRequestObject struct {
+	Body *CreateSourceJSONRequestBody
+}
+
+type CreateSourceResponseObject interface {
+	VisitCreateSourceResponse(w http.ResponseWriter) error
+}
+
+type CreateSource201JSONResponse Source
+
+func (response CreateSource201JSONResponse) VisitCreateSourceResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(201)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type CreateSource400JSONResponse struct{ BadRequestJSONResponse }
+
+func (response CreateSource400JSONResponse) VisitCreateSourceResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(400)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type CreateSource401JSONResponse struct{ UnauthorizedJSONResponse }
+
+func (response CreateSource401JSONResponse) VisitCreateSourceResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(401)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type CreateSource403JSONResponse struct{ ForbiddenJSONResponse }
+
+func (response CreateSource403JSONResponse) VisitCreateSourceResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(403)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type CreateSource404JSONResponse struct{ NotFoundJSONResponse }
+
+func (response CreateSource404JSONResponse) VisitCreateSourceResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(404)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type CreateSource409JSONResponse struct{ ConflictJSONResponse }
+
+func (response CreateSource409JSONResponse) VisitCreateSourceResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(409)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type CreateSource503JSONResponse struct{ NotConfiguredJSONResponse }
+
+func (response CreateSource503JSONResponse) VisitCreateSourceResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(503)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type CheckSourceRequestObject struct {
+	Body *CheckSourceJSONRequestBody
+}
+
+type CheckSourceResponseObject interface {
+	VisitCheckSourceResponse(w http.ResponseWriter) error
+}
+
+type CheckSource200JSONResponse CheckReport
+
+func (response CheckSource200JSONResponse) VisitCheckSourceResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type CheckSource400JSONResponse struct{ BadRequestJSONResponse }
+
+func (response CheckSource400JSONResponse) VisitCheckSourceResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(400)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type CheckSource401JSONResponse struct{ UnauthorizedJSONResponse }
+
+func (response CheckSource401JSONResponse) VisitCheckSourceResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(401)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type CheckSource403JSONResponse struct{ ForbiddenJSONResponse }
+
+func (response CheckSource403JSONResponse) VisitCheckSourceResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(403)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type CheckSource404JSONResponse struct{ NotFoundJSONResponse }
+
+func (response CheckSource404JSONResponse) VisitCheckSourceResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(404)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type CheckSource503JSONResponse struct{ NotConfiguredJSONResponse }
+
+func (response CheckSource503JSONResponse) VisitCheckSourceResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(503)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GetSetupSQLRequestObject struct {
+	Body *GetSetupSQLJSONRequestBody
+}
+
+type GetSetupSQLResponseObject interface {
+	VisitGetSetupSQLResponse(w http.ResponseWriter) error
+}
+
+type GetSetupSQL200JSONResponse SourceSQL
+
+func (response GetSetupSQL200JSONResponse) VisitGetSetupSQLResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GetSetupSQL400JSONResponse struct{ BadRequestJSONResponse }
+
+func (response GetSetupSQL400JSONResponse) VisitGetSetupSQLResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(400)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GetSetupSQL401JSONResponse struct{ UnauthorizedJSONResponse }
+
+func (response GetSetupSQL401JSONResponse) VisitGetSetupSQLResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(401)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GetSetupSQL403JSONResponse struct{ ForbiddenJSONResponse }
+
+func (response GetSetupSQL403JSONResponse) VisitGetSetupSQLResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(403)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GetSetupSQL404JSONResponse struct{ NotFoundJSONResponse }
+
+func (response GetSetupSQL404JSONResponse) VisitGetSetupSQLResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(404)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GetSetupSQL503JSONResponse struct{ NotConfiguredJSONResponse }
+
+func (response GetSetupSQL503JSONResponse) VisitGetSetupSQLResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(503)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ListSourceTablesRequestObject struct {
+	Body *ListSourceTablesJSONRequestBody
+}
+
+type ListSourceTablesResponseObject interface {
+	VisitListSourceTablesResponse(w http.ResponseWriter) error
+}
+
+type ListSourceTables200JSONResponse SourceTableList
+
+func (response ListSourceTables200JSONResponse) VisitListSourceTablesResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ListSourceTables400JSONResponse struct{ BadRequestJSONResponse }
+
+func (response ListSourceTables400JSONResponse) VisitListSourceTablesResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(400)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ListSourceTables401JSONResponse struct{ UnauthorizedJSONResponse }
+
+func (response ListSourceTables401JSONResponse) VisitListSourceTablesResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(401)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ListSourceTables403JSONResponse struct{ ForbiddenJSONResponse }
+
+func (response ListSourceTables403JSONResponse) VisitListSourceTablesResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(403)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ListSourceTables404JSONResponse struct{ NotFoundJSONResponse }
+
+func (response ListSourceTables404JSONResponse) VisitListSourceTablesResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(404)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ListSourceTables409JSONResponse struct{ ConflictJSONResponse }
+
+func (response ListSourceTables409JSONResponse) VisitListSourceTablesResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(409)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ListSourceTables503JSONResponse struct{ NotConfiguredJSONResponse }
+
+func (response ListSourceTables503JSONResponse) VisitListSourceTablesResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(503)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type DeleteSourceRequestObject struct {
+	Source SourceName `json:"source"`
+	Params DeleteSourceParams
+}
+
+type DeleteSourceResponseObject interface {
+	VisitDeleteSourceResponse(w http.ResponseWriter) error
+}
+
+type DeleteSource204Response struct {
+}
+
+func (response DeleteSource204Response) VisitDeleteSourceResponse(w http.ResponseWriter) error {
+	w.WriteHeader(204)
+	return nil
+}
+
+type DeleteSource400JSONResponse struct{ BadRequestJSONResponse }
+
+func (response DeleteSource400JSONResponse) VisitDeleteSourceResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(400)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type DeleteSource401JSONResponse struct{ UnauthorizedJSONResponse }
+
+func (response DeleteSource401JSONResponse) VisitDeleteSourceResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(401)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type DeleteSource403JSONResponse struct{ ForbiddenJSONResponse }
+
+func (response DeleteSource403JSONResponse) VisitDeleteSourceResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(403)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type DeleteSource404JSONResponse struct{ NotFoundJSONResponse }
+
+func (response DeleteSource404JSONResponse) VisitDeleteSourceResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(404)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type DeleteSource503JSONResponse struct{ NotConfiguredJSONResponse }
+
+func (response DeleteSource503JSONResponse) VisitDeleteSourceResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(503)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GetSourceRequestObject struct {
+	Source SourceName `json:"source"`
+}
+
+type GetSourceResponseObject interface {
+	VisitGetSourceResponse(w http.ResponseWriter) error
+}
+
+type GetSource200JSONResponse Source
+
+func (response GetSource200JSONResponse) VisitGetSourceResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GetSource401JSONResponse struct{ UnauthorizedJSONResponse }
+
+func (response GetSource401JSONResponse) VisitGetSourceResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(401)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GetSource403JSONResponse struct{ ForbiddenJSONResponse }
+
+func (response GetSource403JSONResponse) VisitGetSourceResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(403)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GetSource404JSONResponse struct{ NotFoundJSONResponse }
+
+func (response GetSource404JSONResponse) VisitGetSourceResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(404)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GetSource503JSONResponse struct{ NotConfiguredJSONResponse }
+
+func (response GetSource503JSONResponse) VisitGetSourceResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(503)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ChangeSourceRequestObject struct {
+	Source SourceName `json:"source"`
+	Body   *ChangeSourceJSONRequestBody
+}
+
+type ChangeSourceResponseObject interface {
+	VisitChangeSourceResponse(w http.ResponseWriter) error
+}
+
+type ChangeSource200JSONResponse Source
+
+func (response ChangeSource200JSONResponse) VisitChangeSourceResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ChangeSource400JSONResponse struct{ BadRequestJSONResponse }
+
+func (response ChangeSource400JSONResponse) VisitChangeSourceResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(400)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ChangeSource401JSONResponse struct{ UnauthorizedJSONResponse }
+
+func (response ChangeSource401JSONResponse) VisitChangeSourceResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(401)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ChangeSource403JSONResponse struct{ ForbiddenJSONResponse }
+
+func (response ChangeSource403JSONResponse) VisitChangeSourceResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(403)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ChangeSource404JSONResponse struct{ NotFoundJSONResponse }
+
+func (response ChangeSource404JSONResponse) VisitChangeSourceResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(404)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ChangeSource409JSONResponse struct{ ConflictJSONResponse }
+
+func (response ChangeSource409JSONResponse) VisitChangeSourceResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(409)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ChangeSource503JSONResponse struct{ NotConfiguredJSONResponse }
+
+func (response ChangeSource503JSONResponse) VisitChangeSourceResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(503)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type SetSourcePasswordRequestObject struct {
+	Source SourceName `json:"source"`
+	Body   *SetSourcePasswordJSONRequestBody
+}
+
+type SetSourcePasswordResponseObject interface {
+	VisitSetSourcePasswordResponse(w http.ResponseWriter) error
+}
+
+type SetSourcePassword204Response struct {
+}
+
+func (response SetSourcePassword204Response) VisitSetSourcePasswordResponse(w http.ResponseWriter) error {
+	w.WriteHeader(204)
+	return nil
+}
+
+type SetSourcePassword400JSONResponse struct{ BadRequestJSONResponse }
+
+func (response SetSourcePassword400JSONResponse) VisitSetSourcePasswordResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(400)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type SetSourcePassword401JSONResponse struct{ UnauthorizedJSONResponse }
+
+func (response SetSourcePassword401JSONResponse) VisitSetSourcePasswordResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(401)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type SetSourcePassword403JSONResponse struct{ ForbiddenJSONResponse }
+
+func (response SetSourcePassword403JSONResponse) VisitSetSourcePasswordResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(403)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type SetSourcePassword404JSONResponse struct{ NotFoundJSONResponse }
+
+func (response SetSourcePassword404JSONResponse) VisitSetSourcePasswordResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(404)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type SetSourcePassword409JSONResponse struct{ ConflictJSONResponse }
+
+func (response SetSourcePassword409JSONResponse) VisitSetSourcePasswordResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(409)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type SetSourcePassword503JSONResponse struct{ NotConfiguredJSONResponse }
+
+func (response SetSourcePassword503JSONResponse) VisitSetSourcePasswordResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(503)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ConfirmSlotDroppedRequestObject struct {
+	Source SourceName `json:"source"`
+}
+
+type ConfirmSlotDroppedResponseObject interface {
+	VisitConfirmSlotDroppedResponse(w http.ResponseWriter) error
+}
+
+type ConfirmSlotDropped204Response struct {
+}
+
+func (response ConfirmSlotDropped204Response) VisitConfirmSlotDroppedResponse(w http.ResponseWriter) error {
+	w.WriteHeader(204)
+	return nil
+}
+
+type ConfirmSlotDropped401JSONResponse struct{ UnauthorizedJSONResponse }
+
+func (response ConfirmSlotDropped401JSONResponse) VisitConfirmSlotDroppedResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(401)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ConfirmSlotDropped403JSONResponse struct{ ForbiddenJSONResponse }
+
+func (response ConfirmSlotDropped403JSONResponse) VisitConfirmSlotDroppedResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(403)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ConfirmSlotDropped404JSONResponse struct{ NotFoundJSONResponse }
+
+func (response ConfirmSlotDropped404JSONResponse) VisitConfirmSlotDroppedResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(404)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ConfirmSlotDropped409JSONResponse struct{ ConflictJSONResponse }
+
+func (response ConfirmSlotDropped409JSONResponse) VisitConfirmSlotDroppedResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(409)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ConfirmSlotDropped503JSONResponse struct{ NotConfiguredJSONResponse }
+
+func (response ConfirmSlotDropped503JSONResponse) VisitConfirmSlotDroppedResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(503)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GetSourceSQLRequestObject struct {
+	Source SourceName `json:"source"`
+	Body   *GetSourceSQLJSONRequestBody
+}
+
+type GetSourceSQLResponseObject interface {
+	VisitGetSourceSQLResponse(w http.ResponseWriter) error
+}
+
+type GetSourceSQL200JSONResponse SourceSQL
+
+func (response GetSourceSQL200JSONResponse) VisitGetSourceSQLResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GetSourceSQL400JSONResponse struct{ BadRequestJSONResponse }
+
+func (response GetSourceSQL400JSONResponse) VisitGetSourceSQLResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(400)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GetSourceSQL401JSONResponse struct{ UnauthorizedJSONResponse }
+
+func (response GetSourceSQL401JSONResponse) VisitGetSourceSQLResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(401)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GetSourceSQL403JSONResponse struct{ ForbiddenJSONResponse }
+
+func (response GetSourceSQL403JSONResponse) VisitGetSourceSQLResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(403)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GetSourceSQL404JSONResponse struct{ NotFoundJSONResponse }
+
+func (response GetSourceSQL404JSONResponse) VisitGetSourceSQLResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(404)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GetSourceSQL503JSONResponse struct{ NotConfiguredJSONResponse }
+
+func (response GetSourceSQL503JSONResponse) VisitGetSourceSQLResponse(w http.ResponseWriter) error {
 
 	var buf bytes.Buffer
 	if err := json.NewEncoder(&buf).Encode(response); err != nil {
@@ -2372,6 +4224,42 @@ type StrictServerInterface interface {
 	// GetHealth The brokers and the partitions' health
 	// (GET /api/customer/health)
 	GetHealth(ctx context.Context, request GetHealthRequestObject) (GetHealthResponseObject, error)
+	// GetSourceOptions What a new Postgres CDC source may be, and where Changeport connects from
+	// (GET /api/customer/source-options)
+	GetSourceOptions(ctx context.Context, request GetSourceOptionsRequestObject) (GetSourceOptionsResponseObject, error)
+	// ListSources The customer's Postgres CDC sources
+	// (GET /api/customer/sources)
+	ListSources(ctx context.Context, request ListSourcesRequestObject) (ListSourcesResponseObject, error)
+	// CreateSource Creates a source once its database passes the checks, for organization admins
+	// (POST /api/customer/sources)
+	CreateSource(ctx context.Context, request CreateSourceRequestObject) (CreateSourceResponseObject, error)
+	// CheckSource Checks a database for a source, as Changeport will connect to it, for organization admins
+	// (POST /api/customer/sources/checks)
+	CheckSource(ctx context.Context, request CheckSourceRequestObject) (CheckSourceResponseObject, error)
+	// GetSetupSQL The SQL and steps that set a database up for a new source, for organization admins
+	// (POST /api/customer/sources/setup-sql)
+	GetSetupSQL(ctx context.Context, request GetSetupSQLRequestObject) (GetSetupSQLResponseObject, error)
+	// ListSourceTables The tables of a database a source may sync, for organization admins
+	// (POST /api/customer/sources/tables)
+	ListSourceTables(ctx context.Context, request ListSourceTablesRequestObject) (ListSourceTablesResponseObject, error)
+	// DeleteSource Deletes a source, which drops its slot; for organization admins
+	// (DELETE /api/customer/sources/{source})
+	DeleteSource(ctx context.Context, request DeleteSourceRequestObject) (DeleteSourceResponseObject, error)
+	// GetSource A source, with each table's progress and its slot's health
+	// (GET /api/customer/sources/{source})
+	GetSource(ctx context.Context, request GetSourceRequestObject) (GetSourceResponseObject, error)
+	// ChangeSource Changes a source's tables, retention or state, for organization admins
+	// (PATCH /api/customer/sources/{source})
+	ChangeSource(ctx context.Context, request ChangeSourceRequestObject) (ChangeSourceResponseObject, error)
+	// SetSourcePassword Gives a source the role's new password, once it logs in; for organization admins
+	// (PUT /api/customer/sources/{source}/password)
+	SetSourcePassword(ctx context.Context, request SetSourcePasswordRequestObject) (SetSourcePasswordResponseObject, error)
+	// ConfirmSlotDropped Confirms that the customer dropped a deleted source's slot themselves; for organization admins
+	// (POST /api/customer/sources/{source}/slot-dropped)
+	ConfirmSlotDropped(ctx context.Context, request ConfirmSlotDroppedRequestObject) (ConfirmSlotDroppedResponseObject, error)
+	// GetSourceSQL The SQL for a change to a source's database, for organization admins
+	// (POST /api/customer/sources/{source}/sql)
+	GetSourceSQL(ctx context.Context, request GetSourceSQLRequestObject) (GetSourceSQLResponseObject, error)
 	// GetThroughput Bytes in and out per second over the whole cluster
 	// (GET /api/customer/throughput)
 	GetThroughput(ctx context.Context, request GetThroughputRequestObject) (GetThroughputResponseObject, error)
@@ -2583,6 +4471,356 @@ func (sh *strictHandler) GetHealth(w http.ResponseWriter, r *http.Request) {
 		sh.options.ResponseErrorHandlerFunc(w, r, err)
 	} else if validResponse, ok := response.(GetHealthResponseObject); ok {
 		if err := validResponse.VisitGetHealthResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// GetSourceOptions operation middleware
+func (sh *strictHandler) GetSourceOptions(w http.ResponseWriter, r *http.Request) {
+	var request GetSourceOptionsRequestObject
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.GetSourceOptions(ctx, request.(GetSourceOptionsRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "GetSourceOptions")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(GetSourceOptionsResponseObject); ok {
+		if err := validResponse.VisitGetSourceOptionsResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// ListSources operation middleware
+func (sh *strictHandler) ListSources(w http.ResponseWriter, r *http.Request) {
+	var request ListSourcesRequestObject
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.ListSources(ctx, request.(ListSourcesRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "ListSources")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(ListSourcesResponseObject); ok {
+		if err := validResponse.VisitListSourcesResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// CreateSource operation middleware
+func (sh *strictHandler) CreateSource(w http.ResponseWriter, r *http.Request) {
+	var request CreateSourceRequestObject
+
+	var body CreateSourceJSONRequestBody
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		sh.options.RequestErrorHandlerFunc(w, r, fmt.Errorf("can't decode JSON body: %w", err))
+		return
+	}
+	request.Body = &body
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.CreateSource(ctx, request.(CreateSourceRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "CreateSource")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(CreateSourceResponseObject); ok {
+		if err := validResponse.VisitCreateSourceResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// CheckSource operation middleware
+func (sh *strictHandler) CheckSource(w http.ResponseWriter, r *http.Request) {
+	var request CheckSourceRequestObject
+
+	var body CheckSourceJSONRequestBody
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		sh.options.RequestErrorHandlerFunc(w, r, fmt.Errorf("can't decode JSON body: %w", err))
+		return
+	}
+	request.Body = &body
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.CheckSource(ctx, request.(CheckSourceRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "CheckSource")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(CheckSourceResponseObject); ok {
+		if err := validResponse.VisitCheckSourceResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// GetSetupSQL operation middleware
+func (sh *strictHandler) GetSetupSQL(w http.ResponseWriter, r *http.Request) {
+	var request GetSetupSQLRequestObject
+
+	var body GetSetupSQLJSONRequestBody
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		sh.options.RequestErrorHandlerFunc(w, r, fmt.Errorf("can't decode JSON body: %w", err))
+		return
+	}
+	request.Body = &body
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.GetSetupSQL(ctx, request.(GetSetupSQLRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "GetSetupSQL")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(GetSetupSQLResponseObject); ok {
+		if err := validResponse.VisitGetSetupSQLResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// ListSourceTables operation middleware
+func (sh *strictHandler) ListSourceTables(w http.ResponseWriter, r *http.Request) {
+	var request ListSourceTablesRequestObject
+
+	var body ListSourceTablesJSONRequestBody
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		sh.options.RequestErrorHandlerFunc(w, r, fmt.Errorf("can't decode JSON body: %w", err))
+		return
+	}
+	request.Body = &body
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.ListSourceTables(ctx, request.(ListSourceTablesRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "ListSourceTables")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(ListSourceTablesResponseObject); ok {
+		if err := validResponse.VisitListSourceTablesResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// DeleteSource operation middleware
+func (sh *strictHandler) DeleteSource(w http.ResponseWriter, r *http.Request, source SourceName, params DeleteSourceParams) {
+	var request DeleteSourceRequestObject
+
+	request.Source = source
+	request.Params = params
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.DeleteSource(ctx, request.(DeleteSourceRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "DeleteSource")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(DeleteSourceResponseObject); ok {
+		if err := validResponse.VisitDeleteSourceResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// GetSource operation middleware
+func (sh *strictHandler) GetSource(w http.ResponseWriter, r *http.Request, source SourceName) {
+	var request GetSourceRequestObject
+
+	request.Source = source
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.GetSource(ctx, request.(GetSourceRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "GetSource")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(GetSourceResponseObject); ok {
+		if err := validResponse.VisitGetSourceResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// ChangeSource operation middleware
+func (sh *strictHandler) ChangeSource(w http.ResponseWriter, r *http.Request, source SourceName) {
+	var request ChangeSourceRequestObject
+
+	request.Source = source
+
+	var body ChangeSourceJSONRequestBody
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		sh.options.RequestErrorHandlerFunc(w, r, fmt.Errorf("can't decode JSON body: %w", err))
+		return
+	}
+	request.Body = &body
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.ChangeSource(ctx, request.(ChangeSourceRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "ChangeSource")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(ChangeSourceResponseObject); ok {
+		if err := validResponse.VisitChangeSourceResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// SetSourcePassword operation middleware
+func (sh *strictHandler) SetSourcePassword(w http.ResponseWriter, r *http.Request, source SourceName) {
+	var request SetSourcePasswordRequestObject
+
+	request.Source = source
+
+	var body SetSourcePasswordJSONRequestBody
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		sh.options.RequestErrorHandlerFunc(w, r, fmt.Errorf("can't decode JSON body: %w", err))
+		return
+	}
+	request.Body = &body
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.SetSourcePassword(ctx, request.(SetSourcePasswordRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "SetSourcePassword")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(SetSourcePasswordResponseObject); ok {
+		if err := validResponse.VisitSetSourcePasswordResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// ConfirmSlotDropped operation middleware
+func (sh *strictHandler) ConfirmSlotDropped(w http.ResponseWriter, r *http.Request, source SourceName) {
+	var request ConfirmSlotDroppedRequestObject
+
+	request.Source = source
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.ConfirmSlotDropped(ctx, request.(ConfirmSlotDroppedRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "ConfirmSlotDropped")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(ConfirmSlotDroppedResponseObject); ok {
+		if err := validResponse.VisitConfirmSlotDroppedResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// GetSourceSQL operation middleware
+func (sh *strictHandler) GetSourceSQL(w http.ResponseWriter, r *http.Request, source SourceName) {
+	var request GetSourceSQLRequestObject
+
+	request.Source = source
+
+	var body GetSourceSQLJSONRequestBody
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		sh.options.RequestErrorHandlerFunc(w, r, fmt.Errorf("can't decode JSON body: %w", err))
+		return
+	}
+	request.Body = &body
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.GetSourceSQL(ctx, request.(GetSourceSQLRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "GetSourceSQL")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(GetSourceSQLResponseObject); ok {
+		if err := validResponse.VisitGetSourceSQLResponse(w); err != nil {
 			sh.options.ResponseErrorHandlerFunc(w, r, err)
 		}
 	} else if response != nil {

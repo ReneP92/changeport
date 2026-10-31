@@ -53,6 +53,10 @@ run "one_nat_gateway" {
     condition     = length(module.vpc.natgw_ids) == 1
     error_message = "Without a NAT gateway per zone, the VPC has one."
   }
+  assert {
+    condition     = length(output.nat_public_ips) == 1
+    error_message = "The one NAT gateway's address is where customers' databases see the platform connect from."
+  }
 }
 
 run "nat_gateway_per_zone" {
@@ -69,6 +73,10 @@ run "nat_gateway_per_zone" {
   assert {
     condition     = length(module.vpc.private_route_table_ids) == 3
     error_message = "Each zone's private subnet routes through its own NAT gateway."
+  }
+  assert {
+    condition     = length(output.nat_public_ips) == 3
+    error_message = "Customers' databases allowlist the addresses of all three NAT gateways."
   }
 }
 
